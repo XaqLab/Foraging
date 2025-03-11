@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "disable_existing_loggers": false,
+  "formatters": {
+    "simple": {
+      "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    }
+  },
+
+  "handlers": {
+    "stdout": {
+      "class": "logging.StreamHandler",
+      "level": "INFO",
+      "formatter": "simple",
+      "stream": "ext://sys.stdout"
+    },
+
+    "file_handler": {
+      "class": "logging.FileHandler",
+      "level": "DEBUG",
+      "formatter": "simple",
+      "filename": "debug.log"
+    }
+  },
+
+  "root": {
+    "level": "INFO",
+    "handlers": ["stdout", "file_handler"]
+  }
+}
