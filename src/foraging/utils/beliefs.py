@@ -37,8 +37,7 @@ def compute_posteriors(
     block_data = df.loc[index]
 
     # Get unique schedules (sorted in descending order)
-    schedules = np.sort(block_data['schedule'].unique())[::-1]
-    n_boxes = len(schedules)
+    n_boxes = block_data['schedule'].nunique()
 
     # Assume agent knows the exact number of states
     shape = block_data.index.unique('shape')[0]
@@ -184,8 +183,8 @@ def compute_reward_probabilities(
     """
 
     df_block = df.loc[index]
-    schedules = -np.sort(-df_block['schedule'].unique())
-    n_boxes = len(schedules)
+    schedules = np.sort(df_block['schedule'].unique())
+    n_boxes = df_block['schedule'].nunique()
     shape = df_block.index.unique('shape')[0]  # Assume agent knows number of states perfectly
 
     # Construct likelihood/observation model
@@ -262,25 +261,30 @@ def compute_joint_beliefs(
 
     return belief_joint_event
 
-def predict_pushed_box(df: pd.DataFrame, x: np.ndarray, col_name: str = 'box rank') -> tuple[float, Any]:
+def predict_pushed_box(df: pd.DataFrame, x: str, y: str = 'box rank', disp: bool = False) -> tuple[float, Any]:
     """
     Predicts the pushed box using multinomial logistic regression and evaluates the accuracy of predictions.
 
     Args:
         df: pandas DataFrame containing session data, including a column with the target labels (box rank).
         x: A 2D numpy array containing the features (independent variables) used for prediction.
-        col_name: The name of the column in `df` that contains the target labels (default is 'box rank').
+        y: The name of the column in `df` that contains the target labels (default is 'box rank').
 
     Returns:
         A tuple containing:
             - A float representing the accuracy of the predictions (mean of correct predictions).
             - The fitted multinomial logistic regression model (`MNLogitResults` object).
     """
-    y = df[col_name]
-    mdl = smf.mnlogit("y ~ X", {'y': y, 'X': x}).fit()
-    yhat = np.argmax(mdl.predict(), axis=1)
-    accuracy = (yhat == y).mean()
-    return accuracy, mdl
+    X = df[x]
+    y = df[y]
+    try:
+        mdl = smf.mnlogit("y ~ X", {'y': y, 'X': X}).fit(disp = disp)
+        yhat = np.argmax(mdl.predict(), axis=1)
+        accuracy = (yhat == y).mean()
+        return accuracy, mdl
+    except Exception as e:
+        logger.debug(e)
+        return 0, None
 
 def get_mean_beliefs(beliefs: ArrayLike | list, supp: ArrayLike | list) -> ArrayLike | list:
     """

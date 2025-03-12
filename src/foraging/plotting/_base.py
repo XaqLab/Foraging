@@ -22,7 +22,11 @@ from foraging.plotting import BOX_COLORS, BOX_LABELS
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-## wrappers
+def fig_init(ax: plt.Axes = None, **kwargs):
+    if ax is None:
+        return plt.subplots(**kwargs)
+    return ax.get_figure(), ax
+
 def bp(func):
     """
     Args:
@@ -49,17 +53,17 @@ def bp(func):
             ax, or optional return arguments from wrapped function usually in the form of ax + extra
         """
 
-        # filter df
+        # Filter df
         if conds is None:
             conds = {}
         df = utils.data.filter_df(df, conds)
 
-        # context dependent plot settings
+        # Context dependent plot settings
         if collapse:
             hue = 'box rank'
             hue_order = range(len(box_colors))
         else:
-            schedules = -np.sort(-df['schedule'].unique())
+            schedules = np.sort(df['schedule'].unique())
             kappa = df.index.unique('kappa')
             stim_type = df.index.unique('stimulus type')
             shape = df.index.unique('shape')
@@ -67,7 +71,7 @@ def bp(func):
                 logger.debug(f"length of kappa: {len(kappa)}, length of stim_type: {len(stim_type)}, length of shape: {len(shape)}")
                 raise Exception("Multiple experiment parameters found for single block. Make sure only single block is being supplied, or set collapse to True.")
 
-            # for titling purposes
+            # For titling purposes
             conds['kappa'] = kappa[0]
             conds['stim type'] = stim_type[0]
             conds['shape'] = shape[0]
@@ -78,53 +82,45 @@ def bp(func):
 
         palette = list(box_colors) if not palette else palette
 
-        # if plotting kappa on x-axis, create dummy column in order to plot kappa data evenly
+        # If plotting kappa on x-axis, create dummy column in order to plot kappa data evenly
         if kwargs.get('x', False) == 'kappa':
             df['stimulus reliability'] = pd.Series(df['kappa'].rank(method ='dense') - 1, index = df.index)
             kwargs['x'] = 'stimulus reliability'
 
         # Create ax if none
-        if ax is None:
-            _, ax = plt.subplots(**kwargs.pop('fig_kwargs', {}))
+        fig, ax = fig_init(ax, **kwargs.pop('fig_kwargs', {}))
 
         # Pop any last keyword args not needed for seaborn here before running function
         legend_kwargs = kwargs.pop('legend_kwargs', {
             'loc': 'upper right'
         })
 
-        # run function, assuming seaborn plotting func
+        # Run function, assuming seaborn plotting func
         ret = func(df, ax=ax, hue=hue, hue_order=hue_order, palette=palette, **kwargs)
 
-        # adjust xticks to only show actual data
+        # Adjust xticks to only show actual data
         if kwargs.get('x', False) == 'stimulus reliability':
             xticks = df.index.unique('kappa')
             [_ax.set_xticks(range(len(xticks)), xticks) for _ax in utils.flatten(ax)]
 
-        # set title (if multiple axes, this does the first one)
+        # Set title (if multiple axes, this does the first one)
         title_str = title_prefix + '\n' + ', '.join([k+' = '+str(v) for k,v in conds.items()]) if not title else title
         _ax = np.atleast_1d(ax)
         _ax[0].set_title(title_str)
-        fig = _ax[0].get_figure()
-        fig.tight_layout()
 
-        # modify legend
+        # Modify legend
         if kwargs.pop('legend', True):
             for _ax in utils.flatten(ax):
                 try:
                     legend = _ax.get_legend()
                     legend.set_title('schedule')
                     handles = legend.legend_handles
-                    # [text.set_text(box_labels[i]) for i, text in enumerate(legend.get_texts())]
                     _ax.legend(handles, box_labels, **legend_kwargs)
-                    # try:
-                    #     # markerscale = legend_kwargs.pop('markerscale', 20)
-                    #     # [handle.set_markersize(markerscale) for handle in legend.legendHandles]
-                    #     pass
-                    # except:
-                    #     pass
                 except Exception as e:
                     print(e)
                     _ax.legend(box_labels, **legend_kwargs)
+        fig.tight_layout()
+
         if ret is None:
             return ax
         return ret

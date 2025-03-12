@@ -14,7 +14,7 @@ import fnmatch
 import h5py
 import pickle
 from datetime import datetime
-from typing import Callable, Optional, Dict, Set, Tuple, List
+from typing import Callable, Optional
 
 from tqdm import tqdm
 
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 
-def get_subjects(path: str) -> List[str]:
+def get_subjects(path: str) -> list[str]:
     """
     Retrieve the names of all subjects from experiment matfiles.
 
@@ -33,7 +33,7 @@ def get_subjects(path: str) -> List[str]:
         path (str): Path to experiment data directory.
 
     Returns:
-        List[str]: A list of subject names extracted from file names.
+        list[str]: A list of subject names extracted from file names.
     """
     subject_files = fnmatch.filter(os.listdir(path), "data_*.mat")
     subjects = [subject_file.split(".")[0][5:] for subject_file in subject_files]
@@ -258,10 +258,10 @@ def make_dataframe(path: str) -> pd.DataFrame:
     # Add some more columns based on block-dependent statistics
     df["box rank"] = (
         df.groupby(["subject", "session id", "block"])["schedule"].rank(
-            method="dense", ascending=False
+            method="dense"
         )
         - 1
-    ).astype(int)
+    ).astype(int) # ranks boxes fast --> medium --> slow
     df["normalized pushes"] = df["same-box push intervals"] / df["schedule"]
     df["consecutive push intervals"] = df["push times"].diff()
 
@@ -295,7 +295,7 @@ def make_dataframe(path: str) -> pd.DataFrame:
 
 
 def filter_df(
-    df: pd.DataFrame, conds: Optional[Dict[str, list]] = None
+    df: pd.DataFrame, conds: Optional[dict[str, list]] = None
 ) -> pd.DataFrame:
     """
     Filter a DataFrame according to conditions specified in a dictionary.
@@ -331,7 +331,7 @@ def process_block_safely(func: Callable) -> Callable:
     """
 
     @wraps(func)
-    def wrapper(df: pd.DataFrame, index: Tuple, *args, **kwargs):
+    def wrapper(df: pd.DataFrame, index: tuple, *args, **kwargs):
         try:
             return func(df, index, *args, **kwargs)
         except Exception as e:
@@ -360,7 +360,7 @@ def process_blocks(
     *args,
     use_tqdm: bool = False,
     **kwargs,
-) -> Tuple[Dict, Set]:
+) -> (dict, set):
     """
     Apply a function to each block in a hierarchical dataset and aggregate results.
 
@@ -501,7 +501,7 @@ def get_continuous_from_block(f: h5py.File, session: int, block: int) -> dict:
     return {}
 
 
-def get_continuous_from_df_to_dict(df: pd.DataFrame, data_dir: str) -> tuple:
+def get_continuous_from_df_to_dict(df: pd.DataFrame, data_dir: str) -> (dict, list):
     """
     Extract continuous data from blocks in the DataFrame and return it as a dictionary.
 
@@ -512,7 +512,7 @@ def get_continuous_from_df_to_dict(df: pd.DataFrame, data_dir: str) -> tuple:
     Returns:
         tuple: A tuple containing:
             - data (dict): A dictionary with extracted continuous data from the blocks.
-            - errors (list): A list of any errors encountered during the extraction process.
+            - errors (list): A list of blocks causing errors encountered during the extraction process.
     """
     # Retrieve the list of subjects and open their respective files
     subjects = df.index.unique('subject').values
@@ -735,7 +735,7 @@ def populate_busyness(df: pd.DataFrame) -> tuple[dict, set]:
     return process_blocks(df, _inner)
 
 
-def extend_df(df: pd.DataFrame, blocks_dict: dict, col_name: str) -> tuple[dict, set]:
+def extend_df(df: pd.DataFrame, blocks_dict: dict, col_name: str, by_box: bool = False) -> tuple[dict, set]:
     """
     Extend the DataFrame by adding a new column with values from the provided blocks dictionary.
     The new column is filled with values corresponding to each box rank in the DataFrame.
@@ -745,8 +745,9 @@ def extend_df(df: pd.DataFrame, blocks_dict: dict, col_name: str) -> tuple[dict,
         blocks_dict (dict): A dictionary containing block data for each subject, session, and block.
                              The dictionary should have the format:
                              { (subject, session, block): {box: values} }
-                             where 'box' corresponds to box ranks and 'values' is a list of values for each box.
+                             where 'box' corresponds to box's in order of schedules and 'values' is a list of values for each box.
         col_name (str): The name of the new column to add to the DataFrame.
+        by_box (bool): If true, then blocks_dict is formatted as separate lists for each box and thus each list needs to be matched to its corresponding box in the dataframe. Otherwise, it is assumed that each row of an item in blocks_dict is aligned to each event in that block's dataframe
 
     Returns:
         pd.DataFrame: The original DataFrame with the new column added and filled with data from blocks_dict.
@@ -772,16 +773,19 @@ def extend_df(df: pd.DataFrame, blocks_dict: dict, col_name: str) -> tuple[dict,
         # Extract the subset of the DataFrame for the current block
         df_block = df.xs(index, level=("subject", "session", "block"), drop_level=False)
 
-        # Iterate over each box rank in the block
-        for box in df_block["box rank"].unique():
-            # Filter the DataFrame for the current box
-            box_df = filter_df(df_block, {"box rank": box})
+        if by_box:
+            # Iterate over each box rank in the block
+            for box in df_block["box rank"].unique():
+                # Filter the DataFrame for the current box
+                box_df = filter_df(df_block, {"box rank": box})
 
-            # Assign the corresponding values from blocks_dict to the new column
-            df.loc[box_df.index, col_name] = pd.Series(
-                block_data[box][: len(box_df)], index=box_df.index
-            )
-
+                # Assign the corresponding values from blocks_dict to the new column
+                df.loc[box_df.index, col_name] = pd.Series(
+                    block_data[box][: len(box_df)], index=box_df.index
+                )
+        else:
+            # Assume each row of block_data is matched to each event in df
+            df.loc[df_block.index, col_name] = pd.Series(block_data, index = df_block.index)
         return True  # Return True after processing the block
 
     # Process each block using the helper function _inner
@@ -846,3 +850,60 @@ def load_pickled_data(path: str) -> dict:
 
     # Return all contents as a dictionary
     return ds
+
+
+def bin_data(
+    df: pd.DataFrame,
+    x: str,
+    n_bins: Optional[int | list[float]] = 20,
+    strategy: str = 'left'
+) -> list[float]:
+    """
+    Bins data in the specified column of the DataFrame, with support for different binning strategies.
+
+    This function performs binning on the specified column (`x`) and labels the bins
+    according to the selected strategy. It supports defining the number of bins or
+    specific bin edges. Optionally, it can return the binned data as a new column
+    in the DataFrame.
+
+    Args:
+        df (pd.DataFrame): Input DataFrame containing the data.
+        x (str): Name of the column to bin.
+        n_bins (Optional[Union[int, list[float]]]): Number of bins or list of bin edges.
+            If an integer is provided, the data will be divided into that number of equal-width bins.
+            If a list of floats is provided, it will specify the bin edges.
+            Defaults to 20.
+        strategy (str): Labeling strategy for the bins.
+            - 'full': Labels the bins using the full interval (i.e., both left and right edges).
+            - 'left': Labels the bins using only the left edge.
+            - 'right': Labels the bins using only the right edge.
+            Defaults to 'left'.
+
+    Returns:
+        pd.Series: A pandas Series containing the binned data.
+
+    Example:
+        df = pd.DataFrame({'value': np.random.randn(100)})
+        df['binned'] = bin_data(df, 'value', n_bins=5, strategy='right')
+
+    Notes:
+        If `n_bins` is an integer, the binning is done by dividing the data into equal-width bins.
+        If `n_bins` is a list of floats, the exact bin edges are used.
+    """
+
+    # Perform initial binning based on n_bins or custom bin edges
+    bins = pd.cut(df[x], bins=n_bins, include_lowest=True)
+
+    dtype = df[x].dtype  # Get the dtype of the column to maintain consistency in bin edges
+
+    # Select the appropriate bin edges based on the strategy
+    match strategy:
+        case 'full':
+            bin_edges = bins.cat.categories.astype(dtype)
+        case 'right':
+            bin_edges = bins.cat.categories.right.astype(dtype)
+        case _:
+            bin_edges = bins.cat.categories.left.astype(dtype)
+
+    # Apply the bin labels to the original data
+    return pd.cut(df[x], bins=n_bins, include_lowest=True, labels=bin_edges)

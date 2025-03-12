@@ -11,10 +11,62 @@ from matplotlib.lines import Line2D
 
 
 from foraging.plotting import BOX_COLORS, BOX_LABELS
-from ._base import regplot, bp
+from ._base import fig_init, bp, regplot
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
+
+def plot_block_events(df: pd.DataFrame, index: tuple, x: str = 'push #', title: str = "",
+                        box_colors: list = BOX_COLORS, box_labels: list = BOX_LABELS,
+                        legend: bool = True, ax: Optional[plt.Axes] = None, **kwargs) -> plt.Axes:
+
+    # Create ax if none provided
+    fig, ax = fig_init(ax, **kwargs.pop('fig_kwargs', {}))
+
+    # Draw schedules as equidistant lines
+    df_block = df.loc[index].reset_index()
+    schedules = np.sort(df_block['schedule'].unique())
+    # [ax.axhline(i, color=box_colors[i], linewidth = 5) for i in range(len(schedules))]
+
+    # Create switch segments (x, y) pairs for LineCollection
+    x_name = x
+    x = df_block[x_name].values
+    y = df_block['box rank'].values
+    # styles = ['dashed' for x in df_block['stay/switch'].values if x]
+    # colors = [box_colors[y[0]]] + [box_colors[i] for i in y if df_block['stay/switch'].iloc[i]]
+    colors = np.array([box_colors[i] for i in y])
+    styles = ['dashed' if x else 'solid' for x in df_block['stay/switch'].values]
+    segments = [[(0, 0), (x[0], y[0])]] + [[(x[i], y[i]), (x[i + 1], y[i + 1])] for i in range(len(x) - 1)]
+
+    # Create the LineCollection
+    lc = LineCollection(segments, colors = colors, linestyles = styles, linewidth = 1, zorder = 0)
+
+    ax.add_collection(lc)
+    ax.autoscale()
+    ax.set_title(title)
+    ax.set_ylabel("Boxes")
+    ax.set_xlabel(x_name)
+
+    # Add reward outcomes with green (rewarded) and red (not rewarded) markers
+    mask = df_block['reward outcomes'] == True
+    ax.scatter(x[mask], y[mask], c=colors[mask], marker='^', s = 50, zorder = 2)
+    ax.scatter(x[~mask], y[~mask], edgecolors=colors[~mask], marker='v', s = 50, zorder = 2, facecolors = "none")
+    ax.set_xlim([0, x.max() + 1])
+    ax.set_yticks(range(len(schedules)), box_labels, rotation = 90, va = 'center')
+
+    # Create legend manually with proxy artists
+    if legend:
+        legend_kwargs = kwargs.pop('legend_kwargs', {'loc': 'upper right'})
+
+        legend_elements = ([Line2D([0], [0], color=box_colors[i], linestyle='-', label=box_labels[i]) for i in range(len(box_colors))]
+                           + [Line2D([0], [0], color='black', linestyle='-', label='stay pushes'),
+                              Line2D([0], [0], color='black', linestyle='--', label='switch times')]
+                           + [Line2D([0], [0], color='green', linestyle='', marker='^', label='rewarded'),
+                              Line2D([0], [0], color='red', linestyle='', marker='v', label='no reward')])
+
+        ax.legend(handles=legend_elements, **legend_kwargs)
+    return ax
+
 
 def plot_push_intervals(df: pd.DataFrame, x: str = 'push times', title: str = "Push intervals",
                         box_colors: list = BOX_COLORS, box_labels: list = BOX_LABELS,
