@@ -89,7 +89,7 @@ def reward_beliefs3d(df: pd.DataFrame, reward_beliefs: np.ndarray, box_labels: l
     return ax
 
 
-def schedule_beliefs_block(df: pd.DataFrame, index: tuple, x_col: str = 'push #', box_labels: list = BOX_LABELS, box_colors: list = BOX_COLORS, ax: Optional[plt.Axes] = None,
+def schedule_beliefs_block(df: pd.DataFrame, index: tuple, x: str = 'push #', box_labels: list = BOX_LABELS, box_colors: list = BOX_COLORS, ax: Optional[plt.Axes] = None,
                            **kwargs) -> plt.Axes:
     """
     Plots the beliefs about the schedule for a specific block in the experiment, with uncertainty bands
@@ -98,7 +98,7 @@ def schedule_beliefs_block(df: pd.DataFrame, index: tuple, x_col: str = 'push #'
     Args:
         df: DataFrame containing session data.
         index: Index of the block to analyze in the DataFrame.
-        x_col: The value from `df` used for the x-axis, typically 'push #' or 'push times'.
+        x: The value from `df` used for the x-axis, typically 'push #' or 'push times'.
         ax: Optional, existing matplotlib Axes object. If None, a new one will be created.
 
         kwargs:
@@ -114,30 +114,30 @@ def schedule_beliefs_block(df: pd.DataFrame, index: tuple, x_col: str = 'push #'
     df_block = df.loc[index]
 
     # Plot the mean schedule as a line plot
-    bp(sns.lineplot)(df_block, x=x_col, y='mean schedule', title_prefix=f'Beliefs about schedule for {index}',
+    bp(sns.lineplot)(df_block, x=x, y='mean schedule', title_prefix=f'Beliefs about schedule for {index}',
                      **kwargs.pop('plt_kwargs', {}), ax = ax)
 
     # Loop over each box and add error bands using fill_between
     for i, (cat, sub_df2) in enumerate(df_block.groupby("box rank")):
-        if x_col in sub_df2.columns:
-            ax.fill_between(sub_df2[x_col], sub_df2["mean schedule"] - sub_df2["uncertainty schedule"],
-                             sub_df2["mean schedule"] + sub_df2["uncertainty schedule"],
-                             color=box_colors[cat], alpha=0.1)
+        if x in sub_df2.columns:
+            ax.fill_between(sub_df2[x], sub_df2["mean schedule"] - sub_df2["uncertainty schedule"],
+                            sub_df2["mean schedule"] + sub_df2["uncertainty schedule"],
+                            color=box_colors[cat], alpha=0.1)
         else:
-            ax.fill_between(sub_df2.index.get_level_values(x_col),
-                             sub_df2["mean schedule"] - sub_df2["uncertainty schedule"],
-                             sub_df2["mean schedule"] + sub_df2["uncertainty schedule"],
-                             color=box_colors[cat], alpha=0.1)
+            ax.fill_between(sub_df2.index.get_level_values(x),
+                            sub_df2["mean schedule"] - sub_df2["uncertainty schedule"],
+                            sub_df2["mean schedule"] + sub_df2["uncertainty schedule"],
+                            color=box_colors[cat], alpha=0.1)
 
     # Draw horizontal lines for true schedules
     schedules = np.sort(df_block['schedule'].unique())
     [ax.axhline(schedules[i], color=box_colors[i], linestyle='--') for i in range(len(schedules))]
 
     # Plot reward outcomes as scatter plot with different colors
-    if x_col in df_block.columns:
-        x = df_block[x_col]
+    if x in df_block.columns:
+        x = df_block[x]
     else:
-        x = df_block.index.get_level_values(x_col)
+        x = df_block.index.get_level_values(x)
     y = df_block['mean schedule']
     mask = df_block['reward outcomes'] == True
     ax.scatter(x[mask], y[mask], c='g', marker='^')  # Rewarded
