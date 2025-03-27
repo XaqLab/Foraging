@@ -1,5 +1,8 @@
 import logging
 
+from IPython.core.display import Markdown
+from IPython.core.display_functions import display
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
@@ -8,7 +11,6 @@ import pandas as pd
 import polars as pl
 
 from functools import wraps
-import logging
 import os
 import fnmatch
 import h5py
@@ -18,11 +20,8 @@ from typing import Callable, Optional
 
 from tqdm import tqdm
 
-from foraging.utils import INDEX
+from foraging.utils import INDEX, BOX_LABELS
 from ._base import date_to_integer
-
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
 
 
 def get_subjects(path: str) -> list[str]:
@@ -100,7 +99,7 @@ def make_dataframe(path: str) -> pd.DataFrame:
         "reward intervals": [],
     }
     day_to_week = {0: "M", 1: "T", 2: "W", 3: "R", 4: "F", 5: "S", 6: "U"}
-
+    box_labels = dict(zip(range(len(BOX_LABELS)), BOX_LABELS))
     for subject in subjects:
 
         # Load MATLAB file
@@ -262,6 +261,7 @@ def make_dataframe(path: str) -> pd.DataFrame:
         )
         - 1
     ).astype(int) # ranks boxes fast --> medium --> slow
+    df['box label'] = df['box rank'].map(box_labels)
     df["normalized pushes"] = df["same-box push intervals"] / df["schedule"]
     df["consecutive push intervals"] = df["push times"].diff()
 
@@ -294,21 +294,33 @@ def make_dataframe(path: str) -> pd.DataFrame:
     return df
 
 
+def display_df(df: pd.DataFrame, cols: list[str]):
+    return display(Markdown(df.head()[cols].to_markdown()))
+
+
 def filter_df(
-    df: pd.DataFrame, conds: Optional[dict[str, list]] = None
+    df: pd.DataFrame, conds: dict[str, list] = None, attempt_index: bool = True
 ) -> pd.DataFrame:
     """
     Filter a DataFrame according to conditions specified in a dictionary.
 
     Args:
         df (pd.DataFrame): DataFrame containing experiment data.
-        conds (Optional[Dict[str, list]]): Dictionary mapping column or index level names to values to filter on.
+        conds (dict[str, list]): Dictionary mapping column or index level names to values to filter on.
+        attempt_index (bool): Flag indicating whether to attempt converting conds to multi-index key. Defaults to True.
 
     Returns:
         pd.DataFrame: Filtered DataFrame.
     """
     if conds:
         mask = np.full(len(df), True)
+        if attempt_index:
+            keys = conds.keys()
+            if set(keys) == set(df.index.names[:len(keys)]):
+                try:
+                    return df.loc[tuple(conds.values())] # Bear in mind this will drop levels
+                except:
+                    pass
         for k, v in conds.items():
             v = np.atleast_1d(v)
             if k in df.index.names:  # Filter on index levels
@@ -372,7 +384,7 @@ def process_blocks(
         **kwargs: Additional keyword arguments for `compute_function`.
 
     Returns:
-        Tuple[Dict, Set]: Dictionary of results and a set of error blocks.
+        (dict, set): Dictionary of results and a set of error blocks.
     """
     results = {}
     err_blocks = set()
@@ -747,7 +759,7 @@ def extend_df(df: pd.DataFrame, blocks_dict: dict, col_name: str, by_box: bool =
                              { (subject, session, block): {box: values} }
                              where 'box' corresponds to box's in order of schedules and 'values' is a list of values for each box.
         col_name (str): The name of the new column to add to the DataFrame.
-        by_box (bool): If true, then blocks_dict is formatted as separate lists for each box and thus each list needs to be matched to its corresponding box in the dataframe. Otherwise, it is assumed that each row of an item in blocks_dict is aligned to each event in that block's dataframe
+        by_box (bool): If true, then blocks_dict is formatted as separate lists for each box and thus each list needs to be matched to its corresponding box in the dataframe. Otherwise, it is assumed that each row of an item in blocks_dict is aligned to each event in that block
 
     Returns:
         pd.DataFrame: The original DataFrame with the new column added and filled with data from blocks_dict.
@@ -855,7 +867,7 @@ def load_pickled_data(path: str) -> dict:
 def bin_data(
     df: pd.DataFrame,
     x: str,
-    n_bins: Optional[int | list[float]] = 20,
+    bins: Optional[int | list[float]] = 20,
     strategy: str = 'left'
 ) -> list[float]:
     """
@@ -869,7 +881,7 @@ def bin_data(
     Args:
         df (pd.DataFrame): Input DataFrame containing the data.
         x (str): Name of the column to bin.
-        n_bins (Optional[Union[int, list[float]]]): Number of bins or list of bin edges.
+        bins (Optional[Union[int, list[float]]]): Number of bins or list of bin edges.
             If an integer is provided, the data will be divided into that number of equal-width bins.
             If a list of floats is provided, it will specify the bin edges.
             Defaults to 20.
@@ -892,18 +904,20 @@ def bin_data(
     """
 
     # Perform initial binning based on n_bins or custom bin edges
-    bins = pd.cut(df[x], bins=n_bins, include_lowest=True)
+    _bins = pd.cut(df[x], bins=bins, include_lowest=True)
 
     dtype = df[x].dtype  # Get the dtype of the column to maintain consistency in bin edges
 
     # Select the appropriate bin edges based on the strategy
     match strategy:
         case 'full':
-            bin_edges = bins.cat.categories.astype(dtype)
+            bin_edges = _bins.cat.categories.astype(dtype)
         case 'right':
-            bin_edges = bins.cat.categories.right.astype(dtype)
+            bin_edges = _bins.cat.categories.right.astype(dtype)
         case _:
-            bin_edges = bins.cat.categories.left.astype(dtype)
+            bin_edges = _bins.cat.categories.left.astype(dtype)
 
     # Apply the bin labels to the original data
-    return pd.cut(df[x], bins=n_bins, include_lowest=True, labels=bin_edges)
+    return pd.cut(df[x], bins=bins, include_lowest=True, labels=bin_edges)
+
+

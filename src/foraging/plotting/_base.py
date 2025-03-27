@@ -14,10 +14,12 @@ from numpy.typing import ArrayLike
 from scipy.optimize import curve_fit
 from scipy.spatial.distance import euclidean
 from tqdm import tqdm
+from matplotlib.ticker import FuncFormatter
 
 from foraging import utils
 import utils.data
-from foraging.plotting import BOX_COLORS, BOX_LABELS
+from foraging.plotting import BOX_COLORS
+from utils import BOX_LABELS
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -26,6 +28,9 @@ def fig_init(ax: plt.Axes = None, **kwargs):
     if ax is None:
         return plt.subplots(**kwargs)
     return ax.get_figure(), ax
+
+def titler(title: str, title_prefix: str, conds: dict):
+    return title_prefix + '\n' + ', '.join([k + ' = ' + str(v) for k, v in conds.items()]) if not title else title
 
 def bp(func):
     """
@@ -36,16 +41,21 @@ def bp(func):
         wrapped function
     """
     @wraps(func)
-    def wrapper(df: pd.DataFrame = None, conds: dict = None, collapse: bool = False, palette: list = None, box_colors: list = BOX_COLORS, box_labels: list = BOX_LABELS, title: str = None, title_prefix: str = '', ax: plt.Axes = None, **kwargs) -> Any:
+    def wrapper(df: pd.DataFrame = None, x: str = None, conds: dict = None, accumulate: bool = False, palette: list = None, box_colors: list = BOX_COLORS, box_labels: list = BOX_LABELS, title: str = None, title_prefix: str = '', min_obs: int = None, attempt_index: bool = True, ax: plt.Axes = None, **kwargs) -> Any:
         """
         Convenience decorator that customizes figure in formulaic fashion
 
         Args:
-            collapse:
             df: dataframe of block(s) data
+            x: name of x variable to be plotted
             conds: dictionary mapping level keys to values to be used to filter dataframe. Necessary for setting title
+            accumulate: True indicates df consists of multiple blocks whose data should be accumulated
+            palette: list of colors. If none, defaults to box_colors
             box_colors: list of colors for each box
             box_labels: list of labels for each box
+            title: title for figure (overrides title_prefix)
+            title_prefix: prefix string that precedes the string template that enumerates conditions for this block(s)
+            min_obs: threshold for min number of observations a bin must have to be displayed. Only used if not None
             ax: axis to plot on (not none if reusing premade figure and axis object)
             **kwargs: keyword arguments to be passed to func
 
@@ -56,12 +66,12 @@ def bp(func):
         # Filter df
         if conds is None:
             conds = {}
-        df = utils.data.filter_df(df, conds)
+        df = utils.data.filter_df(df, conds, attempt_index=attempt_index)
 
         # Context dependent plot settings
-        if collapse:
-            hue = 'box rank'
-            hue_order = range(len(box_colors))
+        if accumulate:
+            hue = 'box label'
+            hue_order = box_labels
         else:
             schedules = np.sort(df['schedule'].unique())
             kappa = df.index.unique('kappa')
@@ -83,9 +93,9 @@ def bp(func):
         palette = list(box_colors) if not palette else palette
 
         # If plotting kappa on x-axis, create dummy column in order to plot kappa data evenly
-        if kwargs.get('x', False) == 'kappa':
+        if x == 'kappa':
             df['stimulus reliability'] = pd.Series(df['kappa'].rank(method ='dense') - 1, index = df.index)
-            kwargs['x'] = 'stimulus reliability'
+            x = 'stimulus reliability'
 
         # Create ax if none
         fig, ax = fig_init(ax, **kwargs.pop('fig_kwargs', {}))
@@ -96,17 +106,20 @@ def bp(func):
         })
 
         # Run function, assuming seaborn plotting func
-        ret = func(df, ax=ax, hue=hue, hue_order=hue_order, palette=palette, **kwargs)
+        if min_obs:
+            ret = func(df.groupby([x, hue], as_index=False).filter(lambda g: len(g) >= min_obs), x = x, ax=ax, hue=hue, hue_order=hue_order, palette=palette, **kwargs)
+        else:
+            ret = func(df, x = x, ax=ax, hue=hue, hue_order=hue_order, palette=palette, **kwargs)
 
         # Adjust xticks to only show actual data
-        if kwargs.get('x', False) == 'stimulus reliability':
+        if x == 'stimulus reliability':
             xticks = df.index.unique('kappa')
             [_ax.set_xticks(range(len(xticks)), xticks) for _ax in utils.flatten(ax)]
 
         # Set title (if multiple axes, this does the first one)
-        title_str = title_prefix + '\n' + ', '.join([k+' = '+str(v) for k,v in conds.items()]) if not title else title
+        title = titler(title, title_prefix, conds)
         _ax = np.atleast_1d(ax)
-        _ax[0].set_title(title_str)
+        _ax[0].set_title(title)
 
         # Modify legend
         if kwargs.pop('legend', True):
@@ -168,18 +181,16 @@ def _figure_saver(fig: plt.Figure, ax: plt.Axes, plot_dir: str, save_prefix: str
     Returns:
 
     """
-
-    Path(plot_dir).mkdir(parents=True, exist_ok=True)
-
     if conds:
-        fname = ','.join([k+'='+str(v) for k,v in conds.items()])
+        full_dir = os.path.join(plot_dir, *[k+' '+str(v) for k,v in conds.items()])
     else:
-        fname = ''
-    save_path = os.path.join(plot_dir, save_prefix + fname + ".png")
+        full_dir = plot_dir
+    Path(full_dir).mkdir(parents=True, exist_ok=True)
+    save_path = os.path.join(full_dir, save_prefix + ".png")
     fig.savefig(save_path)
     [x.clear() for x in utils.flatten(ax)]
 
-def _per_block(func, df: pd.DataFrame, plot_dir: str, save_prefix: str, fig_kwargs, conds: dict = None, **kwargs):
+def per_block(func, df: pd.DataFrame, plot_dir: str, save_prefix: str, fig_kwargs: dict = None, conds: dict = None, use_tqdm: bool = True, **kwargs):
     """
     Generic wrapper for creating figures for a single block
 
@@ -190,25 +201,29 @@ def _per_block(func, df: pd.DataFrame, plot_dir: str, save_prefix: str, fig_kwar
         save_prefix: prefix to uniquely identify plots produced by func
         fig_kwargs: dictionary of keyword arguments for plt.subplots
         conds: dictionary mapping level keys to values to be used to filter dataframe
+        use_tqdm: whether to use tqdm to display progress bar
         **kwargs: keyword arguments for func
 
     Returns:
 
     """
+    if fig_kwargs is None:
+        fig_kwargs = {}
     @_figure_handler(**fig_kwargs)
     def _inner(fig, ax):
         nonlocal conds
         filtered_df = utils.data.filter_df(df, conds)
-        for subject in tqdm(filtered_df.index.unique('subject')):
-            for sess_num in tqdm(filtered_df.xs(subject, level = 'subject').index.unique('session')):
+        for subject in tqdm(filtered_df.index.unique('subject'), disable=not use_tqdm):
+            for sess_num in tqdm(filtered_df.xs(subject, level = 'subject').index.unique('session'),disable=not use_tqdm):
                 for block_num in filtered_df.xs((subject, sess_num), level = ('subject','session')).index.unique('block'):
                     conds = {'subject': subject, 'session': sess_num, 'block': block_num}
                     try:
                         func(df = df, conds = conds, ax = ax, **kwargs)
-                    except:
+                    except Exception as e:
                         logger.debug(f"could not plot subject {subject} session {sess_num} block {block_num}")
+                        logger.debug(e)
                         continue
-                    _figure_saver(fig, ax, plot_dir, save_prefix, conds)
+                    _figure_saver(fig, ax, plot_dir, save_prefix, {'subject': subject, 'session': sess_num, 'block': block_num}) # Duplicate conds in case it gets mutated
     _inner()
 
 #todo: generalize iter_level to multiple levels listed in hierarchical order head first
@@ -223,7 +238,7 @@ def _across_blocks(func, df: pd.DataFrame, plot_dir: str, save_prefix: str, fig_
         plot_dir: folder for figures to be created in
         conds: dictionary mapping level keys to values to be used to filter dataframe
         fig_kwargs: dictionary of keyword arguments for plt.subplots
-        iter_level: index level of dataframe across which plots will be generated conditioned on each value of this level
+        iter_level: index level of dataframe across which plots will be generated, conditioned on each value of this level
         **kwargs: keyword arguments for func
 
     Returns:
@@ -360,3 +375,28 @@ def plot_elbow(x: ArrayLike, y: ArrayLike, fit=False, func=None, method='default
     ax.axvline(x_elbow, **kwargs)
 
     return x_elbow, y_elbow, k_fit, ax
+
+
+def plot_variable_subplots(df, func, row_cond, col_cond: str, axes = None, **kwargs):
+    max_cols = df.groupby(row_cond).apply(lambda g: len(g.index.unique(col_cond))).max()
+    num_rows = len(df.groupby(row_cond))  # Compute rows needed
+    fig, axes = fig_init(axes, **({'figsize' : (3 * max_cols, 3 * num_rows), 'nrows': num_rows, 'ncols': max_cols} | kwargs.pop('fig_kwargs', {})))
+    axes = np.atleast_2d(axes)
+    for i, row_val in enumerate(df.groupby(row_cond).groups.keys()):
+        df_row = utils.data.filter_df(df, {row_cond: row_val})
+        axes[i, 0].set_ylabel(row_val)
+        for j, col_val in enumerate(df_row.groupby(col_cond).groups.keys()):
+            conds = {col_cond: col_val}
+            df_group = utils.data.filter_df(df_row, conds)
+            func(df_group, conds=conds, ax=axes[i,j], **kwargs)
+            if j > 0:
+                axes[i, j].set_ylabel("")
+        for k in range(j + 1, max_cols):
+            fig.delaxes(axes[i, k])
+    fig.tight_layout()
+    return axes
+
+
+def format_yticks(axes, func):
+    for ax in utils.flatten(axes):
+        ax.yaxis.set_major_formatter(FuncFormatter(func))

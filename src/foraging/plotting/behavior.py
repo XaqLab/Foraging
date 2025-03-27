@@ -5,18 +5,20 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import utils
+import utils.data
 from matplotlib import pyplot as plt
 from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
 
-
-from foraging.plotting import BOX_COLORS, BOX_LABELS
-from ._base import fig_init, bp, regplot
+from foraging.plotting import BOX_COLORS
+from utils import BOX_LABELS
+from ._base import fig_init, titler, bp, regplot
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-def plot_block_events(df: pd.DataFrame, index: tuple, x: str = 'push #', title: str = "",
+#todo: standardize the titling process-- if index or conds provided, construct title automatically for it unless title is explicitly suppressed via empty string input
+def plot_block_events(df: pd.DataFrame, conds: dict, x: str = 'push times', title: str = None, title_prefix: str = 'Pushes for',
                         box_colors: list = BOX_COLORS, box_labels: list = BOX_LABELS,
                         legend: bool = True, ax: Optional[plt.Axes] = None, **kwargs) -> plt.Axes:
 
@@ -24,7 +26,7 @@ def plot_block_events(df: pd.DataFrame, index: tuple, x: str = 'push #', title: 
     fig, ax = fig_init(ax, **kwargs.pop('fig_kwargs', {}))
 
     # Draw schedules as equidistant lines
-    df_block = df.loc[index].reset_index()
+    df_block = utils.data.filter_df(df, conds).reset_index()
     schedules = np.sort(df_block['schedule'].unique())
     # [ax.axhline(i, color=box_colors[i], linewidth = 5) for i in range(len(schedules))]
 
@@ -43,14 +45,15 @@ def plot_block_events(df: pd.DataFrame, index: tuple, x: str = 'push #', title: 
 
     ax.add_collection(lc)
     ax.autoscale()
+    title = titler(title, title_prefix, conds)
     ax.set_title(title)
     ax.set_ylabel("Boxes")
     ax.set_xlabel(x_name)
 
     # Add reward outcomes with green (rewarded) and red (not rewarded) markers
     mask = df_block['reward outcomes'] == True
-    ax.scatter(x[mask], y[mask], c=colors[mask], marker='^', s = 50, zorder = 2)
-    ax.scatter(x[~mask], y[~mask], edgecolors=colors[~mask], marker='v', s = 50, zorder = 2, facecolors = "none")
+    ax.scatter(x[mask], y[mask], c=colors[mask], marker='^', s = 80, zorder = 2)
+    ax.scatter(x[~mask], y[~mask], edgecolors=colors[~mask], marker='v', s = 80, zorder = 2, facecolors = "none")
     ax.set_xlim([0, x.max() + 1])
     ax.set_yticks(range(len(schedules)), box_labels, rotation = 90, va = 'center')
 
@@ -68,7 +71,7 @@ def plot_block_events(df: pd.DataFrame, index: tuple, x: str = 'push #', title: 
     return ax
 
 
-def plot_push_intervals(df: pd.DataFrame, x: str = 'push times', title: str = "Push intervals",
+def plot_push_intervals(df: pd.DataFrame, conds: dict, x: str = 'push times', title: str = None, title_prefix: str = 'Push intervals for',
                         box_colors: list = BOX_COLORS, box_labels: list = BOX_LABELS,
                         legend: bool = True, ax: Optional[plt.Axes] = None, **kwargs) -> plt.Axes:
     """
@@ -91,12 +94,17 @@ def plot_push_intervals(df: pd.DataFrame, x: str = 'push times', title: str = "P
     Returns:
         ax: The Axes object with the plot.
     """
-    df = df.reset_index()
+    # Create ax if none provided
+    fig, ax = fig_init(ax, **kwargs.pop('fig_kwargs', {}))
+
+    # Draw schedules as equidistant lines
+    df_block = utils.data.filter_df(df, conds).reset_index()
+
     x_name = x
-    x = df[x_name].values
-    y = df['consecutive push intervals'].values
-    colors = [box_colors[i] for i in df['box rank'].values]
-    styles = ['dashed' if x else 'solid' for x in df['stay/switch'].values]
+    x = df_block[x_name].values
+    y = df_block['consecutive push intervals'].values
+    colors = [box_colors[i] for i in df_block['box rank'].values]
+    styles = ['dashed' if x else 'solid' for x in df_block['stay/switch'].values]
 
     # Create segments (x, y) pairs for LineCollection
     segments = [[(0, 0), (x[0], y[0])]] + [[(x[i], y[i]), (x[i + 1], y[i + 1])] for i in range(len(x) - 1)]
@@ -111,12 +119,13 @@ def plot_push_intervals(df: pd.DataFrame, x: str = 'push times', title: str = "P
     ax.add_collection(lc)
     ax.autoscale()
     ax.grid(False)
+    title = titler(title, title_prefix, conds)
     ax.set_title(title)
     ax.set_ylabel("Push intervals")
     ax.set_xlabel(x_name)
 
     # Add reward outcomes with green (rewarded) and red (not rewarded) markers
-    mask = df['reward outcomes'] == True
+    mask = df_block['reward outcomes'] == True
     ax.scatter(x[mask], y[mask], c='g', marker='^')
     ax.scatter(x[~mask], y[~mask], c='r', marker='v')
 

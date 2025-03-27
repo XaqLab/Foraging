@@ -4,4 +4,5 @@ INDEX = ['subject', 'session', 'block', 'push #', 'stimulus type', 'shape', 'kap
 MIN_INDEX = 4 # Marks the end of the minimal index
 
 from ._base import flatten
-from .data import make_dataframe, filter_df
+
+BOX_LABELS = ['fast','medium','slow']

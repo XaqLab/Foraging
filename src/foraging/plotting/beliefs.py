@@ -7,9 +7,9 @@ from matplotlib import pyplot as plt
 from matplotlib.colors import ListedColormap
 from matplotlib.lines import Line2D
 from numpy.typing import ArrayLike
-
 from foraging.utils import models
-from foraging.plotting import BOX_COLORS, BOX_LABELS, bp,fig_init
+from foraging.plotting import BOX_COLORS, bp,fig_init
+from utils import BOX_LABELS
 
 
 def likelihood_single_obs(obs_model: models.Observation, latents: ArrayLike, obs: Any, ax: Optional[plt.Axes] = None,
@@ -140,8 +140,8 @@ def schedule_beliefs_block(df: pd.DataFrame, index: tuple, x: str = 'push #', bo
         x = df_block.index.get_level_values(x)
     y = df_block['mean schedule']
     mask = df_block['reward outcomes'] == True
-    ax.scatter(x[mask], y[mask], c='g', marker='^')  # Rewarded
-    ax.scatter(x[~mask], y[~mask], c='r', marker='v')  # Not rewarded
+    ax.scatter(x[mask], y[mask], c='g', marker='^', s = 50)  # Rewarded
+    ax.scatter(x[~mask], y[~mask], c='r', marker='v', s = 50)  # Not rewarded
 
     # Add legend with proxy artists
     legend_kwargs = {'loc': 'upper right'} | kwargs.pop('lgd_kwargs', {})

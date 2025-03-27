@@ -6,8 +6,12 @@ import pandas as pd
 import statsmodels.formula.api as smf
 from numpy.typing import ArrayLike
 from scipy.stats import uniform
+from sklearn.linear_model import LogisticRegression
+from sklearn.utils.class_weight import compute_sample_weight
 
 import models
+import stats
+import utils.data
 from ._base import discrete_time
 from .data import process_block_safely
 
@@ -165,6 +169,7 @@ def compute_reward_beliefs(
 
     return belief_avail_event
 
+#todo: standardize this to return both probabilities of reward
 @process_block_safely
 def compute_reward_probabilities(
         df: pd.DataFrame,
@@ -211,6 +216,52 @@ def compute_reward_probabilities(
 
     return belief_avail_event
 
+
+@process_block_safely
+def compute_reward_beliefs_fixed_model(
+        df: pd.DataFrame,
+        index: tuple,
+        schedules: list,
+) -> np.ndarray[float]:
+    """
+    Compute the exact reward probability of each right before each push.
+
+    Args:
+        df: Pandas DataFrame containing session data.
+        index: Index to locate the relevant block data.
+
+    Returns:
+        np.ndarray: An event-based array of shape (n_obs, n_boxes),
+                    where reward probabilities are evaluated before each push.
+    """
+
+    df_block = df.loc[index]
+    n_boxes = len(schedules)
+    shape = df_block.index.unique('shape')[0]  # Assume agent knows number of states perfectly
+
+    # Construct likelihood/observation model
+    obs_model = models.GammaObservation(shape)
+
+    # Compute availability marginal for each push
+    n_obs = df_block['push times'].size - np.count_nonzero(np.isnan(df_block['push times']))
+    belief_avail_event = np.zeros((n_obs, n_boxes))
+    push_times_and_box = df_block[['push times', 'box rank']].values[:n_obs]
+    old_idx = np.zeros(n_boxes, dtype=int)  # Track last observed index per box
+    old_t = np.zeros(n_boxes)  # Track last push time per box
+
+    for i, (t, box) in enumerate(push_times_and_box):
+        if t == old_t[int(box)]:
+            continue  # Skip redundant updates if push time is unchanged for the same box
+
+        belief_avail_event[i] = np.array([
+            obs_model.probability((1, t - old_t[j]), schedules[j])
+            for j in range(n_boxes)
+        ])
+
+        old_idx[int(box)] += 1  # Update observation index for the box
+        old_t[int(box)] = t  # Update last push time for the box
+
+    return belief_avail_event
 
 @process_block_safely
 def compute_joint_beliefs(
@@ -261,7 +312,7 @@ def compute_joint_beliefs(
 
     return belief_joint_event
 
-def predict_pushed_box(df: pd.DataFrame, x: str, y: str = 'box rank', disp: bool = False) -> tuple[float, Any]:
+def predict_pushed_box(df: pd.DataFrame, x: str | list[str], y: str = 'box rank', perm_test: bool = False, weight: bool = False, n_perms: int = 500, disp: bool = False) -> (float, float, Any, ...):
     """
     Predicts the pushed box using multinomial logistic regression and evaluates the accuracy of predictions.
 
@@ -278,13 +329,21 @@ def predict_pushed_box(df: pd.DataFrame, x: str, y: str = 'box rank', disp: bool
     X = df[x]
     y = df[y]
     try:
-        mdl = smf.mnlogit("y ~ X", {'y': y, 'X': X}).fit(disp = disp)
-        yhat = np.argmax(mdl.predict(), axis=1)
-        accuracy = (yhat == y).mean()
-        return accuracy, mdl
+        # mdl = smf.mnlogit("y ~ X", {'y': y, 'X': X}).fit(disp = disp)
+        # yhat = np.argmax(mdl.predict(), axis=1)
+        # accuracy = (yhat == y).mean()
+        weights = compute_sample_weight(class_weight='balanced', y=y) if weight else None
+        mdl = LogisticRegression()
+        mdl.fit(X, y, sample_weight=weights)
+        accuracy = mdl.score(X, y, sample_weight=weights)
+        rsq = stats.mcfadden_pseudo_rsquared(mdl, X, y)
+        if perm_test:
+            pval_accu, pval_rsq = stats.permutation_test_logistic(X, y, accuracy, rsq, weights=weights, n_perms= n_perms)
+            return accuracy, rsq, pval_accu, pval_rsq, mdl
+        return accuracy, rsq, mdl
     except Exception as e:
         logger.debug(e)
-        return 0, None
+        return None
 
 def get_mean_beliefs(beliefs: ArrayLike | list, supp: ArrayLike | list) -> ArrayLike | list:
     """
