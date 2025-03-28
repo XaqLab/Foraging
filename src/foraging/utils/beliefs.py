@@ -19,11 +19,13 @@ from .data import process_block_safely
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
+# TODO: return df index for each event so that we have alignment information
 def compute_posteriors(
         df: pd.DataFrame,
         index: tuple,
         schedule_candidates: ArrayLike,
-        record: bool = True
+        record: bool = True,
+        shape: int = None
 ) -> models.IndependentBoxesPosterior:
     """
     Computes the posterior belief over reward schedules for each box, updating after each push.
@@ -44,8 +46,9 @@ def compute_posteriors(
     # Get unique schedules (sorted in descending order)
     n_boxes = block_data['schedule'].nunique()
 
-    # Assume agent knows the exact number of states
-    shape = block_data.index.unique('shape')[0]
+    # Assume agent knows the exact number of states, if shape is not provided
+    if shape is None:
+        shape = block_data.index.unique('shape')[0]
 
     # Construct prior using a uniform distribution over schedule candidates
     prior = uniform.pdf(
@@ -174,7 +177,9 @@ def compute_reward_beliefs(
 @process_block_safely
 def compute_reward_probabilities(
         df: pd.DataFrame,
-        index: tuple
+        index: tuple,
+        shape: int = None,
+        schedules: list = None,
 ) -> np.ndarray[float]:
     """
     Compute the exact reward probability of each right before each push.
@@ -189,9 +194,11 @@ def compute_reward_probabilities(
     """
 
     df_block = df.loc[index]
-    schedules = np.sort(df_block['schedule'].unique())
-    n_boxes = df_block['schedule'].nunique()
-    shape = df_block.index.unique('shape')[0]  # Assume agent knows number of states perfectly
+    if schedules is None:
+        schedules = np.sort(df_block['schedule'].unique())
+    n_boxes = len(schedules)
+    if shape is None:
+        shape = df_block.index.unique('shape')[0]  # Assume agent knows number of states perfectly
 
     # Construct likelihood/observation model
     obs_model = models.GammaObservation(shape)
