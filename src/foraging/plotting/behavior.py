@@ -4,14 +4,14 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 import seaborn as sns
-import utils
-import utils.data
+from foraging import utils
+from foraging.utils import data
 from matplotlib import pyplot as plt
 from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
 
 from foraging.plotting import BOX_COLORS
-from utils import BOX_LABELS
+from foraging.utils import BOX_LABELS
 from ._base import fig_init, titler, bp, regplot
 
 logger = logging.getLogger(__name__)

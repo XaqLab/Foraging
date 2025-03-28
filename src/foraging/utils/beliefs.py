@@ -9,9 +9,10 @@ from scipy.stats import uniform
 from sklearn.linear_model import LogisticRegression
 from sklearn.utils.class_weight import compute_sample_weight
 
-import models
-import stats
-import utils.data
+from . import models
+from . import stats
+from . import data
+from foraging import utils
 from ._base import discrete_time
 from .data import process_block_safely
 

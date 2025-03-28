@@ -17,9 +17,9 @@ from tqdm import tqdm
 from matplotlib.ticker import FuncFormatter
 
 from foraging import utils
-import utils.data
+from foraging.utils import data
 from foraging.plotting import BOX_COLORS
-from utils import BOX_LABELS
+from foraging.utils import BOX_LABELS
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)

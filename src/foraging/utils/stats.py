@@ -1,8 +1,8 @@
 import numpy as np
 from sklearn.linear_model import LogisticRegression
 import pandas as pd
-import utils.data
-from utils.data import process_block_safely
+from . import data
+from .data import process_block_safely
 
 def mcfadden_pseudo_rsquared(mdl, X, y):
     # 2. **Log-Likelihood**: Compute log-likelihood using sklearn's model
