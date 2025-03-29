@@ -12,6 +12,31 @@ This is where I perform all my analyses of the behavioral data in the three-box 
 You can see the full list in the `pyproject.toml` under the `dependencies` field.
 
 # Setup
-To install the `foraging` package, cd to the root of this repo and just run `pip install .` in terminal! To install in development mode, where you may wish to edit the package files, run `pip install -e .`.
+## Recommended Approaches
+Here are a couple tested ways to quickly set up an environment
+
+### 1. Conda + Poetry
++ Combine the best of both worlds with this hybrid approach that leverages the scientific computing ecosystem of conda and package management prowess of poetry. To install this package, run the following at the root of this project:
+```
+conda create -n <YOUR_ENV> python=3.10
+conda activate <YOUR_ENV>
+conda install pip
+pip install poetry
+poetry install
+```
++ This will build dependencies off `pyproject.toml` and install packages primarily through pip, including the `foraging` package itself. If you do not like this, then go to step 2.
+
+### 2. Conda-lock
++ For a conda-purist experience, run the following at the root of this project:
+```
+conda install conda-lock
+conda-lock install --name <YOUR_ENV> conda-lock.yml
+```
++ This will create a new environment and install dependencies specified in `conda-lock.yml`.
++ To install the `foraging` package, proceed to step 3.
+
+### 3. Install `foraging`
++ **This step assumes you have built a functional environment and are ready to install the package**
++ Cd to the root of this repo and just run `pip install .` in terminal! To install in development mode, where you may wish to edit the package files, run `pip install -e .`.
 
 ### Contact: nquazi@andrew.cmu.edu
