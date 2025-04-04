@@ -69,7 +69,7 @@ def open_meta_file(subject: str, path: str = ".") -> pd.DataFrame:
     return df_meta
 
 
-def make_dataframe(path: str) -> pd.DataFrame:
+def make_df(path: str) -> pd.DataFrame:
     """
     Given experiment matfiles and metadata, construct a DataFrame.
 
@@ -867,7 +867,7 @@ def load_pickled_data(path: str) -> dict:
 def bin_data(
     df: pd.DataFrame,
     x: str,
-    bins: Optional[int | list[float]] = 20,
+    bins: int | list[float] = 20,
     strategy: str = 'left'
 ) -> list[float]:
     """
@@ -881,7 +881,7 @@ def bin_data(
     Args:
         df (pd.DataFrame): Input DataFrame containing the data.
         x (str): Name of the column to bin.
-        bins (Optional[Union[int, list[float]]]): Number of bins or list of bin edges.
+        bins (Union[int, list[float]]): Number of bins or list of bin edges.
             If an integer is provided, the data will be divided into that number of equal-width bins.
             If a list of floats is provided, it will specify the bin edges.
             Defaults to 20.

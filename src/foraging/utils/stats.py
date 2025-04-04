@@ -42,50 +42,65 @@ def biased_coin_likelihood(df: pd.DataFrame, index: tuple, probs):
     df_block = df.loc[index]
     return np.log(probs.loc[[(index[:2] + (x,)) for x in df_block['box label']]].values.squeeze())
 
-@process_block_safely
+# @process_block_safely
 def stay_switch_likelihood(df: pd.DataFrame, index: tuple, probs):
     df_block = df.loc[index]
     LL = np.zeros(len(df_block))
-    mask = df_block['next box'].isna()
-    df_block = df_block.dropna(subset = ['next box'])
-    LL[~mask] = np.log(probs.loc[[(index[:2] + (x,)) for x in df_block['box rank']]].values[
-        range(len(df_block)), df_block['next box']])
+    mask = df_block['prev_box1'].isna()
+    df_block = df_block.dropna(subset = ['prev_box1'])
+    LL[~mask] = np.log(probs.loc[[(index[:2] + (x,)) for x in df_block['prev_box1']]].values[
+        range(len(df_block)), df_block['curr_box']])
     LL[mask] = np.nan
     LL[LL == -np.inf] = np.nan
     return LL
 
-@process_block_safely
-def winstay_loseswitch_likelihood(df: pd.DataFrame, index: tuple, probs_win, probs_lose):
+# @process_block_safely
+def winstay_loseswitch_likelihood(df: pd.DataFrame, index: tuple, transition_probs):
     df_block = df.loc[index]
     LL = np.zeros(len(df_block))
-    probs = [probs_win.loc[index[:2]], probs_lose.loc[index[:2]]]
+    probs = transition_probs.loc[index[:2]]
     for i in range(LL.shape[0]):
         x = df_block.iloc[i]
-        if pd.notna(x['next box']):
-            LL[i] = np.log(probs[int(x['reward outcomes'])].loc[(x['box rank'],), x['next box']])
+        if pd.notna(x['prev_box1']):
+            LL[i] = np.log(probs[x['ro_1']].loc[(x['prev_box1'],), x['curr_box']])
         else:
             LL[i] = np.nan
     LL[LL == -np.inf] = np.nan
     return LL
 
+def generalized_markov_likelihood(df: pd.DataFrame, index: tuple, transition_probs):
+    df_block = df.loc[index]
+    LL = np.zeros(len(df_block))
+    probs = transition_probs.loc[index[:2]]
+    for i in range(LL.shape[0]):
+        x = df_block.iloc[i]
+        if pd.notna(x['prev_box1']) and pd.notna(x['prev_box2']):
+            key = (x['ro_1'], x['ro_2'])
+            LL[i] = np.log(probs[key].loc[(x['prev_box1'], x['prev_box2']), x['curr_box']])
+        else:
+            LL[i] = np.nan
+    LL[LL == -np.inf] = np.nan
+    return LL
+
+# todo: the normalization here is a shortcut, long-term we need to write a policy class capable of evaluating the likelihood of each action
 # @process_block_safely
 def beliefs_likelihood(df: pd.DataFrame, index: tuple, beliefs):
     df_block = df.loc[index]
-    data = beliefs[index]
+    data = beliefs[index] / beliefs[index].sum(axis = 1, keepdims = True)
     LL = np.log(data[np.arange(data.shape[0])[:, None], df_block['box rank'].values[:,None], 1].squeeze())
     LL[LL == -np.inf] = np.nan
     return LL
 
 def rew_prob_likelihood(df: pd.DataFrame, index: tuple, probs):
     df_block = df.loc[index]
-    data = probs[index]
+    data = probs[index] / probs[index].sum(axis = 1, keepdims = True)
     LL = np.log(data[np.arange(data.shape[0])[:, None], df_block['box rank'].values[:,None]].squeeze())
     LL[LL == -np.inf] = np.nan
     return LL
 
 
 def null_likelihood_bins(df, x: str = 'push times', bins: int = 20):
-    df['bins'] = utils.data.bin_data(df, x, bins)
+    df['bins'] = data.bin_data(df, x, bins)
     subjects = df.index.unique('subject')
     LL = {subject: [[]] * df.loc[(subject,),'bins'].nunique() for subject in subjects}
     n_obs_bins = {subject: np.zeros(df.loc[(subject,),'bins'].nunique()) for subject in subjects}

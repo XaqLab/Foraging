@@ -214,7 +214,7 @@ def per_block(func, df: pd.DataFrame, plot_dir: str, save_prefix: str, fig_kwarg
         nonlocal conds
         filtered_df = utils.data.filter_df(df, conds)
         for subject in tqdm(filtered_df.index.unique('subject'), disable=not use_tqdm):
-            for sess_num in tqdm(filtered_df.xs(subject, level = 'subject').index.unique('session'),disable=not use_tqdm):
+            for sess_num in filtered_df.xs(subject, level = 'subject').index.unique('session'):
                 for block_num in filtered_df.xs((subject, sess_num), level = ('subject','session')).index.unique('block'):
                     conds = {'subject': subject, 'session': sess_num, 'block': block_num}
                     try:
@@ -377,10 +377,10 @@ def plot_elbow(x: ArrayLike, y: ArrayLike, fit=False, func=None, method='default
     return x_elbow, y_elbow, k_fit, ax
 
 
-def plot_variable_subplots(df, func, row_cond, col_cond: str, axes = None, **kwargs):
+def plot_variable_subplots(df, func, row_cond, col_cond: str, axes = None, global_legend = True, **kwargs):
     max_cols = df.groupby(row_cond).apply(lambda g: len(g.index.unique(col_cond))).max()
     num_rows = len(df.groupby(row_cond))  # Compute rows needed
-    fig, axes = fig_init(axes, **({'figsize' : (3 * max_cols, 3 * num_rows), 'nrows': num_rows, 'ncols': max_cols} | kwargs.pop('fig_kwargs', {})))
+    fig, axes = fig_init(axes, **({'figsize' : (5 * max_cols, 5 * num_rows), 'nrows': num_rows, 'ncols': max_cols} | kwargs.pop('fig_kwargs', {})))
     axes = np.atleast_2d(axes)
     for i, row_val in enumerate(df.groupby(row_cond).groups.keys()):
         df_row = utils.data.filter_df(df, {row_cond: row_val})
@@ -391,8 +391,24 @@ def plot_variable_subplots(df, func, row_cond, col_cond: str, axes = None, **kwa
             func(df_group, conds=conds, ax=axes[i,j], **kwargs)
             if j > 0:
                 axes[i, j].set_ylabel("")
+            axes[i, j].set_title(f'{col_cond}={col_val}')
         for k in range(j + 1, max_cols):
             fig.delaxes(axes[i, k])
+
+    # Customize global legend
+    # Get unique labels/handles across all subplots
+    handles, labels = plt.gca().get_legend_handles_labels()  # Get from the current axis
+
+    # Remove the automatic legend
+    for ax in axes.flatten():
+        try:
+            ax.legend_.remove()
+        except:
+            continue
+
+    # Add a custom legend with extracted artists
+    if global_legend:
+        fig.legend(handles, labels, loc = 'upper right', bbox_to_anchor=(0.05, 0.05))
     fig.tight_layout()
     return axes
 

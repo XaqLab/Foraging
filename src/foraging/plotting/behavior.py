@@ -17,10 +17,9 @@ from ._base import fig_init, titler, bp, regplot
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-#todo: standardize the titling process-- if index or conds provided, construct title automatically for it unless title is explicitly suppressed via empty string input
 def plot_block_events(df: pd.DataFrame, conds: dict, x: str = 'push times', title: str = None, title_prefix: str = 'Pushes for',
-                        box_colors: list = BOX_COLORS, box_labels: list = BOX_LABELS,
-                        legend: bool = True, ax: Optional[plt.Axes] = None, **kwargs) -> plt.Axes:
+                      box_colors: list = BOX_COLORS, box_labels: list = BOX_LABELS,
+                      legend: bool = True, ax: Optional[plt.Axes] = None, **kwargs) -> plt.Axes:
 
     # Create ax if none provided
     fig, ax = fig_init(ax, **kwargs.pop('fig_kwargs', {}))
@@ -31,14 +30,11 @@ def plot_block_events(df: pd.DataFrame, conds: dict, x: str = 'push times', titl
     # [ax.axhline(i, color=box_colors[i], linewidth = 5) for i in range(len(schedules))]
 
     # Create switch segments (x, y) pairs for LineCollection
-    x_name = x
-    x = df_block[x_name].values
-    y = df_block['box rank'].values
-    # styles = ['dashed' for x in df_block['stay/switch'].values if x]
-    # colors = [box_colors[y[0]]] + [box_colors[i] for i in y if df_block['stay/switch'].iloc[i]]
-    colors = np.array([box_colors[i] for i in y])
+    x_vals = df_block[x].values
+    y_vals = df_block['box rank'].values
+    colors = np.array(['black'] * len(y_vals))
     styles = ['dashed' if x else 'solid' for x in df_block['stay/switch'].values]
-    segments = [[(0, 0), (x[0], y[0])]] + [[(x[i], y[i]), (x[i + 1], y[i + 1])] for i in range(len(x) - 1)]
+    segments = [[(0, 0), (x_vals[0], y_vals[0])]] + [[(x_vals[i], y_vals[i]), (x_vals[i + 1], y_vals[i + 1])] for i in range(len(x_vals) - 1)]
 
     # Create the LineCollection
     lc = LineCollection(segments, colors = colors, linestyles = styles, linewidth = 1, zorder = 0)
@@ -48,13 +44,14 @@ def plot_block_events(df: pd.DataFrame, conds: dict, x: str = 'push times', titl
     title = titler(title, title_prefix, conds)
     ax.set_title(title)
     ax.set_ylabel("Boxes")
-    ax.set_xlabel(x_name)
+    ax.set_xlabel(x)
 
-    # Add reward outcomes with green (rewarded) and red (not rewarded) markers
+    # Add reward outcomes with shaded (rewarded) and empty (not rewarded) markers
+    colors = np.array([box_colors[i] for i in y_vals])
     mask = df_block['reward outcomes'] == True
-    ax.scatter(x[mask], y[mask], c=colors[mask], marker='^', s = 80, zorder = 2)
-    ax.scatter(x[~mask], y[~mask], edgecolors=colors[~mask], marker='v', s = 80, zorder = 2, facecolors = "none")
-    ax.set_xlim([0, x.max() + 1])
+    ax.scatter(x_vals[mask], y_vals[mask], c=colors[mask], marker='^', s = 80, zorder = 2)
+    ax.scatter(x_vals[~mask], y_vals[~mask], edgecolors=colors[~mask], marker='v', s = 80, zorder = 2, facecolors ="none")
+    ax.set_xlim([0, x_vals.max() + 1])
     ax.set_yticks(range(len(schedules)), box_labels, rotation = 90, va = 'center')
 
     # Create legend manually with proxy artists
@@ -97,17 +94,15 @@ def plot_push_intervals(df: pd.DataFrame, conds: dict, x: str = 'push times', ti
     # Create ax if none provided
     fig, ax = fig_init(ax, **kwargs.pop('fig_kwargs', {}))
 
-    # Draw schedules as equidistant lines
+    # Get data from block
     df_block = utils.data.filter_df(df, conds).reset_index()
-
-    x_name = x
-    x = df_block[x_name].values
-    y = df_block['consecutive push intervals'].values
-    colors = [box_colors[i] for i in df_block['box rank'].values]
+    x_vals = df_block[x].values
+    y_vals = df_block['consecutive push intervals'].values
+    colors = np.array(['black'] * len(y_vals))
     styles = ['dashed' if x else 'solid' for x in df_block['stay/switch'].values]
 
     # Create segments (x, y) pairs for LineCollection
-    segments = [[(0, 0), (x[0], y[0])]] + [[(x[i], y[i]), (x[i + 1], y[i + 1])] for i in range(len(x) - 1)]
+    segments = [[(0, 0), (x_vals[0], y_vals[0])]] + [[(x_vals[i], y_vals[i]), (x_vals[i + 1], y_vals[i + 1])] for i in range(len(x_vals) - 1)]
 
     # Create the LineCollection
     lc = LineCollection(segments, colors=colors, linestyles=styles, linewidth=2)
@@ -122,22 +117,29 @@ def plot_push_intervals(df: pd.DataFrame, conds: dict, x: str = 'push times', ti
     title = titler(title, title_prefix, conds)
     ax.set_title(title)
     ax.set_ylabel("Push intervals")
-    ax.set_xlabel(x_name)
+    ax.set_xlabel(x)
 
     # Add reward outcomes with green (rewarded) and red (not rewarded) markers
+    # mask = df_block['reward outcomes'] == True
+    # ax.scatter(x_vals[mask], y_vals[mask], c='g', marker='^')
+    # ax.scatter(x_vals[~mask], y_vals[~mask], c='r', marker='v')
+
+    # Add reward outcomes with shaded (rewarded) and empty (not rewarded) markers
+    colors = np.array([box_colors[i] for i in df_block['box rank'].values])
     mask = df_block['reward outcomes'] == True
-    ax.scatter(x[mask], y[mask], c='g', marker='^')
-    ax.scatter(x[~mask], y[~mask], c='r', marker='v')
+    ax.scatter(x_vals[mask], y_vals[mask], c=colors[mask], marker='^', s = 80, zorder = 2)
+    ax.scatter(x_vals[~mask], y_vals[~mask], edgecolors=colors[~mask], marker='v', s = 80, zorder = 2, facecolors ="none")
+    # ax.set_xlim([0, x_vals.max() + 1])
 
     # Create legend manually with proxy artists
     if legend:
         legend_kwargs = kwargs.pop('legend_kwargs', {'loc': 'upper right'})
 
         legend_elements = ([Line2D([0], [0], color=box_colors[i], linestyle='-', label=box_labels[i]) for i in range(len(box_colors))]
-                           + [Line2D([0], [0], color='black', linestyle='-', label='stay pushes'),
-                              Line2D([0], [0], color='black', linestyle='--', label='switch times')]
-                           + [Line2D([0], [0], color='green', linestyle='', marker='^', label='rewarded'),
-                              Line2D([0], [0], color='red', linestyle='', marker='v', label='no reward')])
+                           + [Line2D([0], [0], color='black', linestyle='-', label='stay'),
+                              Line2D([0], [0], color='black', linestyle='--', label='switch')]
+                           + [Line2D([0], [0], color='black', linestyle='', marker='^', label='rewarded'),
+                              Line2D([0], [0], color='black', linestyle='', marker='v', markerfacecolor = 'none', label='no reward')])
 
         ax.legend(handles=legend_elements, **legend_kwargs)
     return ax
