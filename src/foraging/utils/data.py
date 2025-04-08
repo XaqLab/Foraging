@@ -834,9 +834,9 @@ def exclusion_criteria(df: pd.DataFrame) -> pd.DataFrame:
         get_blocks(df_filtered[df_filtered["schedule"] == 80]).size().index
     )
 
-    # Exclude rows where consecutive push intervals are greater than 50
+    # Exclude rows where consecutive push intervals are greater than 30
     df_filtered = df_filtered.drop(
-        df_filtered[df_filtered["consecutive push intervals"] > 50].index
+        df_filtered[df_filtered["consecutive push intervals"] > 30].index
     )
     return df_filtered
 

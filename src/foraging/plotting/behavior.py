@@ -32,9 +32,9 @@ def plot_block_events(df: pd.DataFrame, conds: dict, x: str = 'push times', titl
     # Create switch segments (x, y) pairs for LineCollection
     x_vals = df_block[x].values
     y_vals = df_block['box rank'].values
-    colors = np.array(['black'] * len(y_vals))
-    styles = ['dashed' if x else 'solid' for x in df_block['stay/switch'].values]
-    segments = [[(0, 0), (x_vals[0], y_vals[0])]] + [[(x_vals[i], y_vals[i]), (x_vals[i + 1], y_vals[i + 1])] for i in range(len(x_vals) - 1)]
+    colors = np.array(['black'] * (len(y_vals) - 1))
+    styles = ['dashed' if x else 'solid' for x in df_block['stay/switch'].values[1:]]
+    segments = [[(x_vals[i], y_vals[i]), (x_vals[i + 1], y_vals[i + 1])] for i in range(len(x_vals) - 1)]
 
     # Create the LineCollection
     lc = LineCollection(segments, colors = colors, linestyles = styles, linewidth = 1, zorder = 0)
@@ -161,12 +161,12 @@ def plot_push_intervals_vs_reward_intervals(df: pd.DataFrame, title_prefix: str 
     df = df.copy()
     n_boxes = df['box'].nunique()
     [df.drop(df.loc[df['box'] == i + 1].index[0], inplace=True) for i in range(n_boxes)]
-    ax = bp(sns.scatterplot)(df, x='reward intervals', y='push intervals', title_prefix = title_prefix, **kwargs)
+    ax = bp(sns.scatterplot)(df, x='reward intervals', y='same-box push intervals', title_prefix = title_prefix, **kwargs)
 
     # Filter df here or inside regplot using conds
     conds = kwargs.pop('conds', None)
-    df = utils.filter_df(df, conds)
-    fit_results = regplot(df['reward intervals'].to_numpy(), df['push intervals'].to_numpy(), line_kws={'color': 'green'},
+    df = utils.data.filter_df(df, conds)
+    fit_results = regplot(df['reward intervals'].to_numpy(), df['same-box push intervals'].to_numpy(), line_kws={'color': 'black'},
                           **kwargs)
 
     return ax, fit_results.rsquared, fit_results.params[1]

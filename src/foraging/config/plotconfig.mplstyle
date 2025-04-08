@@ -8,6 +8,8 @@ axes.titlesize: larger
 xtick.labelsize: smaller
 ytick.labelsize: smaller
 axes.grid: False
+axes.spines.top: False
+axes.spines.right: False
 axes.facecolor: (0,0,0,0)
 
 # Legend settings

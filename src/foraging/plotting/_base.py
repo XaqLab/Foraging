@@ -187,7 +187,7 @@ def _figure_saver(fig: plt.Figure, ax: plt.Axes, plot_dir: str, save_prefix: str
         full_dir = plot_dir
     Path(full_dir).mkdir(parents=True, exist_ok=True)
     save_path = os.path.join(full_dir, save_prefix + ".png")
-    fig.savefig(save_path)
+    fig.savefig(save_path, facecolor = 'white')
     [x.clear() for x in utils.flatten(ax)]
 
 def per_block(func, df: pd.DataFrame, plot_dir: str, save_prefix: str, fig_kwargs: dict = None, conds: dict = None, use_tqdm: bool = True, **kwargs):
@@ -309,7 +309,7 @@ def regplot(
         )
 
     # Plot the regression line
-    line_kwargs = kwargs.pop('line_kwargs', {})
+    line_kwargs = {'color': 'black'} | kwargs.pop('line_kwargs', {})
     h = ax.plot(eval_x[:, 1], pred.predicted_mean, **line_kwargs)
 
     # Plot the scatter plot of the data
@@ -377,8 +377,12 @@ def plot_elbow(x: ArrayLike, y: ArrayLike, fit=False, func=None, method='default
     return x_elbow, y_elbow, k_fit, ax
 
 
-def plot_variable_subplots(df, func, row_cond, col_cond: str, axes = None, global_legend = True, **kwargs):
-    max_cols = df.groupby(row_cond).apply(lambda g: len(g.index.unique(col_cond))).max()
+def plot_variable_subplots(df, func, row_cond, col_cond: str, axes = None, legend = True, savefig = None, **kwargs):
+    def _group_size(g, group):
+        if group in g.columns:
+            return g[group].nunique()
+        return len(g.index.unique(group))
+    max_cols = df.groupby(row_cond).apply(lambda g: _group_size(g, col_cond)).max()
     num_rows = len(df.groupby(row_cond))  # Compute rows needed
     fig, axes = fig_init(axes, **({'figsize' : (5 * max_cols, 5 * num_rows), 'nrows': num_rows, 'ncols': max_cols} | kwargs.pop('fig_kwargs', {})))
     axes = np.atleast_2d(axes)
@@ -407,9 +411,16 @@ def plot_variable_subplots(df, func, row_cond, col_cond: str, axes = None, globa
             continue
 
     # Add a custom legend with extracted artists
-    if global_legend:
-        fig.legend(handles, labels, loc = 'upper right', bbox_to_anchor=(0.05, 0.05))
+    if legend:
+        lgd = fig.legend(handles, labels, loc = 'upper right', bbox_to_anchor=(0.05, 0.05))
     fig.tight_layout()
+
+    if savefig:
+        if legend:
+            fig.savefig(savefig, bbox_extra_artists=(lgd,), facecolor = 'white', bbox_inches='tight')
+        else:
+            fig.savefig(savefig, facecolor = 'white', bbox_inches='tight')
+
     return axes
 
 

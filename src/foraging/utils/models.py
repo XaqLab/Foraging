@@ -244,6 +244,23 @@ class GammaObservation(Observation):
             return 1.0 - p_t
         return p_t
 
+    def surprise(self, obs: tuple[bool, float], latent: float | ArrayLike, *args, **kwargs):
+        return -np.log(self.probability(obs, latent, *args, **kwargs))
+
+    def fisher_info(self, obs: tuple[bool, float], latent: float | ArrayLike, *args, **kwargs):
+        # Extract the reward availability and push interval.
+        is_avail = obs[0]
+        t = obs[1]
+        if is_avail:
+            return ((t/latent**2) * gamma.pdf(t, self.shape, scale = latent / self.shape) / gamma.cdf(t, self.shape, scale = latent / self.shape))
+        return ((t/latent**2) * gamma.pdf(t, self.shape, scale = latent / self.shape) / (1 - gamma.cdf(t, self.shape, scale = latent / self.shape)))
+
+    def deriv(self, obs: tuple[bool, float], latent: float | ArrayLike, *args, **kwargs):
+        # Extract the reward availability and push interval.
+        is_avail = obs[0]
+        t = obs[1]
+        return gamma.pdf(t, self.shape, scale = latent / self.shape)
+
     def probabilities(self, latent: Any, t: float | Iterable, *args, **kwargs) -> ArrayLike:
         supp = self.support(t)
         probs = []
