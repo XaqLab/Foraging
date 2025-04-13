@@ -87,6 +87,41 @@ def compute_posteriors(
 
     return posterior
 
+def compute_beta_posteriors(
+        df: pd.DataFrame,
+        index: tuple,
+        record: bool = True,
+) -> models.BetaBoxes:
+    # Extract data corresponding to the given index
+    block_data = df.loc[index]
+
+    # Get unique schedules (sorted in descending order)
+    n_boxes = block_data['schedule'].nunique()
+
+    # Construct posterior belief model
+    posterior = models.BetaBoxes(
+        n_boxes, 1, 1, record=record
+    )
+
+    # Iterate over each box in order from slowest to fastest
+    for i in range(n_boxes):
+        box_mask = block_data['box rank'] == i
+
+        push_times = block_data.loc[box_mask, 'push times'].values
+        push_intervals = block_data.loc[box_mask, 'same-box push intervals'].values
+        reward_outcomes = block_data.loc[box_mask, 'reward outcomes'].values
+
+        # Number of non-NaN observations
+        n_obs = np.count_nonzero(~np.isnan(push_times))
+
+        # Update posterior using each valid observation
+        for t in range(n_obs):
+            if not np.isnan(push_intervals[t]):
+                posterior.update((reward_outcomes[t], push_intervals[t]), i)
+
+    return posterior
+
+
 @process_block_safely
 def compute_latent_beliefs_over_time(
         df: pd.DataFrame,
@@ -146,8 +181,10 @@ def compute_reward_beliefs(
                     where beliefs are evaluated before each push.
     """
 
-    n_boxes = posterior.n_boxes
     block_data = df.loc[index]
+
+    # Get unique schedules (sorted in descending order)
+    n_boxes = block_data['schedule'].nunique()
 
     # Compute availability marginal for each push
     n_obs = block_data['push times'].size - np.count_nonzero(np.isnan(block_data['push times']))

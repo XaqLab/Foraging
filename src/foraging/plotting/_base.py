@@ -101,9 +101,9 @@ def bp(func):
         fig, ax = fig_init(ax, **kwargs.pop('fig_kwargs', {}))
 
         # Pop any last keyword args not needed for seaborn here before running function
-        legend_kwargs = kwargs.pop('legend_kwargs', {
+        legend_kwargs = {
             'loc': 'upper right'
-        })
+        } | kwargs.pop('legend_kwargs', {})
 
         # Run function, assuming seaborn plotting func
         if min_obs:
@@ -128,7 +128,7 @@ def bp(func):
                     legend = _ax.get_legend()
                     legend.set_title('schedule')
                     handles = legend.legend_handles
-                    _ax.legend(handles, box_labels, **legend_kwargs)
+                    _ax.legend(handles, box_labels, **({'title': 'schedule'} | legend_kwargs))
                 except Exception as e:
                     print(e)
                     _ax.legend(box_labels, **legend_kwargs)

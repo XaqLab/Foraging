@@ -50,6 +50,20 @@ def kfold_sessions(df, k, test_size = 0.2, seed = 0):
                 df.loc[train_idx, f'{i+1}-fold'] = 'train'
                 df.loc[test_idx, f'{i+1}-fold'] = 'test'
 
+def kfold_kappa(df, k, test_size = 0.2, seed = 0):
+    rng = np.random.default_rng(
+        seed
+    )
+    for i in range(k):
+        seed = rng.integers(0, 1e9)
+        for subject in df.index.unique('subject'):
+            for session in df.loc[subject].index.unique('kappa'):
+                df_sess = df.xs((subject, session), level = ('subject', 'kappa'), drop_level=False)
+                train_idx, test_idx = train_test_split(df_sess.index, test_size=test_size, random_state=seed)
+                df.loc[train_idx, f'{i+1}-fold'] = 'train'
+                df.loc[test_idx, f'{i+1}-fold'] = 'test'
+
+
 def kfold_fit_eval(df, k, fit_func, eval_func, fit_kwargs = {}, eval_kwargs = {}, fit_name = ''):
     train_results = []
     test_results = []
@@ -125,7 +139,7 @@ def generalized_markov_likelihood(df: pd.DataFrame, index: tuple, transition_pro
 
 
 # todo: the normalization here is a shortcut, long-term we need to write a policy class capable of evaluating the likelihood of each action
-# @process_block_safely
+@process_block_safely
 def beliefs_likelihood(df: pd.DataFrame, index: tuple, beliefs):
     df_block = df.loc[index]
     data = beliefs[index] / beliefs[index].sum(axis = 1, keepdims = True)
@@ -164,4 +178,44 @@ def null_likelihood_bins(df, x: str = 'push times', bins: int = 20):
                 n_obs_bins[index[0]][bin] += 1
     return LL, n_obs_bins, 'bins'
 
+
+@process_block_safely
+def ts_likelihood(df: pd.DataFrame, index: tuple, beliefs):
+    df_block = df.loc[index]
+    data = beliefs[index].probabilities(record = 'all')
+    LL = []
+
+    n_boxes = len(data)
+    push_times_and_box = df_block[['push times', 'box rank']].values
+    old_idx = np.zeros(n_boxes, dtype=int)  # Track last observed index per box
+    for i, (t, box) in enumerate(push_times_and_box):
+        a, b = data[int(box)][old_idx[int(box)]]
+        boxes = np.arange(n_boxes, dtype=int)
+        boxes = np.delete(boxes, int(box))
+        c, d = data[boxes[0]][old_idx[boxes[0]]]
+        e, f = data[boxes[1]][old_idx[boxes[1]]]
+        old_idx[int(box)] += 1  # Update observation index for the box
+        LL.append(np.log(prob_X_greater_YZ(a, b, c, d, e, f)))
+    return LL
+
+from scipy.special import betainc, beta
+from scipy.integrate import quad
+
+
+def prob_X_greater_YZ(a, b, c, d, e, f):
+    """
+    Computes P(X > Y and X > Z) where X ~ Beta(a, b),
+    Y ~ Beta(c, d), Z ~ Beta(e, f)
+
+    Uses numerical integration.
+    """
+
+    def integrand(x):
+        fx = x ** (a - 1) * (1 - x) ** (b - 1) / beta(a, b)
+        Fy = betainc(c, d, x)
+        Fz = betainc(e, f, x)
+        return fx * Fy * Fz
+
+    result, _ = quad(integrand, 0, 1)
+    return result
 

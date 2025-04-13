@@ -166,7 +166,7 @@ def plot_push_intervals_vs_reward_intervals(df: pd.DataFrame, title_prefix: str 
     # Filter df here or inside regplot using conds
     conds = kwargs.pop('conds', None)
     df = utils.data.filter_df(df, conds)
-    fit_results = regplot(df['reward intervals'].to_numpy(), df['same-box push intervals'].to_numpy(), line_kws={'color': 'black'},
+    fit_results = regplot(df['reward intervals'].to_numpy(), df['same-box push intervals'].to_numpy(), line_kws={'color': 'black'}, ax = ax,
                           **kwargs)
 
     return ax, fit_results.rsquared, fit_results.params[1]
