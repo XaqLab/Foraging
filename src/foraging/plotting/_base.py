@@ -32,6 +32,9 @@ def fig_init(ax: plt.Axes = None, **kwargs):
 def titler(title: str, title_prefix: str, conds: dict):
     return title_prefix + '\n' + ', '.join([k + ' = ' + str(v) for k, v in conds.items()]) if not title else title
 
+def unitler(label: str, unit: str):
+    return label+ ' ('+unit+')'
+
 def bp(func):
     """
     Args:
@@ -41,7 +44,7 @@ def bp(func):
         wrapped function
     """
     @wraps(func)
-    def wrapper(df: pd.DataFrame = None, x: str = None, conds: dict = None, accumulate: bool = False, palette: list = None, box_colors: list = BOX_COLORS, box_labels: list = BOX_LABELS, title: str = None, title_prefix: str = '', min_obs: int = None, attempt_index: bool = True, ax: plt.Axes = None, **kwargs) -> Any:
+    def wrapper(df: pd.DataFrame = None, x: str = None, conds: dict = None, accumulate: bool = False, palette: list = None, box_colors: list = BOX_COLORS, box_labels: list = BOX_LABELS, title: str = None, title_prefix: str = '', x_unit: str = None, y_unit: str = None, min_obs: int = None, attempt_index: bool = True, ax: plt.Axes = None, **kwargs) -> Any:
         """
         Convenience decorator that customizes figure in formulaic fashion
 
@@ -121,6 +124,13 @@ def bp(func):
         _ax = np.atleast_1d(ax)
         _ax[0].set_title(title)
 
+        # Set units if specified
+        if x_unit:
+            _ax[0].set_xlabel(unitler(_ax[0].get_xlabel(), x_unit))
+
+        if y_unit:
+            _ax[0].set_ylabel(unitler(_ax[0].get_ylabel(), y_unit))
+
         # Modify legend
         if kwargs.pop('legend', True):
             for _ax in utils.flatten(ax):
@@ -181,16 +191,17 @@ def _figure_saver(fig: plt.Figure, ax: plt.Axes, plot_dir: str, save_prefix: str
     Returns:
 
     """
-    if conds:
-        full_dir = os.path.join(plot_dir, *[k+' '+str(v) for k,v in conds.items()])
+    if conds and 'subject' in conds:
+        # full_dir = os.path.join(plot_dir, *[k+' '+str(v) for k,v in conds.items()])
+        full_dir = os.path.join(plot_dir, 'subject '+conds['subject'], save_prefix)
     else:
-        full_dir = plot_dir
+        full_dir = os.path.join(plot_dir, save_prefix)
     Path(full_dir).mkdir(parents=True, exist_ok=True)
-    save_path = os.path.join(full_dir, save_prefix + ".png")
+    save_path = os.path.join(full_dir, ','.join([k+'='+str(v) for k,v in conds.items()]) +".png")
     fig.savefig(save_path, facecolor = 'white')
     [x.clear() for x in utils.flatten(ax)]
 
-def per_block(func, df: pd.DataFrame, plot_dir: str, save_prefix: str, fig_kwargs: dict = None, conds: dict = None, use_tqdm: bool = True, **kwargs):
+def per_block(func, df: pd.DataFrame, plot_dir: str, save_prefix: str, fig_kwargs: dict = None, conds: dict = None, use_tqdm: bool = True, attempt_index: bool = True, **kwargs):
     """
     Generic wrapper for creating figures for a single block
 
@@ -212,7 +223,7 @@ def per_block(func, df: pd.DataFrame, plot_dir: str, save_prefix: str, fig_kwarg
     @_figure_handler(**fig_kwargs)
     def _inner(fig, ax):
         nonlocal conds
-        filtered_df = utils.data.filter_df(df, conds)
+        filtered_df = utils.data.filter_df(df, conds, attempt_index = attempt_index)
         for subject in tqdm(filtered_df.index.unique('subject'), disable=not use_tqdm):
             for sess_num in filtered_df.xs(subject, level = 'subject').index.unique('session'):
                 for block_num in filtered_df.xs((subject, sess_num), level = ('subject','session')).index.unique('block'):
@@ -227,7 +238,7 @@ def per_block(func, df: pd.DataFrame, plot_dir: str, save_prefix: str, fig_kwarg
     _inner()
 
 #todo: generalize iter_level to multiple levels listed in hierarchical order head first
-def _across_blocks(func, df: pd.DataFrame, plot_dir: str, save_prefix: str, fig_kwargs, conds: dict = None, iter_level: str = None, **kwargs):
+def across_blocks(func, df: pd.DataFrame, plot_dir: str, save_prefix: str, fig_kwargs: dict = None, conds: dict = None, iter_level: str = None, **kwargs):
     """
     Generic wrapper for creating figures that summarize across multiple blocks grouped by conditions
 

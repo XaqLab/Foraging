@@ -12,7 +12,7 @@ from matplotlib.lines import Line2D
 
 from foraging.plotting import BOX_COLORS
 from foraging.utils import BOX_LABELS
-from ._base import fig_init, titler, bp, regplot
+from ._base import fig_init, titler, unitler, bp, regplot
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -20,6 +20,26 @@ logger.setLevel(logging.DEBUG)
 def plot_block_events(df: pd.DataFrame, conds: dict, x: str = 'push times', title: str = None, title_prefix: str = 'Pushes for',
                       box_colors: list = BOX_COLORS, box_labels: list = BOX_LABELS,
                       legend: bool = True, ax: Optional[plt.Axes] = None, **kwargs) -> plt.Axes:
+    """
+    Plot the push outcomes in the block.
+
+    Args:
+        df: Dataframe
+        conds: Dictionary to filter df
+        x: x-axis
+        title: Title of figure. If specified, overrides `title_prefix`.
+        title_prefix: Prefix of title that is used to construct the contents of the title together with conds. See `titler` for more details. Ignored if `title` is specified.
+        box_colors: List of colors for each box
+        box_labels: Labels of each box
+        legend: If True, display legend. Specify keyword arguments in `legend_kwargs`.
+        ax: Axes to plot on. If none, a new figure and axes are created using plt.subplots. Specify keyword arguments in `fig_kwargs`.
+        **kwargs: Additional keyword arguments.
+            - 'fig_kwargs': Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
+            - 'legend_kwargs': Dictionary of keyword arguments for customizing the legend (passed to `ax.legend`).
+
+    Returns:
+        the axes
+    """
 
     # Create ax if none provided
     fig, ax = fig_init(ax, **kwargs.pop('fig_kwargs', {}))
@@ -68,38 +88,101 @@ def plot_block_events(df: pd.DataFrame, conds: dict, x: str = 'push times', titl
     return ax
 
 
-def plot_push_intervals(df: pd.DataFrame, conds: dict, x: str = 'push times', title: str = None, title_prefix: str = 'Push intervals for',
-                        box_colors: list = BOX_COLORS, box_labels: list = BOX_LABELS,
+def enhanced_violinplot(df: pd.DataFrame, x: str, y: str, hue: str = None, hue_order = None, palette = None, ax: plt.Axes = None, **kwargs) -> plt.Axes:
+    """
+    Plot a violinplot with mean + s.e. overlaid on top.
+
+    Args:
+        df: Dataframe
+        x: x-axis
+        y: y-axis
+        hue: Hue variable
+        hue_order: Order to assign hue
+        palette: List of colors (same length as hue_order)
+        ax: Axes to plot on. If none, a new figure and axes are created using plt.subplots. Specify keyword arguments in `fig_kwargs`.
+        **kwargs: Keywords passed to seaborn's violinplot
+
+    Returns:
+        the axes
+    """
+
+    # Create ax if none
+    fig, ax = fig_init(ax, **kwargs.pop('fig_kwargs', {}))
+    sns.violinplot(df, x=x, y=y, hue = hue, hue_order = hue_order, palette = palette, ax=ax, **kwargs)
+
+    # Plot means and se overlaid on violinplot
+    groupers = [x]
+    if hue:
+        groupers.append(hue)
+    stats_df = df.groupby(groupers)[y].agg(
+        ['mean', 'std', 'count']).reset_index()
+    stats_df['se'] = stats_df['std'] / np.sqrt(stats_df['count'])
+
+    n_subgroups = stats_df[hue].nunique() if hue else 1
+    violin_width = 0.8 / n_subgroups
+
+    # Plot means and error bars for each subgroup with connecting lines
+    for group_idx, group in enumerate(stats_df[x].unique()):
+        subgroup_stats = stats_df[stats_df[x] == group]
+
+        # Calculate x-coordinates for the means
+        # For each condition, we need to center the subgroup means over their respective violins
+        x_positions = group_idx + (violin_width * (n_subgroups - 1) / 2) - np.arange(n_subgroups)[::-1] * (
+                    violin_width * (n_subgroups - 1) / 2)  # + (violin_width * subgroup_idx)
+
+        # Plot error bars and means
+        ax.errorbar(x=x_positions,
+                    y=subgroup_stats['mean'],
+                    yerr=subgroup_stats['se'],
+                    fmt='o',
+                    color='black',
+                    capsize=5,
+                    capthick=2,
+                    elinewidth=2,
+                    markersize=8)
+
+        # Add connecting lines within subgroup
+        ax.plot(x_positions,
+                subgroup_stats['mean'],
+                color='black')
+    return ax
+
+
+def plot_push_intervals(df: pd.DataFrame, conds: dict, title: str = None, title_prefix: str = 'Push intervals for',
+                        box_colors: list = BOX_COLORS, box_labels: list = None,
                         legend: bool = True, ax: Optional[plt.Axes] = None, **kwargs) -> plt.Axes:
     """
     Plots the push intervals for each box, with different colors and line styles based on the stay/switch behavior,
     and displays reward outcomes with markers. Optionally adds a custom legend.
 
     Args:
-        df: DataFrame containing session data with 'push times', 'consecutive push intervals', 'box rank',
-            'stay/switch' (indicating whether the push was a switch or stay), and 'reward outcomes'.
-        x: Column name to use for the x-axis (typically 'push times').
-        title: Title of the plot.
-        box_colors: List of colors to use for each box.
-        box_labels: List of labels corresponding to each box for the legend.
+        df: Dataframe
+        conds: Dictionary to filter df. Should specify a block.
+        x: x-axis
+        title: Title of figure. If specified, overrides `title_prefix`.
+        title_prefix: Prefix of title that is used to construct the contents of the title together with conds. See `titler` for more details. Ignored if `title` is specified.
+        box_colors: List of colors for each box
+        box_labels: Labels of each box
         legend: If True, a custom legend is added to the plot.
-        ax: Optional, existing matplotlib Axes object. If None, a new one will be created.
-        kwargs: Additional keyword arguments.
+        ax: Axes to plot on. If none, a new figure and axes are created using plt.subplots. Specify keyword arguments in `fig_kwargs`.
+        **kwargs: Additional keyword arguments.
             - 'fig_kwargs': Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
             - 'legend_kwargs': Dictionary of keyword arguments for customizing the legend (passed to `ax.legend`).
 
     Returns:
-        ax: The Axes object with the plot.
+        the axes
     """
+
     # Create ax if none provided
     fig, ax = fig_init(ax, **kwargs.pop('fig_kwargs', {}))
 
     # Get data from block
-    df_block = utils.data.filter_df(df, conds).reset_index()
+    x = 'push times'
+    df_block = utils.data.filter_df(df, conds)
     x_vals = df_block[x].values
     y_vals = df_block['consecutive push intervals'].values
     colors = np.array(['black'] * len(y_vals))
-    styles = ['dashed' if x else 'solid' for x in df_block['stay/switch'].values]
+    styles = ['dashed' if x == 'switch' else 'solid' for x in df_block['stay/switch'].values]
 
     # Create segments (x, y) pairs for LineCollection
     segments = [[(0, 0), (x_vals[0], y_vals[0])]] + [[(x_vals[i], y_vals[i]), (x_vals[i + 1], y_vals[i + 1])] for i in range(len(x_vals) - 1)]
@@ -113,16 +196,22 @@ def plot_push_intervals(df: pd.DataFrame, conds: dict, x: str = 'push times', ti
         _, ax = plt.subplots(**fig_kwargs)
     ax.add_collection(lc)
     ax.autoscale()
-    ax.grid(False)
+
+    # Get block metadata
+    schedules = np.sort(df_block['schedule'].unique())
+    kappa = df_block.index.unique('kappa')
+    stim_type = df_block.index.unique('stimulus type')
+    shape = df_block.index.unique('shape')
+
+    conds['kappa'] = kappa[0]
+    conds['stim type'] = stim_type[0]
+    conds['shape'] = shape[0]
+    box_labels = box_labels if box_labels else schedules
+
     title = titler(title, title_prefix, conds)
     ax.set_title(title)
     ax.set_ylabel("Push intervals")
-    ax.set_xlabel(x)
-
-    # Add reward outcomes with green (rewarded) and red (not rewarded) markers
-    # mask = df_block['reward outcomes'] == True
-    # ax.scatter(x_vals[mask], y_vals[mask], c='g', marker='^')
-    # ax.scatter(x_vals[~mask], y_vals[~mask], c='r', marker='v')
+    ax.set_xlabel(unitler(x, 's'))
 
     # Add reward outcomes with shaded (rewarded) and empty (not rewarded) markers
     colors = np.array([box_colors[i] for i in df_block['box rank'].values])
@@ -135,7 +224,7 @@ def plot_push_intervals(df: pd.DataFrame, conds: dict, x: str = 'push times', ti
     if legend:
         legend_kwargs = kwargs.pop('legend_kwargs', {'loc': 'upper right'})
 
-        legend_elements = ([Line2D([0], [0], color=box_colors[i], linestyle='-', label=box_labels[i]) for i in range(len(box_colors))]
+        legend_elements = ([Line2D([0], [0], color=box_colors[j], linestyle='-', label=box_labels[i]) for i, j in enumerate(sorted(df_block['box rank'].unique()))]
                            + [Line2D([0], [0], color='black', linestyle='-', label='stay'),
                               Line2D([0], [0], color='black', linestyle='--', label='switch')]
                            + [Line2D([0], [0], color='black', linestyle='', marker='^', label='rewarded'),
@@ -143,6 +232,7 @@ def plot_push_intervals(df: pd.DataFrame, conds: dict, x: str = 'push times', ti
 
         ax.legend(handles=legend_elements, **legend_kwargs)
     return ax
+
 
 def plot_push_intervals_vs_reward_intervals(df: pd.DataFrame, title_prefix: str = "Push intervals vs reward intervals", **kwargs) -> (plt.Axes, float, float):
     """

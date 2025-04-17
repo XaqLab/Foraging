@@ -13,4 +13,4 @@ current_dir = Path(__file__).resolve().parent
 # Configure matplotlib
 plt.style.use(current_dir.parent / os.getenv('PLOTCONFIG_PATH'))
 
-from ._base import fig_init, titler, bp, plot_elbow, plot_variable_subplots, format_yticks, per_block
+from ._base import fig_init, titler, unitler, bp, plot_elbow, plot_variable_subplots, format_yticks, per_block, across_blocks

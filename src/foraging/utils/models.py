@@ -122,23 +122,23 @@ class ArrayBelief(AbstractBelief):
         return self.probabilities[i]
 
     @abstractmethod
-    def update(self, *args, **kwargs):
+    def update(self, *args, **kwargs) -> Any:
         pass
 
     @abstractmethod
-    def likelihood(self, *args, **kwargs) -> ArrayLike[float]:
+    def likelihood(self, *args, **kwargs) -> Any:
         pass
 
 class GammaScheduleBelief(ArrayBelief):
 
-    def __init__(self, shape: int = 1, schedules: np.ndarray[float] = None, prior: ArrayBelief = None):
+    def __init__(self, shape: int = 1, schedules: np.ndarray = None, prior: ArrayBelief = None):
         if prior:
             super().__init__(prior.support, prior.probabilities)
         else:
             super().__init__(schedules)
         self.shape = shape
 
-    def likelihood(self, obs: tuple[bool, float], schedule: ArrayLike[float]) -> ArrayLike[float]:
+    def likelihood(self, obs: tuple[bool, float], schedule: np.ndarray) -> np.ndarray:
         # Extract the reward availability and push interval.
         is_avail = obs[0]
         t = obs[1]
@@ -194,15 +194,15 @@ class Record(AbstractRecord):
 
 class RecordKeeper(AbstractRecordKeeper):
 
-    def __init__(self, init_id: AbstractID, init_record: Any):
-        record = Record(init_id, init_record)
-        self._records = {
-            init_id: record
-        }
+    def __init__(self, init_id: AbstractID = None, init_record: Any = None):
+        self._records = {}
+        if init_record and init_id:
+            record = Record(init_id, init_record)
+            self._records[init_id] = record
 
 
     def id(self, i: int) -> AbstractID:
-        return islice(self.records.values(), i, i + 1).id
+        return list(islice(self.records.values(), i, i + 1))[0].id
 
 
     def content(self, i: int = None, id: AbstractID = None) -> Any:

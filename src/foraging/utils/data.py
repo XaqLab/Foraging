@@ -16,7 +16,7 @@ import fnmatch
 import h5py
 import pickle
 from datetime import datetime
-from typing import Callable, Optional
+from typing import Callable, Optional, Any
 
 from tqdm import tqdm
 
@@ -277,7 +277,7 @@ def make_df(path: str) -> pd.DataFrame:
         .astype(int)
     )
     df["session"] = df.groupby("subject")["session id"].rank(method="dense").astype(int)
-    df["stay/switch"] = df["box rank"].diff().astype(bool)
+    df["stay/switch"] = df["box rank"].diff().astype(bool).map({False: 'stay', True: 'switch'})
 
     # Correct some columns
     df["shape"] = df["shape"].astype(int)
@@ -285,7 +285,7 @@ def make_df(path: str) -> pd.DataFrame:
     df.loc[df["push #"] == 1, "consecutive push intervals"] = df.loc[
         df["push #"] == 1, "push times"
     ]
-    df.loc[df["push #"] == 1, "stay/switch"] = False
+    df.loc[df["push #"] == 1, "stay/switch"] = 'stay'
 
     # Set index, refer to INDEX definition at top of this file
     df.set_index(INDEX, inplace=True)
@@ -299,7 +299,7 @@ def display_df(df: pd.DataFrame, cols: list[str]):
 
 
 def filter_df(
-    df: pd.DataFrame, conds: dict[str, list] = None, attempt_index: bool = True
+    df: pd.DataFrame, conds: dict[str, Any] = None, attempt_index: bool = True
 ) -> pd.DataFrame:
     """
     Filter a DataFrame according to conditions specified in a dictionary.
@@ -353,17 +353,18 @@ def process_block_safely(func: Callable) -> Callable:
     return wrapper
 
 
-def get_blocks(df: pd.DataFrame):
+def get_blocks(df: pd.DataFrame, sort: bool = True):
     """
     Group DataFrame by subject, session, and block.
 
     Args:
         df (pd.DataFrame): DataFrame containing experiment data.
+        sort: Flag to sort groups
 
     Returns:
         DataFrameGroupBy: Grouped DataFrame object.
     """
-    return df.groupby(["subject", "session", "block"])
+    return df.groupby(["subject", "session", "block"], sort = sort)
 
 
 def process_blocks(
