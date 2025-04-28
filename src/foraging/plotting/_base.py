@@ -1,12 +1,14 @@
 import gc
 import logging
 import os
+from copy import deepcopy
 from functools import wraps
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
+import seaborn as sns
 import statsmodels.api as sm
 from kneed import KneeLocator
 from matplotlib import pyplot as plt
@@ -34,6 +36,10 @@ def titler(title: str, title_prefix: str, conds: dict):
 
 def unitler(label: str, unit: str):
     return label+ ' ('+unit+')'
+
+def format_yticks(axes, func):
+    for ax in utils.flatten(axes):
+        ax.yaxis.set_major_formatter(FuncFormatter(func))
 
 def bp(func):
     """
@@ -69,6 +75,8 @@ def bp(func):
         # Filter df
         if conds is None:
             conds = {}
+        else:
+            conds = deepcopy(conds)
         df = utils.data.filter_df(df, conds, attempt_index=attempt_index)
 
         # Context dependent plot settings
@@ -177,42 +185,36 @@ def _figure_handler(**kwargs):
         return wrapper
     return _inner
 
-def _figure_saver(fig: plt.Figure, ax: plt.Axes, plot_dir: str, save_prefix: str, conds: dict):
+def _figure_saver(fig: plt.Figure, ax: plt.Axes, figure_path: str):
     """
-    Routine for saving figure and clearing it for later reuse
+    Save figure and clear it for later reuse
 
     Args:
         fig: figure to be drawn on
         ax: axis object to do drawing
-        plot_dir: folder for figures to be created in
-        save_prefix: prefix to uniquely identify plots produced by func
-        conds: dictionary mapping level keys to values that was used to filter dataframe. Can be None but must be specified to properly name file
+        figure_path: path to save figure
 
     Returns:
 
     """
-    if conds and 'subject' in conds:
-        # full_dir = os.path.join(plot_dir, *[k+' '+str(v) for k,v in conds.items()])
-        full_dir = os.path.join(plot_dir, 'subject '+conds['subject'], save_prefix)
-    else:
-        full_dir = os.path.join(plot_dir, save_prefix)
-    Path(full_dir).mkdir(parents=True, exist_ok=True)
-    save_path = os.path.join(full_dir, ','.join([k+'='+str(v) for k,v in conds.items()]) +".png")
-    fig.savefig(save_path, facecolor = 'white')
+    Path(figure_path).mkdir(parents=True, exist_ok=True)
+    fig.savefig(figure_path, facecolor = 'white')
     [x.clear() for x in utils.flatten(ax)]
 
-def per_block(func, df: pd.DataFrame, plot_dir: str, save_prefix: str, fig_kwargs: dict = None, conds: dict = None, use_tqdm: bool = True, attempt_index: bool = True, **kwargs):
+def per_block(func, df: pd.DataFrame, figure_dir: str, filename_prefix: str, fig_kwargs: dict = None, conds: dict = None, use_tqdm: bool = True, attempt_index: bool = True, by_subject: bool = False, **kwargs):
     """
     Generic wrapper for creating figures for a single block
 
     Args:
         func: the actual plotting routine to be executed on each block
         df: dataframe of experiment data
-        plot_dir: folder for figures to be created in
-        save_prefix: prefix to uniquely identify plots produced by func
+        figure_dir: folder for figures to be created in
+        filename_prefix: Prepended to filename of each block's figure
         fig_kwargs: dictionary of keyword arguments for plt.subplots
         conds: dictionary mapping level keys to values to be used to filter dataframe
         use_tqdm: whether to use tqdm to display progress bar
+        attempt_index: input argument to utils.data.filter_df
+        by_subject: if True, then save figures in separate directories for each subject
         **kwargs: keyword arguments for func
 
     Returns:
@@ -220,11 +222,16 @@ def per_block(func, df: pd.DataFrame, plot_dir: str, save_prefix: str, fig_kwarg
     """
     if fig_kwargs is None:
         fig_kwargs = {}
+
     @_figure_handler(**fig_kwargs)
     def _inner(fig, ax):
         nonlocal conds
+        nonlocal figure_dir
+        old_figure_dir = figure_dir
         filtered_df = utils.data.filter_df(df, conds, attempt_index = attempt_index)
         for subject in tqdm(filtered_df.index.unique('subject'), disable=not use_tqdm):
+            if by_subject:
+                figure_dir = os.path.join(old_figure_dir, f'subject {subject}')
             for sess_num in filtered_df.xs(subject, level = 'subject').index.unique('session'):
                 for block_num in filtered_df.xs((subject, sess_num), level = ('subject','session')).index.unique('block'):
                     conds = {'subject': subject, 'session': sess_num, 'block': block_num}
@@ -234,7 +241,8 @@ def per_block(func, df: pd.DataFrame, plot_dir: str, save_prefix: str, fig_kwarg
                         logger.debug(f"could not plot subject {subject} session {sess_num} block {block_num}")
                         logger.debug(e)
                         continue
-                    _figure_saver(fig, ax, plot_dir, save_prefix, {'subject': subject, 'session': sess_num, 'block': block_num}) # Duplicate conds in case it gets mutated
+                    figure_path = os.path.join(figure_dir, filename_prefix+','.join([k + '=' + str(v) for k,v in conds.items()]) + ".png")
+                    _figure_saver(fig, ax, figure_path)
     _inner()
 
 #todo: generalize iter_level to multiple levels listed in hierarchical order head first
@@ -273,6 +281,66 @@ def across_blocks(func, df: pd.DataFrame, plot_dir: str, save_prefix: str, fig_k
     _inner()
 
 ## common routines
+def enhanced_violinplot(df: pd.DataFrame, x: str, y: str, hue: str = None, hue_order = None, palette = None, ax: plt.Axes = None, **kwargs) -> plt.Axes:
+    """
+    Plot a violinplot with mean + s.e. overlaid on top.
+
+    Args:
+        df: Dataframe
+        x: x-axis
+        y: y-axis
+        hue: Hue variable
+        hue_order: Order to assign hue
+        palette: List of colors (same length as hue_order)
+        ax: Axes to plot on. If none, a new figure and axes are created using plt.subplots. Specify keyword arguments in `fig_kwargs`.
+        **kwargs: Keywords passed to seaborn's violinplot
+
+    Returns:
+        the axes
+    """
+
+    # Create ax if none
+    fig, ax = fig_init(ax, **kwargs.pop('fig_kwargs', {}))
+    sns.violinplot(df, x=x, y=y, hue = hue, hue_order = hue_order, palette = palette, ax=ax, **kwargs)
+
+    # Plot means and se overlaid on violinplot
+    groupers = [x]
+    if hue:
+        groupers.append(hue)
+    stats_df = df.groupby(groupers)[y].agg(
+        ['mean', 'std', 'count']).reset_index()
+    stats_df['se'] = stats_df['std'] / np.sqrt(stats_df['count'])
+
+    n_subgroups = stats_df[hue].nunique() if hue else 1
+    violin_width = 0.8 / n_subgroups
+
+    # Plot means and error bars for each subgroup with connecting lines
+    for group_idx, group in enumerate(stats_df[x].unique()):
+        subgroup_stats = stats_df[stats_df[x] == group]
+
+        # Calculate x-coordinates for the means
+        # For each condition, we need to center the subgroup means over their respective violins
+        x_positions = group_idx + (violin_width * (n_subgroups - 1) / 2) - np.arange(n_subgroups)[::-1] * (
+                    violin_width * (n_subgroups - 1) / 2)  # + (violin_width * subgroup_idx)
+
+        # Plot error bars and means
+        ax.errorbar(x=x_positions,
+                    y=subgroup_stats['mean'],
+                    yerr=subgroup_stats['se'],
+                    fmt='o',
+                    color='black',
+                    capsize=5,
+                    capthick=2,
+                    elinewidth=2,
+                    markersize=8)
+
+        # Add connecting lines within subgroup
+        ax.plot(x_positions,
+                subgroup_stats['mean'],
+                color='black')
+    return ax
+
+
 # Credit to https://stackoverflow.com/questions/22852244/how-to-get-the-numerical-fitting-results-when-plotting-a-regression-in-seaborn
 def regplot(
         x: ArrayLike, y: ArrayLike, n_std: float = 1.96, n_pts: int = 100, ax: plt.Axes = None, **kwargs):
@@ -435,6 +503,3 @@ def plot_variable_subplots(df, func, row_cond, col_cond: str, axes = None, legen
     return axes
 
 
-def format_yticks(axes, func):
-    for ax in utils.flatten(axes):
-        ax.yaxis.set_major_formatter(FuncFormatter(func))

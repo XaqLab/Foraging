@@ -1,4 +1,5 @@
 import logging
+from copy import deepcopy
 from typing import Optional
 
 import numpy as np
@@ -88,67 +89,7 @@ def plot_block_events(df: pd.DataFrame, conds: dict, x: str = 'push times', titl
     return ax
 
 
-def enhanced_violinplot(df: pd.DataFrame, x: str, y: str, hue: str = None, hue_order = None, palette = None, ax: plt.Axes = None, **kwargs) -> plt.Axes:
-    """
-    Plot a violinplot with mean + s.e. overlaid on top.
-
-    Args:
-        df: Dataframe
-        x: x-axis
-        y: y-axis
-        hue: Hue variable
-        hue_order: Order to assign hue
-        palette: List of colors (same length as hue_order)
-        ax: Axes to plot on. If none, a new figure and axes are created using plt.subplots. Specify keyword arguments in `fig_kwargs`.
-        **kwargs: Keywords passed to seaborn's violinplot
-
-    Returns:
-        the axes
-    """
-
-    # Create ax if none
-    fig, ax = fig_init(ax, **kwargs.pop('fig_kwargs', {}))
-    sns.violinplot(df, x=x, y=y, hue = hue, hue_order = hue_order, palette = palette, ax=ax, **kwargs)
-
-    # Plot means and se overlaid on violinplot
-    groupers = [x]
-    if hue:
-        groupers.append(hue)
-    stats_df = df.groupby(groupers)[y].agg(
-        ['mean', 'std', 'count']).reset_index()
-    stats_df['se'] = stats_df['std'] / np.sqrt(stats_df['count'])
-
-    n_subgroups = stats_df[hue].nunique() if hue else 1
-    violin_width = 0.8 / n_subgroups
-
-    # Plot means and error bars for each subgroup with connecting lines
-    for group_idx, group in enumerate(stats_df[x].unique()):
-        subgroup_stats = stats_df[stats_df[x] == group]
-
-        # Calculate x-coordinates for the means
-        # For each condition, we need to center the subgroup means over their respective violins
-        x_positions = group_idx + (violin_width * (n_subgroups - 1) / 2) - np.arange(n_subgroups)[::-1] * (
-                    violin_width * (n_subgroups - 1) / 2)  # + (violin_width * subgroup_idx)
-
-        # Plot error bars and means
-        ax.errorbar(x=x_positions,
-                    y=subgroup_stats['mean'],
-                    yerr=subgroup_stats['se'],
-                    fmt='o',
-                    color='black',
-                    capsize=5,
-                    capthick=2,
-                    elinewidth=2,
-                    markersize=8)
-
-        # Add connecting lines within subgroup
-        ax.plot(x_positions,
-                subgroup_stats['mean'],
-                color='black')
-    return ax
-
-
-def plot_push_intervals(df: pd.DataFrame, conds: dict, title: str = None, title_prefix: str = 'Push intervals for',
+def plot_push_intervals(df: pd.DataFrame, conds: dict = None, title: str = None, title_prefix: str = 'Push intervals for',
                         box_colors: list = BOX_COLORS, box_labels: list = None,
                         legend: bool = True, ax: Optional[plt.Axes] = None, **kwargs) -> plt.Axes:
     """
@@ -182,13 +123,12 @@ def plot_push_intervals(df: pd.DataFrame, conds: dict, title: str = None, title_
     x_vals = df_block[x].values
     y_vals = df_block['consecutive push intervals'].values
     colors = np.array(['black'] * len(y_vals))
-    styles = ['dashed' if x == 'switch' else 'solid' for x in df_block['stay/switch'].values]
 
     # Create segments (x, y) pairs for LineCollection
     segments = [[(0, 0), (x_vals[0], y_vals[0])]] + [[(x_vals[i], y_vals[i]), (x_vals[i + 1], y_vals[i + 1])] for i in range(len(x_vals) - 1)]
 
     # Create the LineCollection
-    lc = LineCollection(segments, colors=colors, linestyles=styles, linewidth=2)
+    lc = LineCollection(segments, colors=colors, linewidth=2)
 
     # Create ax if none provided
     if ax is None:
@@ -203,6 +143,10 @@ def plot_push_intervals(df: pd.DataFrame, conds: dict, title: str = None, title_
     stim_type = df_block.index.unique('stimulus type')
     shape = df_block.index.unique('shape')
 
+    if conds is None:
+        conds = {}
+    else:
+        conds = deepcopy(conds)
     conds['kappa'] = kappa[0]
     conds['stim type'] = stim_type[0]
     conds['shape'] = shape[0]
@@ -210,7 +154,7 @@ def plot_push_intervals(df: pd.DataFrame, conds: dict, title: str = None, title_
 
     title = titler(title, title_prefix, conds)
     ax.set_title(title)
-    ax.set_ylabel("Push intervals")
+    ax.set_ylabel(unitler('Push intervals', 's'))
     ax.set_xlabel(unitler(x, 's'))
 
     # Add reward outcomes with shaded (rewarded) and empty (not rewarded) markers
@@ -218,18 +162,13 @@ def plot_push_intervals(df: pd.DataFrame, conds: dict, title: str = None, title_
     mask = df_block['reward outcomes'] == True
     ax.scatter(x_vals[mask], y_vals[mask], c=colors[mask], marker='^', s = 80, zorder = 2)
     ax.scatter(x_vals[~mask], y_vals[~mask], edgecolors=colors[~mask], marker='v', s = 80, zorder = 2, facecolors ="none")
-    # ax.set_xlim([0, x_vals.max() + 1])
 
     # Create legend manually with proxy artists
     if legend:
         legend_kwargs = kwargs.pop('legend_kwargs', {'loc': 'upper right'})
-
         legend_elements = ([Line2D([0], [0], color=box_colors[j], linestyle='-', label=box_labels[i]) for i, j in enumerate(sorted(df_block['box rank'].unique()))]
-                           + [Line2D([0], [0], color='black', linestyle='-', label='stay'),
-                              Line2D([0], [0], color='black', linestyle='--', label='switch')]
                            + [Line2D([0], [0], color='black', linestyle='', marker='^', label='rewarded'),
                               Line2D([0], [0], color='black', linestyle='', marker='v', markerfacecolor = 'none', label='no reward')])
-
         ax.legend(handles=legend_elements, **legend_kwargs)
     return ax
 
@@ -262,7 +201,7 @@ def plot_push_intervals_vs_reward_intervals(df: pd.DataFrame, title_prefix: str 
     return ax, fit_results.rsquared, fit_results.params[1]
 
 def plot_experiment_parameters(df: pd.DataFrame, conds: dict, title: str = "Experiment parameters by session",
-                               ax: Optional[plt.Axes] = None, **kwargs) -> plt.Axes:
+                               label_rotation: float = 35, ax: Optional[plt.Axes] = None, **kwargs) -> plt.Axes:
     """
     Plots the distribution of experiment parameters (kappa, stimulus type, shape) across different sessions.
     Displays the number of blocks associated with each parameter and session.
@@ -271,6 +210,7 @@ def plot_experiment_parameters(df: pd.DataFrame, conds: dict, title: str = "Expe
         df: DataFrame containing experiment session data with hierarchical index ('session', 'stimulus type', 'shape', 'kappa').
         conds: Dictionary of conditions used to filter the DataFrame before plotting.
         title: Title of the plot.
+        label_rotation: degrees to rotate xtick labels.
         ax: Optional, existing matplotlib Axes object. If None, a new one will be created.
         kwargs: Additional keyword arguments.
             - 'fig_kwargs': Dictionary for customizing the figure properties when creating a new figure (passed to `plt.subplots`).
@@ -304,12 +244,13 @@ def plot_experiment_parameters(df: pd.DataFrame, conds: dict, title: str = "Expe
     stim_type_ticks = [2 * b, 3 * b]
     kappa_ticks = [i * c + max(stim_type_ticks) + 1 for i in range(1, len(kappas) + 1)]
 
-    ax.scatter(np.ones(n_params + 1), np.arange(n_params + 1), alpha=0)  # Generate n_param + 1 ticks
-    for i in sessions:
+    # Generate n_param + 1 y-ticks
+    ax.scatter(np.ones(n_params + 1), np.arange(n_params + 1), alpha=0)
+    for i, sess in enumerate(sessions):
         # Count parameter values for the current session
-        kappa_counts = df.xs(i, level='session').reset_index().groupby('kappa')['block'].nunique()
-        stim_types_counts = df.xs(i, level='session').reset_index().groupby('stimulus type')['block'].nunique()
-        shapes_counts = df.xs(i, level='session').reset_index().groupby('shape')['block'].nunique()
+        kappa_counts = df.xs(sess, level='session').reset_index().groupby('kappa')['block'].nunique()
+        stim_types_counts = df.xs(sess, level='session').reset_index().groupby('stimulus type')['block'].nunique()
+        shapes_counts = df.xs(sess, level='session').reset_index().groupby('shape')['block'].nunique()
 
         # Determine y-coordinates for parameter value annotations
         y_kappas = np.searchsorted(kappas, kappa_counts.index.values)
@@ -317,11 +258,12 @@ def plot_experiment_parameters(df: pd.DataFrame, conds: dict, title: str = "Expe
         y_shapes = np.searchsorted(shapes, shapes_counts.index.values)
 
         # Annotate the count of blocks associated with each parameter value
-        [ax.annotate(shapes_counts.values[j], (i - 1 - h_offset, y * a - v_offset), c='c', fontsize=10) for j, y in enumerate(y_shapes)]
-        [ax.annotate(stim_types_counts.values[j], (i - 1 - h_offset, y * b - v_offset), c='m', fontsize=10) for j, y in enumerate(y_stim_types)]
-        [ax.annotate(kappa_counts.values[j], (i - 1 - h_offset, (y + 1) + max(stim_type_ticks) + 1 - v_offset), c='g', fontsize=10) for j, y in enumerate(y_kappas)]
+        [ax.annotate(shapes_counts.values[j], (i - h_offset, y * a - v_offset), c='c', fontsize=10) for j, y in enumerate(y_shapes)]
+        [ax.annotate(stim_types_counts.values[j], (i - h_offset, y * b - v_offset), c='m', fontsize=10) for j, y in enumerate(y_stim_types)]
+        [ax.annotate(kappa_counts.values[j], (i - h_offset, (y + 1) + max(stim_type_ticks) + 1 - v_offset), c='g', fontsize=10) for j, y in enumerate(y_kappas)]
 
-    ax.set_xticks(sessions - 1, sessions)
+    ax.set_xticks(range(len(sessions)), sessions)
+    ax.tick_params(axis = 'x', labelrotation = label_rotation)
     ax.set_yticks(shape_ticks + stim_type_ticks + kappa_ticks, y_labels, fontsize=10)
     ax.set_ylabel("kappa\nstim type\nshape", rotation='horizontal', labelpad=55, multialignment='left', va='center',
                   linespacing=7, fontsize=15)

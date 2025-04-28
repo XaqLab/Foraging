@@ -1,7 +1,8 @@
 import logging
 
 from IPython.core.display import Markdown
-from IPython.core.display_functions import display
+from IPython.core.display_functions import display, DisplayHandle
+from pandas.core.groupby import DataFrameGroupBy
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -16,12 +17,11 @@ import fnmatch
 import h5py
 import pickle
 from datetime import datetime
-from typing import Callable, Optional, Any
+from typing import Callable, Any
 
 from tqdm import tqdm
 
 from foraging.utils import INDEX, BOX_LABELS
-from ._base import date_to_integer
 
 
 def get_subjects(path: str) -> list[str]:
@@ -29,11 +29,12 @@ def get_subjects(path: str) -> list[str]:
     Retrieve the names of all subjects from experiment matfiles.
 
     Args:
-        path (str): Path to experiment data directory.
+        path: Path to experiment data directory.
 
     Returns:
-        list[str]: A list of subject names extracted from file names.
+        A list of subject names extracted from file names.
     """
+
     subject_files = fnmatch.filter(os.listdir(path), "data_*.mat")
     subjects = [subject_file.split(".")[0][5:] for subject_file in subject_files]
     return subjects
@@ -41,15 +42,16 @@ def get_subjects(path: str) -> list[str]:
 
 def open_subject_file(subject: str, path: str = ".") -> h5py.File:
     """
-    Open an HDF5 subject file.
+    Open an HDF5 subject file. Remember to close this on your own as you would any regular file.
 
     Args:
-        subject (str): Subject identifier.
-        path (str, optional): Path to the directory containing the file. Defaults to '.'.
+        subject: Subject identifier.
+        path: Path to the directory containing the file. Defaults to '.'.
 
     Returns:
-        h5py.File: Opened HDF5 file.
+        Opened HDF5 file.
     """
+
     return h5py.File(os.path.join(path, f"data_{subject}.mat"), "r")
 
 
@@ -58,15 +60,34 @@ def open_meta_file(subject: str, path: str = ".") -> pd.DataFrame:
     Open and preprocess an Excel metadata file for a given subject.
 
     Args:
-        subject (str): Subject identifier.
-        path (str, optional): Path to the directory containing the file. Defaults to '.'.
+        subject: Subject identifier.
+        path: Path to the directory containing the file. Defaults to '.'.
 
     Returns:
-        pd.DataFrame: Processed metadata DataFrame.
+        Processed metadata DataFrame.
     """
+
     df_meta = pd.read_excel(os.path.join(path, f"table_{subject}.xlsx"))
-    df_meta["sessionId"] = df_meta["sessionId"].astype(int).sort_values()
+    # df_meta["sessionId"] = df_meta["sessionId"].astype(int).sort_values()
     return df_meta
+
+
+def open_pickle_file(path: str) -> Any:
+    """
+    Loads data from a pickle file.
+
+    Args:
+        path: The file path of the pickle file to load.
+
+    Returns:
+        Contents of pickle file.
+    """
+    # Open the pickle file and load its contents
+    with open(path, "rb") as f:
+        ds = pickle.load(f)
+
+    # Return all contents
+    return ds
 
 
 def make_df(path: str) -> pd.DataFrame:
@@ -74,18 +95,18 @@ def make_df(path: str) -> pd.DataFrame:
     Given experiment matfiles and metadata, construct a DataFrame.
 
     Args:
-        path (str): Path to the experiment data to load into a DataFrame.
+        path: Path to the experiment data to load into a DataFrame.
 
     Returns:
-        pd.DataFrame: A DataFrame where each row represents a push and each column encodes experiment context, such as session, block, experiment conditions, etc.
+        A DataFrame where each row represents a push and each column encodes experiment context, such as session, block, experiment conditions, etc.
     """
 
     # Identify all subjects in the given directory
     subjects = get_subjects(path)
     df_dict = {
         "subject": [],
-        "session id": [],
-        "_session": [],
+        "session": [],
+        "_session": [], # the original session number in sequential order inside the matlab struct
         "week day": [],
         "block": [],
         "schedule": [],
@@ -116,20 +137,23 @@ def make_df(path: str) -> pd.DataFrame:
             )  # For humans, sessions = individual subjects
             week_day = None
 
+            # For each session
             for sess_idx in range(n_sessions):
+
+                # Get session id, depending on type of subject
                 sess_id = (
-                    int(f[f["session"]["id"][sess_idx, 0]][0, 0])
+                    f[f["session"]["id"][sess_idx, 0]][0, 0]
                     if subject == "humans"
-                    else datetime.strptime(
+                    else
                         "".join(
                             [chr(c) for c in f[f["session"]["id"][sess_idx, 0]][:, 0]]
-                        ),
-                        "%Y%m%d",
-                    )
+                        )
                 )
-                if isinstance(sess_id, datetime):
-                    week_day = day_to_week[sess_id.weekday()]
-                    sess_id = date_to_integer(sess_id)
+
+                # If session is date, get weekday
+                if subject != 'humans':
+                    week_day = day_to_week[datetime.strptime(sess_id,"%Y%m%d").weekday()]
+                sess_id = int(sess_id)
 
                 sess_data = f[all_sess_data[sess_idx, 0]]["events"]
                 param_data = f[all_sess_data[sess_idx, 0]]["params"]
@@ -138,32 +162,36 @@ def make_df(path: str) -> pd.DataFrame:
                     if all_sess_data_cue
                     else None
                 )
-                n_blocks = len(sess_data)
 
+                # For each block in session
+                n_blocks = len(sess_data)
                 for block_idx in range(n_blocks):
                     try:
+
+                        # Get block's metadata
                         block_meta = df_meta.loc[
                             (df_meta["sessionId"] == sess_id)
                             & (df_meta["blockId"] == block_idx + 1)
-                        ]
+                        ].iloc[0]
+
                         schedules = [
                             float(x)
-                            for x in block_meta["scheduleMean"].iloc[0].split(",")
+                            for x in block_meta["scheduleMean"].split(",")
                         ]
 
-                        kappa = block_meta["stimulusNoise"].iloc[0]
-                        shape = block_meta["GammaShape"].iloc[0]
-                        stim_type = block_meta["stimulusCueType"].iloc[0]
+                        kappa = block_meta["stimulusNoise"]
+                        shape = block_meta["GammaShape"]
+                        stim_type = block_meta["stimulusCueType"]
 
-                        # Parse boxes
+                        # Parse box data
                         staging_dict = {
-                            k: [] for k in df_dict.keys() if k != "push busyness"
+                            k: [] for k in df_dict.keys()
                         }
                         for i in range(len(schedules)):
                             box = "box" + str(i + 1)
                             push_times = np.atleast_1d(
                                 f[sess_data[block_idx, 0]].get("tPush/" + box)
-                            ).ravel()
+                            ).ravel() # Make sure data is an array before attempting to flatten it
                             reward_outcomes = (
                                 np.atleast_1d(
                                     f[sess_data[block_idx, 0]].get("pushLogical/" + box)
@@ -172,12 +200,12 @@ def make_df(path: str) -> pd.DataFrame:
                                 .ravel()
                             )
 
-                            # Populate the fields that are the same for all pushes in a box
+                            # Populate metadata
                             n_events = len(push_times)
                             staging_dict["subject"].extend(
                                 [subject for _ in range(n_events)]
                             )
-                            staging_dict["session id"].extend(
+                            staging_dict["session"].extend(
                                 [sess_id for _ in range(n_events)]
                             )
                             staging_dict["_session"].extend(
@@ -237,7 +265,7 @@ def make_df(path: str) -> pd.DataFrame:
                                 length = len(v)
                             if len(v) != length:
                                 logger.debug(
-                                    f"Could not parse ({subject}, {sess_idx + 1}, {block_idx + 1}) due to incorrect size of arrays"
+                                    f"Could not parse ({subject}, {sess_id}, {block_idx + 1}) due to incorrect size of arrays"
                                 )
                                 length = False
                                 break
@@ -245,18 +273,18 @@ def make_df(path: str) -> pd.DataFrame:
                             [v.extend(staging_dict[k]) for k, v in df_dict.items()]
                     except Exception as e:  # If block causes issue, skip it
                         logger.debug(
-                            f"Could not parse ({subject}, {sess_idx + 1}, {block_idx + 1})"
+                            f"Could not parse ({subject}, {sess_id}, {block_idx + 1})"
                         )
                         logger.debug(e)
 
     # Make DataFrame and sort by relevant fields
     df = pd.DataFrame(df_dict).sort_values(
-        by=["subject", "session id", "block", "push times"]
+        by=["subject", "session", "block", "push times"]
     )
 
     # Add some more columns based on block-dependent statistics
     df["box rank"] = (
-        df.groupby(["subject", "session id", "block"])["schedule"].rank(
+        df.groupby(["subject", "session", "block"])["schedule"].rank(
             method="dense"
         )
         - 1
@@ -269,14 +297,13 @@ def make_df(path: str) -> pd.DataFrame:
     df = df[df["consecutive push intervals"] > 0]
 
     df["push #"] = (
-        df.groupby(["subject", "session id", "block"])["push times"].rank().astype(int)
+        df.groupby(["subject", "session", "block"])["push times"].rank().astype(int)
     )
     df["push # by box"] = (
-        df.groupby(["subject", "session id", "block", "box rank"])["push times"]
+        df.groupby(["subject", "session", "block", "box rank"])["push times"]
         .rank()
         .astype(int)
     )
-    df["session"] = df.groupby("subject")["session id"].rank(method="dense").astype(int)
     df["stay/switch"] = df["box rank"].diff().astype(bool).map({False: 'stay', True: 'switch'})
 
     # Correct some columns
@@ -284,17 +311,27 @@ def make_df(path: str) -> pd.DataFrame:
     df["subject"] = df["subject"].astype(str)
     df.loc[df["push #"] == 1, "consecutive push intervals"] = df.loc[
         df["push #"] == 1, "push times"
-    ]
-    df.loc[df["push #"] == 1, "stay/switch"] = 'stay'
+    ] # Make sure the first push interval of each block is just the time of that push
+    df.loc[df["push #"] == 1, "stay/switch"] = 'stay' # Count first push of each block as 'stay' push
 
     # Set index, refer to INDEX definition at top of this file
     df.set_index(INDEX, inplace=True)
     df.sort_index(inplace=True)
-
     return df
 
 
-def display_df(df: pd.DataFrame, cols: list[str]):
+def display_df(df: pd.DataFrame, cols: list[str]) -> DisplayHandle:
+    """
+    Pretty prints dataframe's specified columns.
+
+    Args:
+        df: The dataframe to print.
+        cols: The columns of dataframe to print.
+
+    Returns:
+        A markdown display object
+    """
+
     return display(Markdown(df.head()[cols].to_markdown()))
 
 
@@ -305,13 +342,14 @@ def filter_df(
     Filter a DataFrame according to conditions specified in a dictionary.
 
     Args:
-        df (pd.DataFrame): DataFrame containing experiment data.
-        conds (dict[str, list]): Dictionary mapping column or index level names to values to filter on.
-        attempt_index (bool): Flag indicating whether to attempt converting conds to multi-index key. Defaults to True.
+        df: DataFrame containing experiment data.
+        conds: Dictionary mapping column or index level names to values to filter on.
+        attempt_index: Flag indicating whether to attempt converting conds to multi-index key. Defaults to True.
 
     Returns:
-        pd.DataFrame: Filtered DataFrame.
+        Filtered DataFrame.
     """
+
     if conds:
         mask = np.full(len(df), True)
         if attempt_index:
@@ -336,10 +374,10 @@ def process_block_safely(func: Callable) -> Callable:
     Decorator to safely process each block, catching exceptions and logging errors.
 
     Args:
-        func (Callable): The function to apply to each block.
+        func: The function to apply to each block.
 
     Returns:
-        Callable: Wrapped function with error handling.
+        Wrapped function with error handling.
     """
 
     @wraps(func)
@@ -353,17 +391,18 @@ def process_block_safely(func: Callable) -> Callable:
     return wrapper
 
 
-def get_blocks(df: pd.DataFrame, sort: bool = True):
+def get_blocks(df: pd.DataFrame, sort: bool = True) -> DataFrameGroupBy:
     """
     Group DataFrame by subject, session, and block.
 
     Args:
-        df (pd.DataFrame): DataFrame containing experiment data.
+        df: DataFrame containing experiment data.
         sort: Flag to sort groups
 
     Returns:
-        DataFrameGroupBy: Grouped DataFrame object.
+        Grouped DataFrame object.
     """
+
     return df.groupby(["subject", "session", "block"], sort = sort)
 
 
@@ -375,17 +414,17 @@ def process_blocks(
     **kwargs,
 ) -> (dict, set):
     """
-    Apply a function to each block in a hierarchical dataset and aggregate results.
+    Apply a function to each block in DataFrame and aggregate results in a dictionary, where each key is a block index from the DataFrame.
 
     Args:
-        df (pd.DataFrame): DataFrame containing hierarchical data.
-        compute_function (Callable): Function to apply to each block.
-        use_tqdm (bool, optional): Whether to display a progress bar. Defaults to False.
+        df: DataFrame containing hierarchical data.
+        compute_function: Function to apply to each block.
+        use_tqdm: Whether to display a progress bar. Defaults to False.
         *args: Additional arguments for `compute_function`.
         **kwargs: Additional keyword arguments for `compute_function`.
 
     Returns:
-        (dict, set): Dictionary of results and a set of error blocks.
+        A dictionary of results and a set of error blocks.
     """
     results = {}
     err_blocks = set()
@@ -403,15 +442,16 @@ def select_from_ranges(df: pd.DataFrame, quantiles: dict, key: str) -> pd.DataFr
     Select rows from a DataFrame based on specified ranges of a given key.
 
     Args:
-        df (pd.DataFrame): The input DataFrame containing the data.
-        quantiles (dict): A dictionary where each key is a subject and each value is another dictionary
-                          with box numbers as keys and quantile ranges (either a list of two values or a single value)
-                          as values for the specified key.
-        key (str): The column name in the DataFrame on which to filter the data.
+        df: The input DataFrame containing the data.
+        quantiles: A dictionary where each key is a subject and each value is another dictionary
+                          with box numbers as keys and ranges (either a list of two values or a single value)
+                          as values for the specified key. If single value, then this is treated as a lower bound.
+        key: The column name in the DataFrame on which to filter the data.
 
     Returns:
-        pd.DataFrame: A DataFrame containing only the rows that fall within the specified ranges for each subject and box.
+        A DataFrame containing only the rows that fall within the specified ranges for each subject and box.
     """
+
     # Save the dataframe of selected pushes
     df_selected = df.iloc[:0, :].copy()
     for subj, v in quantiles.items():
@@ -441,12 +481,12 @@ def get_continuous_from_block(f: h5py.File, session: int, block: int) -> dict:
     Extract continuous data from a specified session and block in an HDF5 file.
 
     Args:
-        f (h5py.File): The HDF5 file object containing the session data.
-        session (int): The session number from which to extract data (1-indexed).
-        block (int): The block number within the session to extract data from (1-indexed).
+        f: The HDF5 file object containing the session data.
+        session: The session number from which to extract data (1-indexed).
+        block: The block number within the session to extract data from (1-indexed).
 
     Returns:
-        dict: A dictionary containing the continuous data arrays, including:
+        A dictionary containing the continuous data arrays, including:
             - 'eye_arena_int': gaze locations in arena (e.g., 3D coordinates)
             - 'eye_vertical': Vertical eye position data
             - 'eye_horizontal': Horizontal eye position data
@@ -509,8 +549,7 @@ def get_continuous_from_block(f: h5py.File, session: int, block: int) -> dict:
             }
     except Exception as e:
         # If there is an error in data extraction, return an empty result
-        pass
-
+        logger.debug(f"Could not process (session {session}, block {block}): {str(e)}")
     return {}
 
 
@@ -519,14 +558,15 @@ def get_continuous_from_df_to_dict(df: pd.DataFrame, data_dir: str) -> (dict, li
     Extract continuous data from blocks in the DataFrame and return it as a dictionary.
 
     Args:
-        df (pd.DataFrame): The DataFrame containing session and block information.
-        data_dir (str): The directory path where the subject files are located.
+        df: The DataFrame containing session and block information.
+        data_dir: The directory path where the subject files are located.
 
     Returns:
-        tuple: A tuple containing:
-            - data (dict): A dictionary with extracted continuous data from the blocks.
-            - errors (list): A list of blocks causing errors encountered during the extraction process.
+        A tuple containing:
+            - data: A dictionary with extracted continuous data from the blocks.
+            - errors: A list of blocks causing errors encountered during the extraction process.
     """
+
     # Retrieve the list of subjects and open their respective files
     subjects = df.index.unique('subject').values
     files = {subj: open_subject_file(subj, data_dir) for subj in subjects}
@@ -543,6 +583,7 @@ def get_continuous_from_df_to_dict(df: pd.DataFrame, data_dir: str) -> (dict, li
         Returns:
             dict: The extracted continuous data for the specified block and session.
         """
+
         _sess = df.loc[index, "_session"].iloc[0]
         return get_continuous_from_block(
             files[index[INDEX.index("subject")]], _sess, index[INDEX.index("block")]
@@ -567,14 +608,15 @@ def get_continuous3d_from_df_to_df(
     Extract continuous data for each push interval from the provided DataFrame and return it as a new DataFrame.
 
     Args:
-        df (pd.DataFrame): The input DataFrame containing session, block, and push interval information.
-        data_dir (str): The directory path where the subject files are located.
-        key (str): continuous data variable to extract.
+        df: The input DataFrame containing session, block, and push interval information.
+        data_dir: The directory path where the subject files are located.
+        key: continuous data variable to extract.
 
     Returns:
-        pd.DataFrame: A DataFrame with continuous data (x, y, z) and corresponding time (t),
+        A DataFrame with continuous data (x, y, z) and corresponding time (t),
                       indexed by subject, session, block, and push interval.
     """
+
     # Initialize empty arrays to store valid position and time data
     p_valid = np.empty((0, 3))  # Array to store valid positions (x, y, z)
     t_valid = np.empty(0)  # Array to store valid time points
@@ -694,16 +736,17 @@ def get_continuous3d_from_df_to_polars(
     )
 
 
-def populate_busyness(df: pd.DataFrame) -> tuple[dict, set]:
+def populate_busyness(df: pd.DataFrame) -> (dict, set):
     """
     Add a 'push busyness' column to the DataFrame, representing the busyness level of pushes in each box.
 
     Args:
-        df (pd.DataFrame): The input DataFrame with push data, including push times and box rank.
+        df: The input DataFrame with push data, including push times and box rank.
 
     Returns:
-        pd.DataFrame: The original DataFrame with the 'push busyness' column populated.
+        The original DataFrame with the 'push busyness' column populated.
     """
+
     # Initialize 'push busyness' column with NaN values
     df["push busyness"] = np.nan
 
@@ -748,22 +791,26 @@ def populate_busyness(df: pd.DataFrame) -> tuple[dict, set]:
     return process_blocks(df, _inner)
 
 
-def extend_df(df: pd.DataFrame, blocks_dict: dict, col_name: str, by_box: bool = False) -> tuple[dict, set]:
+def extend_df(df: pd.DataFrame, blocks_dict: dict, col_name: str, by_box: bool = False) -> (dict, set):
     """
     Extend the DataFrame by adding a new column with values from the provided blocks dictionary.
     The new column is filled with values corresponding to each box rank in the DataFrame.
 
     Args:
-        df (pd.DataFrame): The input DataFrame to extend with a new column.
-        blocks_dict (dict): A dictionary containing block data for each subject, session, and block.
-                             The dictionary should have the format:
+        df: The input DataFrame to extend with a new column.
+        blocks_dict: A dictionary containing block data for each subject, session, and block.
+                             If by_box is False (default), the dictionary should have the format:
+                             { (subject, session, block): values }
+                             where 'values' is a list of events aligned to that block.
+
+                             If by_box is set to True, the dictionary should have the format:
                              { (subject, session, block): {box: values} }
-                             where 'box' corresponds to box's in order of schedules and 'values' is a list of values for each box.
-        col_name (str): The name of the new column to add to the DataFrame.
-        by_box (bool): If true, then blocks_dict is formatted as separate lists for each box and thus each list needs to be matched to its corresponding box in the dataframe. Otherwise, it is assumed that each row of an item in blocks_dict is aligned to each event in that block
+                             where 'box' corresponds to box's ordered by schedules and 'values' is a list of values for each box.
+        col_name: The name of the new column to add to the DataFrame.
+        by_box: If true, then blocks_dict is formatted as separate lists for each box and thus each list needs to be matched to its corresponding box in the dataframe. Otherwise, it is assumed that each row of an item in blocks_dict is aligned to each event in that block.
 
     Returns:
-        pd.DataFrame: The original DataFrame with the new column added and filled with data from blocks_dict.
+        The original DataFrame with the new column added and filled with data from blocks_dict.
     """
     # Initialize the new column with NaN values
     df[col_name] = np.nan
@@ -812,7 +859,7 @@ def exclusion_criteria(df: pd.DataFrame) -> pd.DataFrame:
     This function performs several exclusions based on the following criteria:
     1. Excludes blocks with fewer than 10 pushes.
     2. Excludes blocks with a schedule value of 80.
-    3. Excludes rows where consecutive push intervals are greater than 50.
+    3. Excludes rows where consecutive push intervals are greater than 30.
 
     Args:
         df: The DataFrame containing the data to be filtered.
@@ -842,71 +889,40 @@ def exclusion_criteria(df: pd.DataFrame) -> pd.DataFrame:
     return df_filtered
 
 
-def load_pickled_data(path: str) -> dict:
-    """
-    Loads data from a pickle file and returns its contents as a dictionary.
-
-    This function loads any data stored in the pickle file and returns it as a
-    dictionary, where the keys are the names of the stored elements and the
-    values are the corresponding data.
-
-    Args:
-        path: The file path of the pickle file to load.
-
-    Returns:
-        A dictionary where keys are the names of the elements in the pickle file
-        and the values are the corresponding data.
-    """
-    # Open the pickle file and load its contents
-    with open(path, "rb") as f:
-        ds = pickle.load(f)
-
-    # Return all contents as a dictionary
-    return ds
-
-
 def bin_data(
     df: pd.DataFrame,
     x: str,
     bins: int | list[float] = 20,
     strategy: str = 'left'
-) -> list[float]:
+) -> pd.Series:
     """
-    Bins data in the specified column of the DataFrame, with support for different binning strategies.
-
-    This function performs binning on the specified column (`x`) and labels the bins
-    according to the selected strategy. It supports defining the number of bins or
-    specific bin edges. Optionally, it can return the binned data as a new column
-    in the DataFrame.
+    Bins data in the specified column of the DataFrame, with support for different binning strategies. This function
+    performs binning on the specified column (`x`) and labels the bins according to the selected strategy. It supports
+    defining the number of bins or specific bin edges.
 
     Args:
-        df (pd.DataFrame): Input DataFrame containing the data.
-        x (str): Name of the column to bin.
-        bins (Union[int, list[float]]): Number of bins or list of bin edges.
+        df: Input DataFrame containing the data.
+        x: Name of the column to bin.
+        bins: Number of bins or list of bin edges.
             If an integer is provided, the data will be divided into that number of equal-width bins.
             If a list of floats is provided, it will specify the bin edges.
             Defaults to 20.
-        strategy (str): Labeling strategy for the bins.
+        strategy: Labeling strategy for the bins.
             - 'full': Labels the bins using the full interval (i.e., both left and right edges).
             - 'left': Labels the bins using only the left edge.
             - 'right': Labels the bins using only the right edge.
             Defaults to 'left'.
 
     Returns:
-        pd.Series: A pandas Series containing the binned data.
+        A pandas Series containing the binned data.
 
     Example:
         df = pd.DataFrame({'value': np.random.randn(100)})
         df['binned'] = bin_data(df, 'value', n_bins=5, strategy='right')
-
-    Notes:
-        If `n_bins` is an integer, the binning is done by dividing the data into equal-width bins.
-        If `n_bins` is a list of floats, the exact bin edges are used.
     """
 
     # Perform initial binning based on n_bins or custom bin edges
     _bins = pd.cut(df[x], bins=bins, include_lowest=True)
-
     dtype = df[x].dtype  # Get the dtype of the column to maintain consistency in bin edges
 
     # Select the appropriate bin edges based on the strategy
