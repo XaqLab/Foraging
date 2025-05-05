@@ -379,6 +379,7 @@ def compute_fisher(
         index: tuple,
         shape: int = None,
         schedules: list = None,
+        specific: bool = False,
 ) -> np.ndarray[float]:
     """
     Compute the exact reward probability of each right before each push.
@@ -412,52 +413,10 @@ def compute_fisher(
     for i, (t, box) in enumerate(push_ints_and_box):
         if t == old_t[int(box)]:
             continue  # Skip redundant updates if push time is unchanged for the same box
-        information[i] = obs_model.fisher_info((True, t), schedules[int(box)])
-        old_idx[int(box)] += 1  # Update observation index for the box
-        old_t[int(box)] = t  # Update last push time for the box
-    return information
-
-
-@process_block_safely
-def compute_fisher(
-        df: pd.DataFrame,
-        index: tuple,
-        shape: int = None,
-        schedules: list = None,
-) -> np.ndarray[float]:
-    """
-    Compute the exact reward probability of each right before each push.
-
-    Args:
-        df: Pandas DataFrame containing session data.
-        index: Index to locate the relevant block data.
-
-    Returns:
-        np.ndarray: An event-based array of shape (n_obs, n_boxes),
-                    where reward probabilities are evaluated before each push.
-    """
-
-    df_block = df.loc[index]
-    if schedules is None:
-        schedules = np.sort(df_block['schedule'].unique())
-    n_boxes = len(schedules)
-    if shape is None:
-        shape = df_block.index.unique('shape')[0]  # Assume agent knows number of states perfectly
-
-    # Construct likelihood/observation model
-    obs_model = models.GammaObservation(shape)
-
-    # Compute availability marginal for each push
-    n_obs = len(df_block)
-    information = np.zeros(n_obs)
-    push_ints_and_box = df_block[['same-box push intervals', 'box rank']].values[:n_obs]
-    old_idx = np.zeros(n_boxes, dtype=int)  # Track last observed index per box
-    old_t = np.zeros(n_boxes)  # Track last push time per box
-
-    for i, (t, box) in enumerate(push_ints_and_box):
-        if t == old_t[int(box)]:
-            continue  # Skip redundant updates if push time is unchanged for the same box
-        information[i] = obs_model.fisher_info((True, t), schedules[int(box)])
+        if specific:
+            information[i] = obs_model.specific_fisher_info((True, t), schedules[int(box)])
+        else:
+            information[i] = obs_model.fisher_info((True, t), schedules[int(box)])
         old_idx[int(box)] += 1  # Update observation index for the box
         old_t[int(box)] = t  # Update last push time for the box
     return information

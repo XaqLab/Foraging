@@ -30,13 +30,38 @@ def flatten(li: list | tuple | set | range | np.ndarray):
         yield li
 
 
+def kwargs_handler(kwargs: dict, key: str, default: dict = None) -> dict:
+    """
+    Intelligently extract keyword arguments from kwargs object, merging with default arguments the user may specify
+    inside a function in a way that only overrides them when necessary, such as when the user later provides different
+    inputs. This is usually the case when a single function accepts a nested kwargs dictionary that may contain the
+    kwargs for severa different subroutines.
+
+    Args:
+        kwargs: Keyword arguments object to extract arguments from.
+        key: The keyword argument to extract. Assumed to be a dictionary.
+        default: The default behavior of the argument
+
+    Returns:
+        The extracted keyword argument merged with default, if specified.
+    """
+    if default is None:
+        default = {}
+    result = kwargs.pop(key, {})
+    if not type(result) == dict:
+        raise ValueError("Keyword argument is not dictionary.")
+    return default | result
+
+
 def discrete_time(
-        arr: ArrayLike,
-        obs_ts: ArrayLike,
-        dt: float,
-        end_t: float,
-        fill_time_func: Optional[Callable[[ArrayLike, int, int, dict[str, Any]], ArrayLike]] = None,
-        **kwargs
+    arr: ArrayLike,
+    obs_ts: ArrayLike,
+    dt: float,
+    end_t: float,
+    fill_time_func: Optional[
+        Callable[[ArrayLike, int, int, dict[str, Any]], ArrayLike]
+    ] = None,
+    **kwargs,
 ) -> np.ndarray:
     """
     Converts an observation-based array into a time-based representation.
@@ -80,7 +105,7 @@ def discrete_time(
         old_t = obs_t
 
         # Fill in the remaining time at the end
-    new_arr[int(obs_ts[-1] / dt):] = arr[-1]
+    new_arr[int(obs_ts[-1] / dt) :] = arr[-1]
     return new_arr
 
 

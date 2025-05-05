@@ -3,6 +3,6 @@
 INDEX = ['subject', 'session', 'block', 'push #', 'stimulus type', 'shape', 'kappa', 'week day']
 MIN_INDEX = 4 # Marks the end of the minimal index
 
-from ._base import flatten
+from ._base import flatten, kwargs_handler
 
 BOX_LABELS = ['fast','medium','slow']

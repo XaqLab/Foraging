@@ -1,6 +1,5 @@
 import logging
 from copy import deepcopy
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -10,88 +9,243 @@ from foraging.utils import data
 from matplotlib import pyplot as plt
 from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
+from scipy.spatial.distance import jensenshannon
 
 from foraging.plotting import BOX_COLORS
-from foraging.utils import BOX_LABELS
-from ._base import fig_init, titler, unitler, bp, regplot
+from foraging.utils import BOX_LABELS, kwargs_handler
+from ._base import fig_init, titler, unitler, bp, regplot, get_bar_heights
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-def plot_block_events(df: pd.DataFrame, conds: dict, x: str = 'push times', title: str = None, title_prefix: str = 'Pushes for',
-                      box_colors: list = BOX_COLORS, box_labels: list = BOX_LABELS,
-                      legend: bool = True, ax: Optional[plt.Axes] = None, **kwargs) -> plt.Axes:
+def plot_block_events(df: pd.DataFrame, conds: dict = None, x: str = 'push times', y: str = 'box rank', x_unit: str = 's', y_unit: str = None, title: str = None, title_prefix: str = 'Block activity',
+                      box_colors: list = BOX_COLORS, legend: bool = True, ax: plt.Axes = None, **kwargs) -> plt.Axes:
     """
-    Plot the push outcomes in the block.
+    Plot the push-related variable in the block.
 
     Args:
-        df: Dataframe
-        conds: Dictionary to filter df
-        x: x-axis
+        df: DataFrame.
+        conds: Dictionary to filter df.
+        x: Name of x variable in DataFrame. Defaults to `push times`.
+        y: Name of y variable in DataFrame. Defaults to `box rank`.
+        x_unit: Unit to assign to x. Defaults to `s` for seconds. Ignored if None.
+        y_unit: Unit to assign to y. Defaults to None. Ignored if None.
         title: Title of figure. If specified, overrides `title_prefix`.
         title_prefix: Prefix of title that is used to construct the contents of the title together with conds. See `titler` for more details. Ignored if `title` is specified.
-        box_colors: List of colors for each box
-        box_labels: Labels of each box
+        box_colors: List of colors for each box. Defaults to `BOX_COLORS`.
         legend: If True, display legend. Specify keyword arguments in `legend_kwargs`.
-        ax: Axes to plot on. If none, a new figure and axes are created using plt.subplots. Specify keyword arguments in `fig_kwargs`.
+        ax: Axes to plot on. If None, a new figure and axes are created using plt.subplots. Specify keyword arguments in `fig_kwargs`.
         **kwargs: Additional keyword arguments.
             - 'fig_kwargs': Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
+            - 'line_kwargs': Dictionary to specify line properties (passed to 'LineCollection').
             - 'legend_kwargs': Dictionary of keyword arguments for customizing the legend (passed to `ax.legend`).
 
     Returns:
-        the axes
+        The axes.
     """
 
     # Create ax if none provided
-    fig, ax = fig_init(ax, **kwargs.pop('fig_kwargs', {}))
+    fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs')
+    fig, ax = fig_init(ax, **fig_kwargs)
 
-    # Draw schedules as equidistant lines
-    df_block = utils.data.filter_df(df, conds).reset_index()
+    # Get block data and metadata
+    df_block = utils.data.filter_df(df, conds)
     schedules = np.sort(df_block['schedule'].unique())
-    # [ax.axhline(i, color=box_colors[i], linewidth = 5) for i in range(len(schedules))]
+    kappa = df_block.index.unique('kappa')
+    stim_type = df_block.index.unique('stimulus type')
+    shape = df_block.index.unique('shape')
+
+    if conds is None:
+        conds = {}
+    else:
+        conds = deepcopy(conds)
+    conds['kappa'] = kappa[0]
+    conds['stim type'] = stim_type[0]
+    conds['shape'] = shape[0]
 
     # Create switch segments (x, y) pairs for LineCollection
     x_vals = df_block[x].values
-    y_vals = df_block['box rank'].values
+    y_vals = df_block[y].values
     colors = np.array(['black'] * (len(y_vals) - 1))
-    styles = ['dashed' if x else 'solid' for x in df_block['stay/switch'].values[1:]]
+    # styles = ['dashed' if x else 'solid' for x in df_block['stay/switch'].values[1:]]
     segments = [[(x_vals[i], y_vals[i]), (x_vals[i + 1], y_vals[i + 1])] for i in range(len(x_vals) - 1)]
 
     # Create the LineCollection
-    lc = LineCollection(segments, colors = colors, linestyles = styles, linewidth = 1, zorder = 0)
+    line_kwargs = kwargs_handler(kwargs, 'line_kwargs', dict(linestyles='--', linewidth = 1, zorder = 0))
+    lc = LineCollection(segments, colors = colors, **line_kwargs)
 
+    # Set labels
     ax.add_collection(lc)
     ax.autoscale()
-    title = titler(title, title_prefix, conds)
+    title = titler(title = title, title_prefix = title_prefix, conds = conds)
     ax.set_title(title)
-    ax.set_ylabel("Boxes")
-    ax.set_xlabel(x)
+    ax.set_ylabel(unitler(y, y_unit))
+    ax.set_xlabel(unitler(x, x_unit))
 
     # Add reward outcomes with shaded (rewarded) and empty (not rewarded) markers
-    colors = np.array([box_colors[i] for i in y_vals])
+    colors = np.array([box_colors[i] for i in df_block['box rank'].values])
     mask = df_block['reward outcomes'] == True
     ax.scatter(x_vals[mask], y_vals[mask], c=colors[mask], marker='^', s = 80, zorder = 2)
     ax.scatter(x_vals[~mask], y_vals[~mask], edgecolors=colors[~mask], marker='v', s = 80, zorder = 2, facecolors ="none")
-    ax.set_xlim([0, x_vals.max() + 1])
-    ax.set_yticks(range(len(schedules)), box_labels, rotation = 90, va = 'center')
 
     # Create legend manually with proxy artists
     if legend:
-        legend_kwargs = kwargs.pop('legend_kwargs', {'loc': 'upper right'})
-
-        legend_elements = ([Line2D([0], [0], color=box_colors[i], linestyle='-', label=box_labels[i]) for i in range(len(box_colors))]
-                           + [Line2D([0], [0], color='black', linestyle='-', label='stay pushes'),
-                              Line2D([0], [0], color='black', linestyle='--', label='switch times')]
-                           + [Line2D([0], [0], color='green', linestyle='', marker='^', label='rewarded'),
-                              Line2D([0], [0], color='red', linestyle='', marker='v', label='no reward')])
-
+        legend_kwargs = kwargs_handler(kwargs, 'legend_kwargs', dict(loc='upper right'))
+        legend_elements = ([Line2D([0], [0], color=box_colors[j], linestyle='-', label=schedules[i]) for i, j in enumerate(sorted(df_block['box rank'].unique()))]
+                           + [Line2D([0], [0], color='black', linestyle='', marker='^', label='rewarded'),
+                              Line2D([0], [0], color='black', linestyle='', marker='v', markerfacecolor = 'none', label='no reward')])
         ax.legend(handles=legend_elements, **legend_kwargs)
     return ax
 
 
-def plot_push_intervals(df: pd.DataFrame, conds: dict = None, title: str = None, title_prefix: str = 'Push intervals for',
+def plot_pushes(df: pd.DataFrame, conds: dict = None, title: str = None, title_prefix: str = 'Pushes for ',
+                      box_colors: list = BOX_COLORS, box_labels: list = BOX_LABELS,
+                      legend: bool = True, ax: plt.Axes = None, **kwargs) -> plt.Axes:
+
+
+    ax = plot_block_events(df, conds= conds, title= title, title_prefix= title_prefix, box_colors= box_colors, legend= legend, ax= ax, **kwargs)
+
+    # Custom plotting logic
+    df_block = utils.data.filter_df(df, conds).reset_index()
+    schedules = np.sort(df_block['schedule'].unique())
+    x_vals = df_block['push times'].values
+    ax.set_xlim([0, x_vals.max() + 1])
+    ax.set_yticks(range(len(schedules)), box_labels, rotation = 90, va = 'center')
+    ax.set_ylabel('')
+    return ax
+
+
+def plot_runlengths(df: pd.DataFrame, null_model: bool = False, disp_js: bool = False) -> plt.Axes:
+    # Identify consecutive pushes and when they switch
+    x = df.index.get_level_values('push #')
+    consecutive_mask = x[1:] - x[:-1] == 1
+    change_mask = (df['stay/switch'] == 'switch') & np.insert(consecutive_mask, 0, True)
+    push_nums = utils.data.get_blocks(df)["push times"].rank().astype(
+        int)  # Calculate from scratch in case pushes got dropped
+    change_mask[push_nums == 1] = True
+
+    # Count the runlengths at different boxes
+    group_labels = change_mask.cumsum()
+    labeled_lengths = pd.DataFrame(
+        {"group": group_labels, "box": df['box'],
+         "next box": utils.data.get_blocks(df['box']).shift(-1).fillna('missing')}
+    ).set_index(df.index)
+    labeled_lengths_all = labeled_lengths.groupby(['subject', 'kappa', 'box', 'group']).size().to_frame().rename(
+        columns={0: 'length'})
+    labeled_lengths_all = labeled_lengths_all[
+        (labeled_lengths_all['length'] > 1) & (labeled_lengths_all['length'] <= 10)]
+
+    # Calculate the distribution of runlengths under a dice that is rolled by visitation frequencies
+    visit_freqs = df.groupby(['subject', 'kappa'])['box'].value_counts(normalize=True).to_frame()
+
+    # Contrast low and high kappa conditions
+    kappas = {
+        'marco': (0.01, 0.1),
+        'dylan': (0.01, 0.1),
+        'humans': (0.0, 0.1),
+        'viktor': (0.0, 0.1)
+    }
+    subjects = df.index.unique('subject')
+    fig, axes = plt.subplots(len(subjects), 2, figsize=(15, 5 * len(subjects)))
+    for i, subj in enumerate(subjects):
+        for j, kappa in enumerate(kappas[subj]):
+            bp(sns.histplot)(labeled_lengths_all, x='length', accumulate=True, conds={'subject': subj, 'kappa': kappa},
+                             title_prefix="Distribution of runlengths", discrete=True, stat='probability',
+                             common_norm=True, multiple='dodge', ax=axes[i, j])
+
+            # Overlay random dice probabilities from geometric distribution
+            if null_model:
+                bars = axes[i,j].patches
+                bar_width = bars[0].get_width()  # Width of one bar
+                probs = visit_freqs.loc[(subj, kappa)]
+                boxes = sorted(probs.index.unique('box'))
+                handles = axes[i, j].get_legend().legend_handles
+                labels = [t.get_text() for t in axes[i, j].get_legend().get_texts()]
+                for b, box in enumerate(boxes):
+                    try:
+                        p = probs.loc[box].iloc[0]
+                        run_lengths = labeled_lengths_all.loc[(subj, kappa, box), 'length'].sort_values().unique()
+                        geom = p ** run_lengths * (1 - p)
+                        offset = (b - (len(boxes) - 1) / 2) * bar_width
+                        x = run_lengths + offset
+                        axes[i, j].plot(x, geom, c=BOX_COLORS[BOX_LABELS.index(box)], label = 'random dice')
+                        if disp_js:
+                            bar_heights = get_bar_heights(axes[i, j], x_centers=run_lengths)
+                            # for k, bar in enumerate(bar_heights[box]):
+                            #     axes[i, j].text(x[k], bar, f'{jensenshannon(geom, bar):.1f}', ha='center', va='bottom', fontsize = 7)
+                            axes[i, j].set_title(axes[i, j].get_title() + f'\nJS-distance = {jensenshannon(geom, bar_heights[box])}')
+                            # print(f"Jensen-shannon distance between empirical distribution and null distribution of ({subj}, {kappa}, {box}): {jensenshannon(geom, bar_heights[box])}")
+                    except:
+                        continue
+                axes[i, j].legend(handles = handles + [Line2D([0], [0], color='black', linestyle='-', label='random dice')], labels = labels + ['random dice'] )
+            axes[i, j].sharex(axes[i, 0])
+            axes[i, j].sharey(axes[i, 0])
+    fig.tight_layout()
+    return axes
+
+
+# def plot_runlengths_by_box(df: pd.DataFrame) -> plt.Axes:
+#     # Identify consecutive pushes and when they switch
+#     x = df.index.get_level_values('push #')
+#     consecutive_mask = x[1:] - x[:-1] == 1
+#     change_mask = (df['stay/switch'] == 'switch') & np.insert(consecutive_mask, 0, True)
+#     push_nums = utils.data.get_blocks(df)["push times"].rank().astype(
+#         int)  # Calculate from scratch in case pushes got dropped
+#     change_mask[push_nums == 1] = True
+#
+#     # Count the runlengths at different boxes
+#     group_labels = change_mask.cumsum()
+#     labeled_lengths = pd.DataFrame(
+#         {"group": group_labels, "box": df['box'],
+#          "next box": utils.data.get_blocks(df['box']).shift(-1).fillna('missing')}
+#     ).set_index(df.index)
+#     labeled_lengths['next box'] = labeled_lengths.groupby('group')['next box'].transform('last')
+#
+#     labeled_lengths_by_box = labeled_lengths.groupby(
+#         ['subject', 'kappa', 'next box', 'box label', 'group']).size().to_frame().rename(columns={0: 'length'})
+#     labeled_lengths_by_box = labeled_lengths_by_box[
+#         (labeled_lengths_by_box['length'] > 1) & (labeled_lengths_by_box['length'] <= 10)]
+#
+#     # Contrast low and high kappa conditions
+#     kappas = {
+#         'marco': (0.01, 0.1),
+#         'dylan': (0.01, 0.1),
+#         'humans': (0.0, 0.1),
+#         'viktor': (0.0, 0.1)
+#     }
+#     subjects = df.index.unique('subject')
+#     fig, axes = plt.subplots(len(subjects), len(BOX_LABELS) * 2, figsize=(25, 4 * len(subjects)))
+#     for i, subj in enumerate(subjects):
+#         for j, box in enumerate(BOX_LABELS):
+#             for k, kappa in enumerate(kappas[subj]):
+#                 actual_j = 2 * j + k % 2
+#                 bp(sns.histplot)(labeled_lengths_by_box, x='length', accumulate=True,
+#                                  conds={'subject': subj, 'kappa': kappa, 'next box': box},
+#                                  palette=[BOX_COLORS[i] for i in range(len(BOX_COLORS)) if BOX_LABELS[i] != box],
+#                                  box_labels=[b for b in BOX_LABELS if b != box],
+#                                  title_prefix="Distribution of runlengths", title_kwargs={'fontsize': 10},
+#                                  discrete=True, stat='probability', common_norm=True, multiple='dodge',
+#                                  ax=axes[i, actual_j])
+#
+#                 # Overlay random dice probabilities from geometric distribution
+#                 probs = visit_freqs.loc[(subj, kappa)]
+#                 for b in probs.index.unique('box label'):
+#                     try:
+#                         if b != box:
+#                             p = probs.loc[b].iloc[0]
+#                             run_lengths = labeled_lengths_all.loc[(subj, kappa, b), 'length'].sort_values().unique()
+#                             geom = p ** run_lengths * (1 - p)
+#                             axes[i, actual_j].plot(run_lengths, geom, c=BOX_COLORS[BOX_LABELS.index(b)])
+#                     except:
+#                         continue
+#
+#                 axes[i, actual_j].sharex(axes[i, 0])
+#                 axes[i, actual_j].sharey(axes[i, 0])
+#     fig.tight_layout()
+
+def plot_fisher(df: pd.DataFrame, conds: dict = None, title: str = None, title_prefix: str = 'Fisher info for',
                         box_colors: list = BOX_COLORS, box_labels: list = None,
-                        legend: bool = True, ax: Optional[plt.Axes] = None, **kwargs) -> plt.Axes:
+                        legend: bool = True, specific: bool = False, ax: plt.Axes = None, **kwargs) -> plt.Axes:
     """
     Plots the push intervals for each box, with different colors and line styles based on the stay/switch behavior,
     and displays reward outcomes with markers. Optionally adds a custom legend.
@@ -105,6 +259,7 @@ def plot_push_intervals(df: pd.DataFrame, conds: dict = None, title: str = None,
         box_colors: List of colors for each box
         box_labels: Labels of each box
         legend: If True, a custom legend is added to the plot.
+        specific: if True, then plot the specific information
         ax: Axes to plot on. If none, a new figure and axes are created using plt.subplots. Specify keyword arguments in `fig_kwargs`.
         **kwargs: Additional keyword arguments.
             - 'fig_kwargs': Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
@@ -121,7 +276,8 @@ def plot_push_intervals(df: pd.DataFrame, conds: dict = None, title: str = None,
     x = 'push times'
     df_block = utils.data.filter_df(df, conds)
     x_vals = df_block[x].values
-    y_vals = df_block['consecutive push intervals'].values
+    y = 'specific fisher' if specific else 'fisher'
+    y_vals = df_block[y].values
     colors = np.array(['black'] * len(y_vals))
 
     # Create segments (x, y) pairs for LineCollection
@@ -152,9 +308,9 @@ def plot_push_intervals(df: pd.DataFrame, conds: dict = None, title: str = None,
     conds['shape'] = shape[0]
     box_labels = box_labels if box_labels else schedules
 
-    title = titler(title, title_prefix, conds)
+    title = titler(title=title, title_prefix=title_prefix, conds=conds)
     ax.set_title(title)
-    ax.set_ylabel(unitler('Push intervals', 's'))
+    ax.set_ylabel('Fisher information')
     ax.set_xlabel(unitler(x, 's'))
 
     # Add reward outcomes with shaded (rewarded) and empty (not rewarded) markers
@@ -195,13 +351,19 @@ def plot_push_intervals_vs_reward_intervals(df: pd.DataFrame, title_prefix: str 
     # Filter df here or inside regplot using conds
     conds = kwargs.pop('conds', None)
     df = utils.data.filter_df(df, conds)
-    fit_results = regplot(df['reward intervals'].to_numpy(), df['same-box push intervals'].to_numpy(), line_kws={'color': 'black'}, ax = ax,
+    kwargs['ax'] = ax
+    fit_results = regplot(df['reward intervals'].to_numpy(), df['same-box push intervals'].to_numpy(), line_kws={'color': 'black'},
                           **kwargs)
 
+    x_max = max(ax.get_xlim()[1], ax.get_ylim()[1])
+    x = np.arange(x_max)
+    ax.plot([0, x_max], [0, x_max], linestyle='dashed', color='black')
+    ax.fill_between(x, x, x_max, color="green", alpha=0.1)
+    ax.fill_between(x, x, color="red", alpha=0.1)
     return ax, fit_results.rsquared, fit_results.params[1]
 
 def plot_experiment_parameters(df: pd.DataFrame, conds: dict, title: str = "Experiment parameters by session",
-                               label_rotation: float = 35, ax: Optional[plt.Axes] = None, **kwargs) -> plt.Axes:
+                               label_rotation: float = 35, ax: plt.Axes = None, **kwargs) -> plt.Axes:
     """
     Plots the distribution of experiment parameters (kappa, stimulus type, shape) across different sessions.
     Displays the number of blocks associated with each parameter and session.
@@ -272,7 +434,7 @@ def plot_experiment_parameters(df: pd.DataFrame, conds: dict, title: str = "Expe
     return ax
 
 def plot_continuous3d_dict(continuous_data: dict, list_blocks: list, x: str, title: str = None, color_key: str = 'time',
-                           ax: Optional[plt.Axes] = None, **kwargs) -> tuple:
+                           ax: plt.Axes = None, **kwargs) -> tuple:
     """
     Plots 3D scatter data for specified blocks from a dictionary of continuous data. The plot is color-coded
     based on a specified key (e.g., 'time').
@@ -327,7 +489,7 @@ def plot_continuous3d_dict(continuous_data: dict, list_blocks: list, x: str, tit
     return ax, p
 
 def plot_continuous3d_df(df: pd.DataFrame, continuous_data: dict, x: str, title: str = None,
-                          color_key: str = 'time since last push (s)', color_filter = None, ax: Optional[plt.Axes] = None,
+                          color_key: str = 'time since last push (s)', color_filter = None, ax: plt.Axes = None,
                           **kwargs) -> tuple:
     """
     Plots 3D scatter data for specified push intervals from a DataFrame containing block-level data.
@@ -417,7 +579,7 @@ def plot_continuous3d_df(df: pd.DataFrame, continuous_data: dict, x: str, title:
 
 def plot_continuous2d_df(df: pd.DataFrame, continuous_data: dict, x: str, dims: tuple = (0, 1),
                           title: str = None, color_key: str = 'time since last push (s)', color_filter = None,
-                          ax: Optional[plt.Axes] = None, **kwargs) -> tuple:
+                          ax: plt.Axes = None, **kwargs) -> tuple:
     """
     Plots 2D scatter data for specified push intervals from a DataFrame containing block-level data.
     The plot is color-coded based on a specified key (e.g., 'time since last push').

@@ -68,7 +68,6 @@ def open_meta_file(subject: str, path: str = ".") -> pd.DataFrame:
     """
 
     df_meta = pd.read_excel(os.path.join(path, f"table_{subject}.xlsx"))
-    # df_meta["sessionId"] = df_meta["sessionId"].astype(int).sort_values()
     return df_meta
 
 
@@ -82,6 +81,7 @@ def open_pickle_file(path: str) -> Any:
     Returns:
         Contents of pickle file.
     """
+
     # Open the pickle file and load its contents
     with open(path, "rb") as f:
         ds = pickle.load(f)
@@ -113,7 +113,7 @@ def make_df(path: str) -> pd.DataFrame:
         "shape": [],
         "stimulus type": [],
         "kappa": [],
-        "box": [],
+        "box position": [],
         "push times": [],
         "same-box push intervals": [],
         "reward outcomes": [],
@@ -227,7 +227,7 @@ def make_df(path: str) -> pd.DataFrame:
                             staging_dict["shape"].extend(
                                 [shape for _ in range(n_events)]
                             )
-                            staging_dict["box"].extend([i + 1 for _ in range(n_events)])
+                            staging_dict["box position"].extend([i + 1 for _ in range(n_events)])
                             staging_dict["stimulus type"].extend(
                                 [stim_type for _ in range(n_events)]
                             )
@@ -289,12 +289,9 @@ def make_df(path: str) -> pd.DataFrame:
         )
         - 1
     ).astype(int) # ranks boxes fast --> medium --> slow
-    df['box label'] = df['box rank'].map(box_labels)
+    df['box'] = df['box rank'].map(box_labels)
     df["normalized pushes"] = df["same-box push intervals"] / df["schedule"]
     df["consecutive push intervals"] = df["push times"].diff()
-
-    # Drop all push intervals with value 0, these are bad data
-    df = df[df["consecutive push intervals"] > 0]
 
     df["push #"] = (
         df.groupby(["subject", "session", "block"])["push times"].rank().astype(int)
@@ -313,6 +310,9 @@ def make_df(path: str) -> pd.DataFrame:
         df["push #"] == 1, "push times"
     ] # Make sure the first push interval of each block is just the time of that push
     df.loc[df["push #"] == 1, "stay/switch"] = 'stay' # Count first push of each block as 'stay' push
+
+    # Finally, drop all push intervals with value 0 as these are bad data
+    df = df[df["consecutive push intervals"] > 0]
 
     # Set index, refer to INDEX definition at top of this file
     df.set_index(INDEX, inplace=True)
@@ -344,7 +344,9 @@ def filter_df(
     Args:
         df: DataFrame containing experiment data.
         conds: Dictionary mapping column or index level names to values to filter on.
-        attempt_index: Flag indicating whether to attempt converting conds to multi-index key. Defaults to True.
+        attempt_index: Flag indicating whether to attempt converting `conds` to MultiIndex key. Defaults to True. Turn
+        off if you want to keep the columns to filter on in the resulting DataFrame, otherwise they will be dropped if
+        using `conds` as MultiIndex key.
 
     Returns:
         Filtered DataFrame.
@@ -391,19 +393,20 @@ def process_block_safely(func: Callable) -> Callable:
     return wrapper
 
 
-def get_blocks(df: pd.DataFrame, sort: bool = True) -> DataFrameGroupBy:
+def get_blocks(df: pd.DataFrame, sort: bool = True, **kwargs) -> DataFrameGroupBy:
     """
     Group DataFrame by subject, session, and block.
 
     Args:
         df: DataFrame containing experiment data.
-        sort: Flag to sort groups
+        sort: Flag to sort groups.
+        **kwargs: Keyword arguments to `DataFrame.groupby`.
 
     Returns:
         Grouped DataFrame object.
     """
 
-    return df.groupby(["subject", "session", "block"], sort = sort)
+    return df.groupby(["subject", "session", "block"], sort = sort, **kwargs)
 
 
 def process_blocks(
@@ -563,7 +566,7 @@ def get_continuous_from_df_to_dict(df: pd.DataFrame, data_dir: str) -> (dict, li
 
     Returns:
         A tuple containing:
-            - data: A dictionary with extracted continuous data from the blocks.
+            - data: A dictionary with extracted continuous data from the blocks. Keys are the block index from the DataFrame.
             - errors: A list of blocks causing errors encountered during the extraction process.
     """
 
@@ -577,8 +580,8 @@ def get_continuous_from_df_to_dict(df: pd.DataFrame, data_dir: str) -> (dict, li
         Helper function to extract continuous data from a specific block and session for a given index.
 
         Args:
-            df (pd.DataFrame): The input DataFrame.
-            index (tuple): The index of the current block, containing subject, session, and block.
+            df: The input DataFrame.
+            index: The index of the current block, containing subject, session, and block.
 
         Returns:
             dict: The extracted continuous data for the specified block and session.
@@ -672,14 +675,15 @@ def get_continuous3d_from_df_to_polars(
     Extract continuous data for each push interval from the provided DataFrame and return it as a new Polars DataFrame.
 
     Args:
-        df (pl.DataFrame): The input Polars DataFrame containing session, block, and push interval information.
-        data_dir (str): The directory path where the subject files are located.
-        key (str): continuous data variable to extract.
+        df: The input Polars DataFrame containing session, block, and push interval information.
+        data_dir: The directory path where the subject files are located.
+        key: continuous data variable to extract.
 
     Returns:
-        pl.DataFrame: A Polars DataFrame with continuous data (x, y, z) and corresponding time (t),
+        A Polars DataFrame with continuous data (x, y, z) and corresponding time (t),
                       indexed by subject, session, block, and push interval.
     """
+
     # Initialize empty arrays to store valid position and time data
     p_valid = np.empty((0, 3))  # Array to store valid positions (x, y, z)
     t_valid = np.empty(0)  # Array to store valid time points
@@ -799,19 +803,20 @@ def extend_df(df: pd.DataFrame, blocks_dict: dict, col_name: str, by_box: bool =
     Args:
         df: The input DataFrame to extend with a new column.
         blocks_dict: A dictionary containing block data for each subject, session, and block.
-                             If by_box is False (default), the dictionary should have the format:
-                             { (subject, session, block): values }
-                             where 'values' is a list of events aligned to that block.
+                     If by_box is False (default), the dictionary should have the format:
+                     { (subject, session, block): values }
+                     where 'values' is a list of events aligned to that block.
 
-                             If by_box is set to True, the dictionary should have the format:
-                             { (subject, session, block): {box: values} }
-                             where 'box' corresponds to box's ordered by schedules and 'values' is a list of values for each box.
+                     If by_box is set to True, the dictionary should have the format:
+                     { (subject, session, block): {box: values} }
+                     where 'box' corresponds to box's ordered by schedules and 'values' is a list of values for each box.
         col_name: The name of the new column to add to the DataFrame.
         by_box: If true, then blocks_dict is formatted as separate lists for each box and thus each list needs to be matched to its corresponding box in the dataframe. Otherwise, it is assumed that each row of an item in blocks_dict is aligned to each event in that block.
 
     Returns:
         The original DataFrame with the new column added and filled with data from blocks_dict.
     """
+
     # Initialize the new column with NaN values
     df[col_name] = np.nan
 
@@ -867,6 +872,7 @@ def exclusion_criteria(df: pd.DataFrame) -> pd.DataFrame:
     Returns:
         A filtered DataFrame that has had the exclusion criteria applied.
     """
+
     # Count the number of pushes per block
     n_pushes_per_block = get_blocks(df).size().reset_index(name="n pushes per block")
 

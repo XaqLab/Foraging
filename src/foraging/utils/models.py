@@ -503,17 +503,21 @@ class GammaObservation(Observation):
             return 1.0 - p_t
         return p_t
 
-    def surprise(self, obs: tuple[bool, float], latent: float | ArrayLike, *args, **kwargs):
+    def surprise(self, obs: (bool, float), latent: float | ArrayLike, *args, **kwargs):
         return -np.log(self.probability(obs, latent, *args, **kwargs))
 
-    def fisher_info(self, obs: tuple[bool, float], latent: float | ArrayLike, *args, **kwargs):
+    def fisher_info(self, obs: (bool, float), latent: float | ArrayLike, *args, **kwargs):
+        # Extract the reward availability and push interval.
+        t = obs[1]
+        return ((t/latent**2) * gamma.pdf(t, self.shape, scale = latent / self.shape))**2 / gamma.cdf(t, self.shape, scale = latent / self.shape)  + ((t/latent**2) * gamma.pdf(t, self.shape, scale = latent / self.shape))**2 / (1 - gamma.cdf(t, self.shape, scale = latent / self.shape))
+
+    def specific_fisher_info(self, obs: (bool, float), latent: float | ArrayLike, *args, **kwargs):
         # Extract the reward availability and push interval.
         is_avail = obs[0]
         t = obs[1]
-        return ((t/latent**2) * gamma.pdf(t, self.shape, scale = latent / self.shape))**2 / gamma.cdf(t, self.shape, scale = latent / self.shape)  + ((t/latent**2) * gamma.pdf(t, self.shape, scale = latent / self.shape))**2 / (1 - gamma.cdf(t, self.shape, scale = latent / self.shape))
-        # if is_avail:
-        #     return ((t/latent**2) * gamma.pdf(t, self.shape, scale = latent / self.shape) / gamma.cdf(t, self.shape, scale = latent / self.shape))**2
-        # return ((t/latent**2) * gamma.pdf(t, self.shape, scale = latent / self.shape) / (1 - gamma.cdf(t, self.shape, scale = latent / self.shape)))**2
+        if is_avail:
+            return ((t/latent**2) * gamma.pdf(t, self.shape, scale = latent / self.shape) / gamma.cdf(t, self.shape, scale = latent / self.shape))**2
+        return ((t/latent**2) * gamma.pdf(t, self.shape, scale = latent / self.shape) / (1 - gamma.cdf(t, self.shape, scale = latent / self.shape)))**2
 
     def deriv(self, obs: tuple[bool, float], latent: float | ArrayLike, *args, **kwargs):
         # Extract the reward availability and push interval.
