@@ -9,7 +9,7 @@ logger.setLevel(logging.DEBUG)
 
 import numpy as np
 import pandas as pd
-import polars as pl
+# import polars as pl
 
 from functools import wraps
 import os
@@ -336,7 +336,7 @@ def display_df(df: pd.DataFrame, cols: list[str]) -> DisplayHandle:
 
 
 def filter_df(
-    df: pd.DataFrame, conds: dict[str, Any] = None, attempt_index: bool = True
+    df: pd.DataFrame, conds: dict[str, Any] = None, attempt_index: bool = False
 ) -> pd.DataFrame:
     """
     Filter a DataFrame according to conditions specified in a dictionary.
@@ -344,9 +344,8 @@ def filter_df(
     Args:
         df: DataFrame containing experiment data.
         conds: Dictionary mapping column or index level names to values to filter on.
-        attempt_index: Flag indicating whether to attempt converting `conds` to MultiIndex key. Defaults to True. Turn
-        off if you want to keep the columns to filter on in the resulting DataFrame, otherwise they will be dropped if
-        using `conds` as MultiIndex key.
+        attempt_index: Flag indicating whether to attempt converting `conds` to MultiIndex key. Defaults to False. Turn
+        on if you want slight performance boost in exchange for dropping the filtered index levels using .loc on `conds` as MultiIndex key.
 
     Returns:
         Filtered DataFrame.
@@ -668,76 +667,76 @@ def get_continuous3d_from_df_to_df(
     return new_df
 
 
-def get_continuous3d_from_df_to_polars(
-    df: pl.DataFrame, data_dir: str, key: str = "position"
-) -> pl.DataFrame:
-    """
-    Extract continuous data for each push interval from the provided DataFrame and return it as a new Polars DataFrame.
-
-    Args:
-        df: The input Polars DataFrame containing session, block, and push interval information.
-        data_dir: The directory path where the subject files are located.
-        key: continuous data variable to extract.
-
-    Returns:
-        A Polars DataFrame with continuous data (x, y, z) and corresponding time (t),
-                      indexed by subject, session, block, and push interval.
-    """
-
-    # Initialize empty arrays to store valid position and time data
-    p_valid = np.empty((0, 3))  # Array to store valid positions (x, y, z)
-    t_valid = np.empty(0)  # Array to store valid time points
-    new_index = []  # List to store new index values for the DataFrame
-
-    # Retrieve subjects and open their respective files
-    subjects = get_subjects(data_dir)
-    files = {subj: open_subject_file(subj, data_dir) for subj in subjects}
-
-    # Iterate over each block of data from the DataFrame
-    for (subj, sess, block), block_data in get_blocks(df):
-        # Get continuous data (position and time) for the current block
-        res = get_continuous_from_block(files[subj], block_data["_session"][0], block)
-        p, t = res[key], res["time"]
-
-        # Skip block if no valid data was retrieved
-        if p is None:
-            continue
-
-        # For each push interval, find the start and end times, and locate the nearest positions
-        end_t = block_data["push times"]
-        start_t = np.insert(
-            end_t[:-1], 0, 0
-        )  # Insert 0 for the first push interval start time
-        start_idx, end_idx = np.searchsorted(t, [start_t, end_t])
-
-        # Construct continuous data and a new index based on the discrete push data
-        old_index = (subj, sess, block)
-        for i, (s, e) in enumerate(zip(start_idx, end_idx)):
-            if len(p[s:e]) == len(t[s:e]):
-                p_valid = np.concatenate((p_valid, p[s:e]), axis=0)
-                t_valid = np.concatenate((t_valid, t[s:e]))
-                idx = [old_index + (block_data["push times"][i],)] * len(t[s:e])
-                new_index += idx
-
-    # Convert the new index list to a NumPy array
-    new_index = np.array(new_index)
-
-    # Close all opened subject files
-    [f.close() for f in files.values()]
-
-    # Create a Polars DataFrame from the valid position and time data
-    new_df = pl.DataFrame(
-        {"x": p_valid[:, 0], "y": p_valid[:, 1], "z": p_valid[:, 2], "t": t_valid},
-        schema_overrides={"t": pl.Float64},
-    )
-
-    # Add additional columns for subject, session, block, and push times
-    return new_df.with_columns(
-        pl.Series("subject", new_index[:, 0]),
-        pl.Series("session", new_index[:, 1]),
-        pl.Series("block", new_index[:, 2]),
-        pl.Series("push times", new_index[:, 3]),
-    )
+# def get_continuous3d_from_df_to_polars(
+#     df: pl.DataFrame, data_dir: str, key: str = "position"
+# ) -> pl.DataFrame:
+#     """
+#     Extract continuous data for each push interval from the provided DataFrame and return it as a new Polars DataFrame.
+#
+#     Args:
+#         df: The input Polars DataFrame containing session, block, and push interval information.
+#         data_dir: The directory path where the subject files are located.
+#         key: continuous data variable to extract.
+#
+#     Returns:
+#         A Polars DataFrame with continuous data (x, y, z) and corresponding time (t),
+#                       indexed by subject, session, block, and push interval.
+#     """
+#
+#     # Initialize empty arrays to store valid position and time data
+#     p_valid = np.empty((0, 3))  # Array to store valid positions (x, y, z)
+#     t_valid = np.empty(0)  # Array to store valid time points
+#     new_index = []  # List to store new index values for the DataFrame
+#
+#     # Retrieve subjects and open their respective files
+#     subjects = get_subjects(data_dir)
+#     files = {subj: open_subject_file(subj, data_dir) for subj in subjects}
+#
+#     # Iterate over each block of data from the DataFrame
+#     for (subj, sess, block), block_data in get_blocks(df):
+#         # Get continuous data (position and time) for the current block
+#         res = get_continuous_from_block(files[subj], block_data["_session"][0], block)
+#         p, t = res[key], res["time"]
+#
+#         # Skip block if no valid data was retrieved
+#         if p is None:
+#             continue
+#
+#         # For each push interval, find the start and end times, and locate the nearest positions
+#         end_t = block_data["push times"]
+#         start_t = np.insert(
+#             end_t[:-1], 0, 0
+#         )  # Insert 0 for the first push interval start time
+#         start_idx, end_idx = np.searchsorted(t, [start_t, end_t])
+#
+#         # Construct continuous data and a new index based on the discrete push data
+#         old_index = (subj, sess, block)
+#         for i, (s, e) in enumerate(zip(start_idx, end_idx)):
+#             if len(p[s:e]) == len(t[s:e]):
+#                 p_valid = np.concatenate((p_valid, p[s:e]), axis=0)
+#                 t_valid = np.concatenate((t_valid, t[s:e]))
+#                 idx = [old_index + (block_data["push times"][i],)] * len(t[s:e])
+#                 new_index += idx
+#
+#     # Convert the new index list to a NumPy array
+#     new_index = np.array(new_index)
+#
+#     # Close all opened subject files
+#     [f.close() for f in files.values()]
+#
+#     # Create a Polars DataFrame from the valid position and time data
+#     new_df = pl.DataFrame(
+#         {"x": p_valid[:, 0], "y": p_valid[:, 1], "z": p_valid[:, 2], "t": t_valid},
+#         schema_overrides={"t": pl.Float64},
+#     )
+#
+#     # Add additional columns for subject, session, block, and push times
+#     return new_df.with_columns(
+#         pl.Series("subject", new_index[:, 0]),
+#         pl.Series("session", new_index[:, 1]),
+#         pl.Series("block", new_index[:, 2]),
+#         pl.Series("push times", new_index[:, 3]),
+#     )
 
 
 def populate_busyness(df: pd.DataFrame) -> (dict, set):

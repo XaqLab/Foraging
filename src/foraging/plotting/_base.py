@@ -37,9 +37,7 @@ def titler(title_prefix: str = None, title: str = None, conds: dict = None):
         conds = {}
     if title_prefix is None:
         title_prefix = ''
-    if title is None:
-        title = ''
-    return title_prefix + '\n' + ', '.join([k + ' = ' + str(v) for k, v in conds.items()]) if len(title) == 0 else title
+    return title if title else title_prefix + '\n' + ', '.join([k + ' = ' + str(v) for k, v in conds.items()])
 
 def unitler(label: str, unit: str):
     if unit is None:
@@ -115,7 +113,7 @@ def bp(func: Callable):
     """
 
     @wraps(func)
-    def wrapper(df: pd.DataFrame = None, x: str = None, conds: dict = None, accumulate: bool = False, palette: list = None, box_colors: list = BOX_COLORS, box_labels: list = BOX_LABELS, title: str = None, title_prefix: str = '', x_unit: str = None, y_unit: str = None, min_obs: int = None, attempt_index: bool = True, ax: plt.Axes = None, **kwargs) -> Any:
+    def wrapper(df: pd.DataFrame = None, x: str = None, conds: dict = None, accumulate: bool = False, palette: list = None, box_colors: list = BOX_COLORS, box_labels: list = BOX_LABELS, title: str = None, title_prefix: str = None, x_unit: str = None, y_unit: str = None, min_obs: int = None, attempt_index: bool = True, ax: plt.Axes = None, **kwargs) -> Any:
         """
         Convenience decorator that customizes figure in formulaic fashion
 
@@ -537,7 +535,7 @@ def plot_elbow(x: ArrayLike, y: ArrayLike, fit: bool=False, func: Callable=None,
     return x_elbow, y_elbow, k_fit, ax
 
 
-def plot_variable_subplots(df: pd.DataFrame, func: Callable, row_cond: str, col_cond: str, axes: Iterable[plt.Axes] = None, legend: bool = True, savefig: str = None, **kwargs):
+def plot_variable_subplots(df: pd.DataFrame, func: Callable, row_cond: str, col_cond: str, axes: Iterable[plt.Axes] = None, legend: bool = True, simplify_row_title: bool = False, savefig: str = None, **kwargs):
     def _group_size(g, group):
         if group in g.columns:
             return g[group].nunique()
@@ -556,8 +554,9 @@ def plot_variable_subplots(df: pd.DataFrame, func: Callable, row_cond: str, col_
             func(df_group, conds=conds, ax=axes[i,j], **kwargs)
             if j > 0:
                 axes[i, j].set_ylabel("")
-            # axes[i, j].set_title(f'{col_cond}={col_val}')
-        for k in range(j + 1, max_cols):
+            if simplify_row_title:
+                axes[i, j].set_title(f'{col_cond}={col_val}')
+        for k in range(j + 1, max_cols): # intentially using the last j from previous loop
             fig.delaxes(axes[i, k])
 
     # Customize global legend
