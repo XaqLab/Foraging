@@ -42,6 +42,11 @@ class AbstractID(ABC):
     def fields(self, *args, **kwargs) -> Any:
         pass
 
+    @property
+    @abstractmethod
+    def values(self, *args, **kwargs) -> Any:
+        pass
+
 
 class AbstractRecord(ABC):
 
@@ -69,7 +74,7 @@ class AbstractRecordKeeper(AbstractRecord):
 
 
     @abstractmethod
-    def update(self, *args, **kwargs) -> Any:
+    def update_record(self, *args, **kwargs) -> Any:
         pass
 
 
@@ -114,9 +119,10 @@ class ArrayBelief(AbstractBelief):
 
     def normalize(self, inplace: bool = True, probabilities: np.ndarray = None):
         if inplace:
-            self.probabilities /= self.probabilities.sum()
+            self._probabilities /= self._probabilities.sum()
+            return self._probabilities
         else:
-            return probabilities / probabilities.sum()
+            return self._probabilities / self._probabilities.sum()
 
     def query(self, i: int, **kwargs):
         return self.probabilities[i]
@@ -152,15 +158,13 @@ class GammaScheduleBelief(ArrayBelief):
         return p_t
 
     def update(self, obs: tuple[bool, float], **kwargs):
-        self.probabilities = self.likelihood(obs, self.support) * self.probabilities
+        self.probabilities = self.likelihood(obs, self.support) * self.probabilities # this automatically normalizes due to setter property!!
 
-class ID(AbstractID):
 
-    def __init__(self, minimal: bool = False):
-        if minimal:
-            self._fields = INDEX[:MIN_INDEX]
-        else:
-            self._fields = INDEX
+class RealID(AbstractID):
+    def __init__(self, values: tuple):
+        self._values = values
+        self._fields = []
 
     @property
     def fields(self) -> list[str]:
@@ -169,6 +173,31 @@ class ID(AbstractID):
     @fields.setter
     def fields(self, fields: list[str]):
         self._fields = fields
+
+    @property
+    def values(self) -> tuple:
+        return self._values
+
+    @values.setter
+    def values(self, values: tuple):
+        self._values = values
+
+
+class MockID(RealID):
+    def __init__(self, values: int):
+        super().__init__((values,))
+        self._fields = ['id']
+
+
+class EventID(RealID):
+
+    def __init__(self, values: tuple, minimal: bool = False):
+        super().__init__(values)
+        if minimal:
+            self._fields = INDEX[:MIN_INDEX]
+        else:
+            self._fields = INDEX
+
 
 class Record(AbstractRecord):
 
@@ -224,7 +253,7 @@ class RecordKeeper(AbstractRecordKeeper):
         self._records[id] = Record(id, record)
 
 
-    def update(self, id: AbstractID, record: Any) -> Any:
+    def update_record(self, id: AbstractID, record: Any) -> Any:
         old_record = self.records[id].content
         self.records[id].content = record
         return old_record
@@ -246,7 +275,7 @@ class BeliefModule(RecordKeeper, AbstractBelief):
 
     @prior.setter
     def prior(self, prior: AbstractBelief):
-        self.update(self.content(i = 0).id, prior)
+        self.update_record(self.content(i = 0).id, prior)
 
 
     @property
@@ -256,8 +285,12 @@ class BeliefModule(RecordKeeper, AbstractBelief):
     @support.setter
     def support(self, support):
         # Change the support for all beliefs
-        for id, record in self.records.items():
+        for _, record in self.records.items():
             record.content.support = support
+
+    def update(self, *args, **kwargs):
+        # todo: implement this
+        pass
 
     def normalize(self, *args, **kwargs):
         # Normalize all beliefs

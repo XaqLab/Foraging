@@ -3,9 +3,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 import pandas as pd
 
-import utils.data
-from . import data
-from .data import process_block_safely
+from .data import process_block_safely, extend_df, bin_data
 
 def mcfadden_pseudo_rsquared(mdl, X, y):
     # 2. **Log-Likelihood**: Compute log-likelihood using sklearn's model
@@ -74,11 +72,11 @@ def kfold_fit_eval(df, k, fit_func, eval_func, fit_kwargs = {}, eval_kwargs = {}
         fit_model = fit_func(df_train, **fit_kwargs)
 
         # Get training results
-        utils.data.extend_df(df_train, eval_func(df_train, fit_model, **eval_kwargs), f'{fit_name} train results')
+        extend_df(df_train, eval_func(df_train, fit_model, **eval_kwargs), f'{fit_name} train results')
         train_results.append(df_train)
 
         # Evaluate on df_test
-        utils.data.extend_df(df_test, eval_func(df_test, fit_model, **eval_kwargs), f'{fit_name} test results')
+        extend_df(df_test, eval_func(df_test, fit_model, **eval_kwargs), f'{fit_name} test results')
         test_results.append(df_test)
     return pd.concat(train_results, axis = 0), pd.concat(test_results, axis = 0)
 
@@ -164,7 +162,7 @@ def sensory_likelihood(df: pd.DataFrame, index: tuple, probs):
 
 
 def null_likelihood_bins(df, x: str = 'push times', bins: int = 20):
-    df['bins'] = data.bin_data(df, x, bins)
+    df['bins'] = bin_data(df, x, bins)
     subjects = df.index.unique('subject')
     LL = {subject: [[]] * df.loc[(subject,),'bins'].nunique() for subject in subjects}
     n_obs_bins = {subject: np.zeros(df.loc[(subject,),'bins'].nunique()) for subject in subjects}
