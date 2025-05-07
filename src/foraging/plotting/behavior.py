@@ -211,7 +211,7 @@ def plot_runlengths(df: pd.DataFrame, null_model: bool = False, disp_js: bool = 
             if null_model:
                 bars = axes[i,j].patches
                 bar_width = bars[0].get_width()  # Width of one bar
-                probs = visit_freqs.loc[(subj, kappa)]
+                probs = visit_freqs.loc[(subj, kappa)] # Visit probabilities
                 boxes = sorted(probs.index.unique('box'))
                 handles = axes[i, j].get_legend().legend_handles
                 labels = [t.get_text() for t in axes[i, j].get_legend().get_texts()]
