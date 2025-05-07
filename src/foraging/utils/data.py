@@ -863,7 +863,7 @@ def exclusion_criteria(df: pd.DataFrame) -> pd.DataFrame:
     This function performs several exclusions based on the following criteria:
     1. Excludes blocks with fewer than 10 pushes.
     2. Excludes blocks with a schedule value of 80.
-    3. Excludes rows where consecutive push intervals are greater than 30.
+    3. Excludes rows where consecutive push intervals are greater than 30 s.
 
     Args:
         df: The DataFrame containing the data to be filtered.
@@ -887,7 +887,7 @@ def exclusion_criteria(df: pd.DataFrame) -> pd.DataFrame:
         get_blocks(df_filtered[df_filtered["schedule"] == 80]).size().index
     )
 
-    # Exclude rows where consecutive push intervals are greater than 30
+    # Exclude rows where consecutive push intervals are greater than 30 s
     df_filtered = df_filtered.drop(
         df_filtered[df_filtered["consecutive push intervals"] > 30].index
     )

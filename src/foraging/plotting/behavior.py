@@ -12,7 +12,7 @@ from matplotlib.lines import Line2D
 from scipy.spatial.distance import jensenshannon
 
 from foraging.plotting import BOX_COLORS
-from foraging.utils import BOX_LABELS, kwargs_handler
+from foraging.utils import INDEX, MIN_INDEX, BOX_LABELS, kwargs_handler
 from foraging.utils.data import get_blocks, filter_df
 from ._base import fig_init, titler, unitler, bp, regplot, get_bar_heights
 
@@ -123,7 +123,7 @@ def plot_frequencies_over_experiment(df: pd.DataFrame, category: str, conds: dic
 
     # Define horizontal offset for each session
     session_order = sorted(visit_freqs['session'].unique())
-    session_offsets = {session: i for i, session in enumerate(session_order)}  # spacing of 5 units
+    session_offsets = {session: i for i, session in enumerate(session_order)}
     visit_freqs['y_offset'] = visit_freqs['session'].map(session_offsets)
     visit_freqs['y'] = 1 - visit_freqs['proportion'] + visit_freqs['y_offset']
 
@@ -168,6 +168,78 @@ def plot_frequencies_over_experiment(df: pd.DataFrame, category: str, conds: dic
     ax.legend(loc='upper right', title=category)
     fig.tight_layout()
     return ax
+
+
+def plot_frequencies_over_experiment_v2(df: pd.DataFrame, category: str, conds: dict = None, title: str = None, title_prefix: str = None, palette: list = BOX_COLORS, label_rotation: float = 35, ax: plt.Axes = None, **kwargs):
+
+    # Offset x-coord
+    x_offset = get_blocks(df)['push times'].last()
+    x_offset.iloc[1:] = x_offset.iloc[:-1]
+    session_start = x_offset.reset_index(level='block').groupby(['subject','session'])['block'].first()
+    for idx, x in session_start.items():
+        x_offset.loc[idx + (x,)] = 0
+
+    df_temp = df.join(x_offset, rsuffix = '_offset', on=INDEX[:MIN_INDEX-1])
+    df_temp['x'] = df_temp['push times'] + df_temp['push times_offset']
+
+    # Offset y-coord
+    session_order = sorted(df_temp.index.unique('session'))
+    session_offsets = {session: i for i, session in enumerate(session_order)}
+    box_order = sorted(df_temp['box position'].unique())
+    box_offsets = {box: box - 2 for box in box_order}
+
+    y_offset_1_factor = 3
+    y_offset_2_factor = 5
+    df_temp['y_offset_1'] = y_offset_1_factor * df_temp['box position'].map(box_offsets)
+    df_temp['y_offset_2'] = y_offset_2_factor * df_temp.index.map(lambda x: session_offsets[x[INDEX.index('session')]])
+
+    # Finally, normalize the frequencies
+    df_temp['push frequencies'] = df_temp['same-box push intervals'].transform(lambda x: 1/x)
+    df_temp.loc[df_temp['push frequencies'] > 1,'push frequencies'] = 1
+    df_temp['y'] = df_temp['push frequencies'] + df_temp['y_offset_1'] + df_temp['y_offset_2'] # change multiplier to control spacing between sessions and rows
+
+    # Create ax if none provided
+    fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs')
+    fig, ax = fig_init(ax, **fig_kwargs)
+    legend = True
+    category_order = sorted(df[category].unique())
+    for session in session_order:
+        sns.lineplot(
+            data=filter_df(df_temp, {'session': session}),
+            x='x',
+            y='y',
+            hue=category,
+            hue_order=category_order,
+            palette=list(palette),
+            ax=ax,
+            legend=legend,
+            **kwargs
+        )
+        legend = False
+
+    # Tidy up axes
+    ax.set_yticks(
+        [offset + 0.5 for offset in sorted(df_temp['y_offset_2'].unique())],
+        [str(s) for s in session_order]
+    )
+    ax.tick_params(axis = 'y', labelrotation = label_rotation)
+    ax.set_xlabel('time in block (s)')
+    ax.set_ylabel('session')
+    ax.set_title(titler(title=title, title_prefix=title_prefix, conds=conds))
+
+    # Draw the scale bar
+    # scale_length = 1
+    # x_start = visit_freqs.loc[visit_freqs['session'] == session_order[0], 'block'].max()  # x-position of the scale
+    # y_start = 0  # y-position of the scale bar
+    # x_offset = 0.05
+    # ax.plot([x_start + x_offset, x_start + x_offset], [y_start, y_start + scale_length], color='black', lw=2)
+    # ax.text(x_start, y_start, '1', ha='center', va='bottom')
+    # ax.text(x_start, y_start + scale_length + 0.5, '0', ha='center', va='bottom')
+    # ax.invert_yaxis()
+    # ax.legend(loc='upper right', title=category)
+    # fig.tight_layout()
+    return ax, df_temp
+
 
 def plot_runlengths(df: pd.DataFrame, null_model: bool = False, disp_js: bool = False) -> plt.Axes:
     # Identify consecutive pushes and when they switch

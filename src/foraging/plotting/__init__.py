@@ -4,7 +4,8 @@ from matplotlib import pyplot as plt
 import os
 
 # Constants
-BOX_COLORS = np.array([(0, 113.98, 188.95), (216.75, 82.87, 24.99), (236.89, 176.97, 31.87)]) / 255  # yellow, orange, blue
+# BOX_COLORS = np.array([(0, 113.98, 188.95), (216.75, 82.87, 24.99), (236.89, 176.97, 31.87)]) / 255  # blue, yellow, orange
+BOX_COLORS = np.array([(111, 255, 0), (255, 213, 0), (255, 0, 0)]) / 255  # green, yellow, red
 FIGSIZE = (15, 10)
 
 # Get the current directory
