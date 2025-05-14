@@ -89,7 +89,7 @@ def open_pickle_file(path: str) -> Any:
     # Return all contents
     return ds
 
-
+#todo: add end block and start block meta data
 def make_df(path: str) -> pd.DataFrame:
     """
     Given experiment matfiles and metadata, construct a DataFrame.
@@ -290,6 +290,7 @@ def make_df(path: str) -> pd.DataFrame:
         - 1
     ).astype(int) # ranks boxes fast --> medium --> slow
     df['box'] = df['box rank'].map(box_labels)
+    df['prev box'] = get_blocks(df)['box'].shift(1)
     df["normalized pushes"] = df["same-box push intervals"] / df["schedule"]
     df["consecutive push intervals"] = df["push times"].diff()
 
@@ -309,12 +310,12 @@ def make_df(path: str) -> pd.DataFrame:
     df.loc[df["push #"] == 1, "consecutive push intervals"] = df.loc[
         df["push #"] == 1, "push times"
     ] # Make sure the first push interval of each block is just the time of that push
-    df.loc[df["push #"] == 1, "stay/switch"] = 'stay' # Count first push of each block as 'stay' push
+    df.loc[df["push #"] == 1, "stay/switch"] = 'stay' # Count first push of each block as 'stay' push, so that stay pushes are a subset of same-box push intervals
 
     # Finally, drop all push intervals with value 0 as these are bad data
     df = df[df["consecutive push intervals"] > 0]
 
-    # Set index, refer to INDEX definition at top of this file
+    # Set index, refer to INDEX definition in utils
     df.set_index(INDEX, inplace=True)
     df.sort_index(inplace=True)
     return df
@@ -392,20 +393,19 @@ def process_block_safely(func: Callable) -> Callable:
     return wrapper
 
 
-def get_blocks(df: pd.DataFrame, sort: bool = True, **kwargs) -> DataFrameGroupBy:
+def get_blocks(df: pd.DataFrame, **kwargs) -> DataFrameGroupBy:
     """
     Group DataFrame by subject, session, and block.
 
     Args:
         df: DataFrame containing experiment data.
-        sort: Flag to sort groups.
         **kwargs: Keyword arguments to `DataFrame.groupby`.
 
     Returns:
         Grouped DataFrame object.
     """
 
-    return df.groupby(["subject", "session", "block"], sort = sort, **kwargs)
+    return df.groupby(["subject", "session", "block"], **kwargs)
 
 
 def process_blocks(

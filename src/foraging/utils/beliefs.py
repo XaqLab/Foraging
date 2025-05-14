@@ -285,7 +285,7 @@ def compute_reward_probabilities(
         index: tuple,
         shape: int = None,
         schedules: list = None,
-) -> np.ndarray[float]:
+) -> np.ndarray:
     """
     Compute the exact reward probability of each right before each push.
 

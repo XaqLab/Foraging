@@ -32,12 +32,10 @@ def fig_init(ax: plt.Axes = None, **kwargs):
         return plt.subplots(**kwargs)
     return ax.get_figure(), ax
 
-def titler(title_prefix: str = None, title: str = None, conds: dict = None):
-    if conds is None:
-        conds = {}
-    if title_prefix is None:
-        title_prefix = ''
-    return title if title else title_prefix + '\n' + ', '.join([k + ' = ' + str(v) for k, v in conds.items()])
+def titler(title: str = '', title_prefix: str = '', conds: dict = {}):
+    if title is None:
+        return None
+    return title if len(title) > 0 else title_prefix + '\n' + ', '.join([k + ' = ' + str(v) for k, v in conds.items()])
 
 def unitler(label: str, unit: str):
     if unit is None:
@@ -94,8 +92,11 @@ def get_bar_heights(ax: plt.Axes, hue_order: list = BOX_LABELS, x_centers: Array
                 heights_by_group[group].append(proto_heights[idx])
     return {k: np.array(v) for k,v in heights_by_group.items()}
 
+def palette_handler(palette: dict | list, categories: list):
+    """Corrects for any mismatch between `palette` and observed `categories`. If `palette` is list, return first `len(categories)` entries."""
+    return {k: v for k, v in palette.items() if k in categories} if type(palette) == dict else palette[:len(categories)]
 
-def bp(func: Callable):
+def bp2(func: Callable):
     """
     Wraps seaborn-style function with custom figure settings
 
@@ -113,7 +114,7 @@ def bp(func: Callable):
     """
 
     @wraps(func)
-    def wrapper(df: pd.DataFrame = None, x: str = None, conds: dict = None, accumulate: bool = False, palette: list = None, box_colors: list = BOX_COLORS, box_labels: list = BOX_LABELS, title: str = None, title_prefix: str = None, x_unit: str = None, y_unit: str = None, min_obs: int = None, attempt_index: bool = True, ax: plt.Axes = None, **kwargs) -> Any:
+    def wrapper(df: pd.DataFrame = None, x: str = None, conds: dict = None, accumulate: bool = False, palette: list = None, box_colors: list = BOX_COLORS, box_labels: list = BOX_LABELS, title: str = None, title_prefix: str = '', x_unit: str = None, y_unit: str = None, min_obs: int = None, attempt_index: bool = True, ax: plt.Axes = None, **kwargs) -> Any:
         """
         Convenience decorator that customizes figure in formulaic fashion
 
@@ -232,6 +233,152 @@ def bp(func: Callable):
         return ret # Assume there is usually an ax in here
     return wrapper
 
+def bp(func: Callable):
+    """
+    Wraps seaborn-style function with custom figure settings
+
+    Args:
+        func: function to wrap, typically seaborn-style function that takes the following as input:
+            - df: DataFrame.
+            - x: Name of x variable to be plotted.
+            - hue (Optional): Name of variable to color-code data by.
+            - hue_order (Optional): List specifying the order to assign colors to the `hue` variable.
+            - palette (Optional): List of colors to map onto `hue` ordered by `hue_order`.
+            - ax (Optional): axes to plot on.
+
+    Returns:
+        wrapped function
+    """
+
+    @wraps(func)
+    def wrapper(df: pd.DataFrame = None, x: str = None, hue: str = None, conds: dict = None, single_block: bool = False, title: str = '', title_prefix: str = '', legend: bool = True, x_unit: str = None, y_unit: str = None, min_obs: int = None, attempt_index: bool = True, ax: plt.Axes = None, **kwargs) -> Any:
+        """
+        Convenience decorator that customizes figure in formulaic fashion
+
+        Args:
+            df: DataFrame of block(s) data.
+            x: Name of x variable to be plotted.
+            hue: Name of hue variable to be plotted.
+            conds: Dictionary mapping level keys to values to be used to filter `df`. Necessary for setting title.
+            single_block: True indicates `df` should be treated as a single block.
+            box_colors: List of colors for each box. Will be combined with `box_labels` to make `palette`.
+            box_labels: List of labels for each box.
+            title: Title for figure (overrides `title_prefix`).
+            title_prefix: Prefix string that precedes the string template that enumerates conditions for this block(s).
+            legend: If True, display figure.
+            x_unit: Unit of the x-axis. If None, then ignored.
+            y_unit: Unit of the y-axis. If None, then ignored.
+            min_obs: Threshold for min number of observations a bin must have to be displayed. Only used if not None.
+            attempt_index: Refer to `filter_df` for more details.
+            ax: Axis to plot on (not None if reusing premade figure and axis object).
+            **kwargs: keyword arguments
+                - fig_kwargs: keyword arguments to be passed to `plt.subplots`.
+                - legend_kwargs: keyword arguments to be passed to `Axes.legend`.
+                - title_kwargs: keyword arguments to be passed to `Axes.set_title`.
+                - xlabel_kwargs: keyword arguments to be passed to `Axes.set_xlabel`.
+                - ylabel_kwargs: keyword arguments to be passed to `Axes.set_ylabel`.
+                - additional keyword arguments get passed to wrapped function, which is meant to be a seaborn-style function.
+
+        Returns:
+            ax, or optional return arguments from wrapped function usually in the form of ax + extra
+        """
+
+        # Filter df
+        if conds is None:
+            conds = {}
+        else:
+            conds = deepcopy(conds)
+        df = filter_df(df, conds, attempt_index=attempt_index)
+
+        # Context dependent plot settings
+        if hue and 'palette' in kwargs:
+            hue_keys = sorted(df[hue].unique())
+            kwargs['palette'] = palette_handler(kwargs['palette'], hue_keys)
+
+            # Control hue order based on inputs
+            if type(kwargs['palette']) is dict:
+                kwargs['hue_order'] = list(kwargs['palette'].keys())
+            else:
+                kwargs['hue_order'] = hue_keys
+
+        if single_block: # If only plotting individual block
+            kappa = df.index.unique('kappa')
+            stim_type = df.index.unique('stimulus type')
+            shape = df.index.unique('shape')
+            if len(kappa) > 1 or len(stim_type) > 1 or len(shape) > 1:
+                logger.debug(f"length of kappa: {len(kappa)}, length of stim_type: {len(stim_type)}, length of shape: {len(shape)}")
+                raise Exception("Multiple experiment parameters found for single block. Make sure only single block is being supplied, or set collapse to True.")
+
+            # For titling purposes, add block metadata
+            conds['kappa'] = kappa[0]
+            conds['stim type'] = stim_type[0]
+            conds['shape'] = shape[0]
+
+        # palette = list(box_colors) if not palette else palette
+
+        # If plotting kappa on x-axis, create dummy column in order to plot kappa data evenly
+        if x == 'kappa':
+            df['stimulus reliability'] = pd.Series(df['kappa'].rank(method ='dense') - 1, index = df.index)
+            x = 'stimulus reliability'
+
+        # Create ax if none
+        fig, ax = fig_init(ax, **kwargs_handler(kwargs, 'fig_kwargs'))
+
+        # Pop any last keyword args not needed for seaborn here before running function
+        legend_kwargs = kwargs_handler(kwargs, 'legend_kwargs', dict(loc='upper right', title = hue))
+        title_kwargs = kwargs_handler(kwargs, 'title_kwargs')
+        xlabel_kwargs = kwargs_handler(kwargs, 'xlabel_kwargs')
+        ylabel_kwargs = kwargs_handler(kwargs, 'ylabel_kwargs')
+
+        # Run function, assuming seaborn plotting func
+        if min_obs:
+            if hue:
+                ret = func(df.groupby([x, hue], as_index=False).filter(lambda g: len(g) >= min_obs), x = x, hue= hue, ax=ax, legend = legend, **kwargs)
+            else:
+                ret = func(df.groupby(x, as_index=False).filter(lambda g: len(g) >= min_obs), x=x, hue= hue, ax=ax, legend = legend,
+                           **kwargs)
+        else:
+            ret = func(df, x = x, hue= hue, ax=ax, legend = legend,  **kwargs)
+
+        # Adjust xticks to only show actual data
+        if x == 'stimulus reliability':
+            xticks = df.index.unique('kappa')
+            [_ax.set_xticks(range(len(xticks)), xticks) for _ax in flatten(ax)]
+
+        # Set title (if multiple axes, this does the first one)
+        title = titler(title= title, title_prefix= title_prefix, conds = conds)
+        _ax = np.atleast_1d(ax)
+        if title:
+            _ax[0].set_title(title, **title_kwargs)
+
+        # Set units if specified
+        if x_unit:
+            _ax[0].set_xlabel(unitler(_ax[0].get_xlabel(), x_unit), **xlabel_kwargs)
+        else:
+            _ax[0].set_xlabel(_ax[0].get_xlabel(), **xlabel_kwargs)
+
+        if y_unit:
+            _ax[0].set_ylabel(unitler(_ax[0].get_ylabel(), y_unit), **ylabel_kwargs)
+        else:
+            _ax[0].set_ylabel(_ax[0].get_ylabel(), **ylabel_kwargs)
+
+        # Modify legend
+        if legend:
+            for _ax in utils.flatten(ax):
+                _ax.legend(**legend_kwargs)
+                # try:
+                #     legend = _ax.get_legend()
+                #     handles = legend.legend_handles
+                #     _ax.legend(handles, box_labels, **legend_kwargs)
+                # except Exception as e:
+                #     print(e)
+                #     _ax.legend(box_labels, **legend_kwargs)
+        fig.tight_layout()
+        if ret is None:
+            return ax
+        return ret # Assume there is usually an ax in here
+    return wrapper
+
 def _figure_handler(**kwargs):
     """
     Decorator for creating and closing figures. Use this to avoid memory leaks when creating multiple plots that can be drawn on the same figure object
@@ -282,10 +429,10 @@ def per_block(func: Callable, df: pd.DataFrame, figure_dir: str, filename_prefix
 
     Args:
         func: the actual plotting routine to be executed on each block
-        df: dataframe of experiment data
+        df: DataFrame of experiment data
         figure_dir: folder for figures to be created in
         filename_prefix: Prepended to filename of each block's figure
-        conds: dictionary mapping level keys to values to be used to filter dataframe
+        conds: dictionary mapping level keys to values to be used to filter `df`
         fig_kwargs: dictionary of keyword arguments for plt.subplots
         use_tqdm: whether to use tqdm to display progress bar
         attempt_index: input argument to utils.data.filter_df
@@ -384,7 +531,7 @@ def enhanced_violinplot(df: pd.DataFrame, x: str, y: str, hue: str = None, hue_o
 
     # Plot means and se overlaid on violinplot
     groupers = [x]
-    if hue:
+    if hue and hue != x:
         groupers.append(hue)
     stats_df = df.groupby(groupers)[y].agg(
         ['mean', 'std', 'count']).reset_index()
@@ -394,18 +541,40 @@ def enhanced_violinplot(df: pd.DataFrame, x: str, y: str, hue: str = None, hue_o
     violin_width = 0.8 / n_subgroups
 
     # Plot means and error bars for each subgroup with connecting lines
-    for group_idx, group in enumerate(stats_df[x].unique()):
-        subgroup_stats = stats_df[stats_df[x] == group]
+    if hue and hue != x:
+        for group_idx, group in enumerate(stats_df[x].unique()):
+            subgroup_stats = stats_df[stats_df[x] == group]
+            n_subgroups = subgroup_stats[hue].nunique()
 
+            # Calculate x-coordinates for the means
+            # For each condition, we need to center the subgroup means over their respective violins
+            x_positions = group_idx + (violin_width * (n_subgroups - 1) / 2) - np.arange(n_subgroups)[::-1] * (
+                        violin_width * (n_subgroups - 1) / 2)  # + (violin_width * subgroup_idx)
+
+            # Plot error bars and means
+            ax.errorbar(x=x_positions,
+                        y=subgroup_stats['mean'],
+                        yerr=subgroup_stats['se'],
+                        fmt='o',
+                        color='black',
+                        capsize=5,
+                        capthick=2,
+                        elinewidth=2,
+                        markersize=8)
+
+            # Add connecting lines within subgroup
+            ax.plot(x_positions,
+                    subgroup_stats['mean'],
+                    color='black')
+    else:
         # Calculate x-coordinates for the means
         # For each condition, we need to center the subgroup means over their respective violins
-        x_positions = group_idx + (violin_width * (n_subgroups - 1) / 2) - np.arange(n_subgroups)[::-1] * (
-                    violin_width * (n_subgroups - 1) / 2)  # + (violin_width * subgroup_idx)
+        x_positions = np.arange(n_subgroups)  # + (violin_width * subgroup_idx)
 
         # Plot error bars and means
         ax.errorbar(x=x_positions,
-                    y=subgroup_stats['mean'],
-                    yerr=subgroup_stats['se'],
+                    y=stats_df['mean'],
+                    yerr=stats_df['se'],
                     fmt='o',
                     color='black',
                     capsize=5,
@@ -415,8 +584,9 @@ def enhanced_violinplot(df: pd.DataFrame, x: str, y: str, hue: str = None, hue_o
 
         # Add connecting lines within subgroup
         ax.plot(x_positions,
-                subgroup_stats['mean'],
+                stats_df['mean'],
                 color='black')
+
     return ax
 
 
@@ -547,7 +717,6 @@ def plot_variable_subplots(df: pd.DataFrame, func: Callable, row_cond: str, col_
     axes = np.atleast_2d(axes)
     for i, row_val in enumerate(df.groupby(row_cond).groups.keys()):
         df_row = filter_df(df, {row_cond: row_val})
-        # axes[i, 0].set_ylabel(row_val)
         for j, col_val in enumerate(df_row.groupby(col_cond).groups.keys()):
             conds = {col_cond: col_val}
             df_group = filter_df(df_row, conds)
@@ -556,6 +725,7 @@ def plot_variable_subplots(df: pd.DataFrame, func: Callable, row_cond: str, col_
                 axes[i, j].set_ylabel("")
             if simplify_row_title:
                 axes[i, j].set_title(f'{col_cond}={col_val}')
+        axes[i, 0].set_ylabel(row_val)
         for k in range(j + 1, max_cols): # intentially using the last j from previous loop
             fig.delaxes(axes[i, k])
 

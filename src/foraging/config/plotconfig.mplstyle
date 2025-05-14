@@ -22,7 +22,7 @@ legend.borderpad: 0.4
 
 # Figure settings
 figure.titlesize: 21
-figure.figsize: 10, 5
+figure.figsize: 15, 5
 figure.facecolor: (0,0,0,0)
 lines.linewidth: 2
 lines.markersize: 5

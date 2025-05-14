@@ -11,13 +11,90 @@ from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
 from scipy.spatial.distance import jensenshannon
 
-from foraging.plotting import BOX_COLORS
+from foraging.plotting import BOX_COLORS, PALETTE
 from foraging.utils import INDEX, MIN_INDEX, BOX_LABELS, kwargs_handler
 from foraging.utils.data import get_blocks, filter_df
 from ._base import fig_init, titler, unitler, bp, regplot, get_bar_heights
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
+
+
+#todo: update the x-positions to reflect the end and start of block, not just first or last push in block
+def plot_experiment_overview(df: pd.DataFrame, conds: dict = None, title: str = '', title_prefix: str = '', palette: dict = PALETTE, label_rotation: float = 35, annotate_kappa: bool = False, ax: plt.Axes = None, **kwargs):
+
+    df = filter_df(df, conds)
+
+    # Offset x-coord
+    x_offset = get_blocks(df)['push times'].last()
+    x_offset.iloc[1:] = x_offset.groupby(['subject', 'session']).cumsum().iloc[:-1]
+    session_start = x_offset.reset_index(level='block').groupby(['subject','session'])['block'].first()
+    for idx, x in session_start.items(): # Make sure each row (session) starts from 0 on the x-axis
+        x_offset.loc[idx + (x,)] = 0
+    df_temp = df.join(x_offset, rsuffix = '_offset', on=INDEX[:MIN_INDEX-1])
+    df_temp['x'] = df_temp['push times'] + df_temp['push times_offset']
+
+    # Offset y-coord
+    session_order = sorted(df_temp.index.unique('session'))
+    session_offsets = {session: i for i, session in enumerate(session_order)}
+    box_order = sorted(df_temp['box position'].unique())
+    box_offsets = {box: box - 2 for box in box_order}
+
+    y_offset_1_factor = 1
+    y_offset_2_factor = 6
+    df_temp['y_offset_1'] = y_offset_1_factor * df_temp['box position'].map(box_offsets)
+    df_temp['y_offset_2'] = y_offset_2_factor * df_temp.index.map(lambda x: session_offsets[x[INDEX.index('session')]])
+
+    # Finally, normalize the frequencies
+    df_temp['push frequencies'] = df_temp['same-box push intervals'].transform(lambda x: 1/x)
+    df_temp.loc[df_temp['push frequencies'] > 1,'push frequencies'] = 1
+    assert df_temp['push frequencies'].min() >= 0 and df_temp['push frequencies'].max() <= 1
+    df_temp['y'] = 1 + df_temp['y_offset_1'] + df_temp['y_offset_2'] # change multiplier to control spacing between sessions and rows
+
+    # Create ax if none provided
+    fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs')
+    fig, ax = fig_init(ax, **fig_kwargs)
+
+    legend = True
+    for session in session_order:
+        bp(sns.scatterplot)(
+            filter_df(df_temp, {'session': session}),
+            x='x',
+            y='y',
+            marker = '|',
+            s = 100,
+            hue='box',
+            palette=palette,
+            title = None,
+            legend=legend,
+            ax=ax,
+            **kwargs
+        )
+        legend = False
+
+    y_text_offset = 0.5
+    if annotate_kappa:
+        for session in session_order:
+            df_session = filter_df(df_temp, {'session': session})
+            y_text = df_session['y'].max() + y_text_offset
+            blocks = df_session.index.get_level_values('block')
+            kappas = df_session.index.get_level_values('kappa')
+            kappas = kappas[np.insert(blocks[1:] != blocks[:-1], 0, True)]
+            x_text = df_temp.xs(session, level = 'session')['push times_offset'].unique()
+            for i, kappa in enumerate(kappas):
+                ax.text(x_text[i], y_text, rf'$\kappa$={kappa}')
+
+    # Tidy up axes
+    ax.set_yticks(
+        [offset + 0.5 for offset in sorted(df_temp['y_offset_2'].unique())],
+        [str(s) for s in session_order]
+    )
+    ax.tick_params(axis = 'y', labelrotation = label_rotation)
+    ax.set_xlabel('time in block (s)')
+    ax.set_ylabel('session')
+    ax.set_title(titler(title=title, title_prefix=title_prefix, conds=conds))
+    return ax
+
 
 def plot_block_events(df: pd.DataFrame, conds: dict = None, x: str = 'push times', y: str = 'box rank', x_unit: str = 's', y_unit: str = None, title: str = None, title_prefix: str = 'Block activity',
                       box_colors: list = BOX_COLORS, legend: bool = True, ax: plt.Axes = None, **kwargs) -> plt.Axes:
@@ -170,75 +247,6 @@ def plot_frequencies_over_experiment(df: pd.DataFrame, category: str, conds: dic
     return ax
 
 
-def plot_frequencies_over_experiment_v2(df: pd.DataFrame, category: str, conds: dict = None, title: str = None, title_prefix: str = None, palette: list = BOX_COLORS, label_rotation: float = 35, ax: plt.Axes = None, **kwargs):
-
-    # Offset x-coord
-    x_offset = get_blocks(df)['push times'].last()
-    x_offset.iloc[1:] = x_offset.iloc[:-1]
-    session_start = x_offset.reset_index(level='block').groupby(['subject','session'])['block'].first()
-    for idx, x in session_start.items():
-        x_offset.loc[idx + (x,)] = 0
-
-    df_temp = df.join(x_offset, rsuffix = '_offset', on=INDEX[:MIN_INDEX-1])
-    df_temp['x'] = df_temp['push times'] + df_temp['push times_offset']
-
-    # Offset y-coord
-    session_order = sorted(df_temp.index.unique('session'))
-    session_offsets = {session: i for i, session in enumerate(session_order)}
-    box_order = sorted(df_temp['box position'].unique())
-    box_offsets = {box: box - 2 for box in box_order}
-
-    y_offset_1_factor = 3
-    y_offset_2_factor = 5
-    df_temp['y_offset_1'] = y_offset_1_factor * df_temp['box position'].map(box_offsets)
-    df_temp['y_offset_2'] = y_offset_2_factor * df_temp.index.map(lambda x: session_offsets[x[INDEX.index('session')]])
-
-    # Finally, normalize the frequencies
-    df_temp['push frequencies'] = df_temp['same-box push intervals'].transform(lambda x: 1/x)
-    df_temp.loc[df_temp['push frequencies'] > 1,'push frequencies'] = 1
-    df_temp['y'] = df_temp['push frequencies'] + df_temp['y_offset_1'] + df_temp['y_offset_2'] # change multiplier to control spacing between sessions and rows
-
-    # Create ax if none provided
-    fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs')
-    fig, ax = fig_init(ax, **fig_kwargs)
-    legend = True
-    category_order = sorted(df[category].unique())
-    for session in session_order:
-        sns.lineplot(
-            data=filter_df(df_temp, {'session': session}),
-            x='x',
-            y='y',
-            hue=category,
-            hue_order=category_order,
-            palette=list(palette),
-            ax=ax,
-            legend=legend,
-            **kwargs
-        )
-        legend = False
-
-    # Tidy up axes
-    ax.set_yticks(
-        [offset + 0.5 for offset in sorted(df_temp['y_offset_2'].unique())],
-        [str(s) for s in session_order]
-    )
-    ax.tick_params(axis = 'y', labelrotation = label_rotation)
-    ax.set_xlabel('time in block (s)')
-    ax.set_ylabel('session')
-    ax.set_title(titler(title=title, title_prefix=title_prefix, conds=conds))
-
-    # Draw the scale bar
-    # scale_length = 1
-    # x_start = visit_freqs.loc[visit_freqs['session'] == session_order[0], 'block'].max()  # x-position of the scale
-    # y_start = 0  # y-position of the scale bar
-    # x_offset = 0.05
-    # ax.plot([x_start + x_offset, x_start + x_offset], [y_start, y_start + scale_length], color='black', lw=2)
-    # ax.text(x_start, y_start, '1', ha='center', va='bottom')
-    # ax.text(x_start, y_start + scale_length + 0.5, '0', ha='center', va='bottom')
-    # ax.invert_yaxis()
-    # ax.legend(loc='upper right', title=category)
-    # fig.tight_layout()
-    return ax, df_temp
 
 
 def plot_runlengths(df: pd.DataFrame, null_model: bool = False, disp_js: bool = False) -> plt.Axes:
@@ -455,13 +463,15 @@ def plot_fisher(df: pd.DataFrame, conds: dict = None, title: str = None, title_p
     return ax
 
 
-def plot_push_intervals_vs_reward_intervals(df: pd.DataFrame, title_prefix: str = "Push intervals vs reward intervals", **kwargs) -> (plt.Axes, float, float):
+def plot_push_intervals_vs_reward_intervals(df: pd.DataFrame, y = 'same-box push intervals', title: str = None, title_prefix: str = "Push intervals vs reward intervals", unity = True, **kwargs) -> (plt.Axes, float, float):
     """
     Plot linear regression of push intervals against reward intervals in a block
 
     Args:
-        df: dataframe of experiment data for a given block
-        ax: axis to plot on (not none if reusing premade figure and axis object)
+        df: DataFrame of experiment data for a given block
+        y: Name of y-variable
+        title: Title of figure. If specified, overrides `title_prefix`.
+        title_prefix: Prefix of title that is used to construct the contents of the title together with conds. See `titler` for more details. Ignored if `title` is specified.
         **kwargs: keyword arguments for seaborn
 
     Returns:
@@ -472,20 +482,21 @@ def plot_push_intervals_vs_reward_intervals(df: pd.DataFrame, title_prefix: str 
     df = df.copy()
     n_boxes = df['box position'].nunique()
     [df.drop(df.loc[df['box position'] == i + 1].index[0], inplace=True) for i in range(n_boxes)]
-    ax = bp(sns.scatterplot)(df, x='reward intervals', y='same-box push intervals', title_prefix = title_prefix, **kwargs)
+    ax = bp(sns.scatterplot)(df, x='reward intervals', y=y, title_prefix = title_prefix, title = title, **kwargs)
 
     # Filter df here or inside regplot using conds
     conds = kwargs.pop('conds', None)
     df = utils.data.filter_df(df, conds)
     kwargs['ax'] = ax
-    fit_results = regplot(df['reward intervals'].to_numpy(), df['same-box push intervals'].to_numpy(), line_kws={'color': 'black'},
+    fit_results = regplot(df['reward intervals'].to_numpy(), df[y].to_numpy(), line_kws={'color': 'black'},
                           **kwargs)
 
-    x_max = max(ax.get_xlim()[1], ax.get_ylim()[1])
-    x = np.arange(x_max)
-    ax.plot([0, x_max], [0, x_max], linestyle='dashed', color='black')
-    ax.fill_between(x, x, x_max, color="green", alpha=0.1)
-    ax.fill_between(x, x, color="red", alpha=0.1)
+    if unity:
+        x_max = max(ax.get_xlim()[1], ax.get_ylim()[1])
+        x = np.arange(x_max)
+        ax.plot([0, x_max], [0, x_max], linestyle='dashed', color='black')
+        ax.fill_between(x, x, x_max, color="green", alpha=0.1)
+        ax.fill_between(x, x, color="red", alpha=0.1)
     return ax, fit_results.rsquared, fit_results.params[1]
 
 def plot_experiment_parameters(df: pd.DataFrame, conds: dict, title: str = "Experiment parameters by session",
