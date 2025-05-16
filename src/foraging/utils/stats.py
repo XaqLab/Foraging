@@ -3,7 +3,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 import pandas as pd
 
-from .data import process_block_safely, extend_df, bin_data
+from foraging.utils.data import process_block_safely, extend_df, bin_data
 
 def mcfadden_pseudo_rsquared(mdl, X, y):
     # 2. **Log-Likelihood**: Compute log-likelihood using sklearn's model

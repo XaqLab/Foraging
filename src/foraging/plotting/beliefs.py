@@ -7,12 +7,12 @@ from matplotlib import pyplot as plt
 from matplotlib.colors import ListedColormap
 from matplotlib.lines import Line2D
 from numpy.typing import ArrayLike
-from foraging.utils import models
-from foraging.plotting import BOX_COLORS, bp,fig_init
-from foraging.utils import BOX_LABELS
+from foraging.config.constants import BOX_LABELS, BOX_COLORS
+from foraging.utils.models import Observation
+from foraging.plotting import bp,fig_init
 
 
-def likelihood_single_obs(obs_model: models.Observation, latents: ArrayLike, obs: Any, ax: Optional[plt.Axes] = None,
+def likelihood_single_obs(obs_model: Observation, latents: ArrayLike, obs: Any, ax: Optional[plt.Axes] = None,
                           **kwargs: Any) -> plt.Axes:
     """
     Computes and plots the likelihood for a single observation across multiple latents.

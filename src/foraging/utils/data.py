@@ -21,7 +21,8 @@ from typing import Callable, Any
 
 from tqdm import tqdm
 
-from foraging.utils import INDEX, BOX_LABELS
+from foraging.config.constants import BOX_LABELS, BOX_POSITIONS
+from foraging.utils import INDEX
 
 
 def get_subjects(path: str) -> list[str]:
@@ -98,7 +99,7 @@ def make_df(path: str) -> pd.DataFrame:
         path: Path to the experiment data to load into a DataFrame.
 
     Returns:
-        A DataFrame where each row represents a push and each column encodes experiment context, such as session, block, experiment conditions, etc.
+        A DataFrame where each row represents a push and each column encodes experiment variables, such as session, block, reliablity conditions, etc.
     """
 
     # Identify all subjects in the given directory
@@ -113,6 +114,7 @@ def make_df(path: str) -> pd.DataFrame:
         "shape": [],
         "stimulus type": [],
         "kappa": [],
+        "duration": [],
         "box position": [],
         "push times": [],
         "same-box push intervals": [],
@@ -121,6 +123,7 @@ def make_df(path: str) -> pd.DataFrame:
     }
     day_to_week = {0: "M", 1: "T", 2: "W", 3: "R", 4: "F", 5: "S", 6: "U"}
     box_labels = dict(zip(range(len(BOX_LABELS)), BOX_LABELS))
+    box_pos_labels = dict(zip(range(len(BOX_POSITIONS)), BOX_POSITIONS))
     for subject in subjects:
 
         # Load MATLAB file
@@ -182,6 +185,7 @@ def make_df(path: str) -> pd.DataFrame:
                         kappa = block_meta["stimulusNoise"]
                         shape = block_meta["GammaShape"]
                         stim_type = block_meta["stimulusCueType"]
+                        duration = f[sess_data[block_idx, 0]].get('tEndBeh')[0,0] - f[sess_data[block_idx, 0]].get('tStartBeh')[0,0] if subject != 'humans' else f[sess_data[block_idx, 0]].get('tEnd')[0,0] - f[sess_data[block_idx, 0]].get('tStart')[0,0]
 
                         # Parse box data
                         staging_dict = {
@@ -192,6 +196,7 @@ def make_df(path: str) -> pd.DataFrame:
                             push_times = np.atleast_1d(
                                 f[sess_data[block_idx, 0]].get("tPush/" + box)
                             ).ravel() # Make sure data is an array before attempting to flatten it
+
                             reward_outcomes = (
                                 np.atleast_1d(
                                     f[sess_data[block_idx, 0]].get("pushLogical/" + box)
@@ -214,7 +219,6 @@ def make_df(path: str) -> pd.DataFrame:
                             staging_dict["week day"].extend(
                                 [week_day for _ in range(n_events)]
                             )
-
                             staging_dict["block"].extend(
                                 [block_idx + 1 for _ in range(n_events)]
                             )
@@ -227,7 +231,10 @@ def make_df(path: str) -> pd.DataFrame:
                             staging_dict["shape"].extend(
                                 [shape for _ in range(n_events)]
                             )
-                            staging_dict["box position"].extend([i + 1 for _ in range(n_events)])
+                            staging_dict["duration"].extend(
+                                [duration for _ in range(n_events)]
+                            )
+                            staging_dict["box position"].extend([i for _ in range(n_events)])
                             staging_dict["stimulus type"].extend(
                                 [stim_type for _ in range(n_events)]
                             )
@@ -290,6 +297,7 @@ def make_df(path: str) -> pd.DataFrame:
         - 1
     ).astype(int) # ranks boxes fast --> medium --> slow
     df['box'] = df['box rank'].map(box_labels)
+    df['box position label'] = df['box position'].map(box_pos_labels)
     df['prev box'] = get_blocks(df)['box'].shift(1)
     df["normalized pushes"] = df["same-box push intervals"] / df["schedule"]
     df["consecutive push intervals"] = df["push times"].diff()
@@ -898,6 +906,7 @@ def bin_data(
     df: pd.DataFrame,
     x: str,
     bins: int | list[float] = 20,
+    bin_width: int = None,
     strategy: str = 'left'
 ) -> pd.Series:
     """
@@ -912,6 +921,7 @@ def bin_data(
             If an integer is provided, the data will be divided into that number of equal-width bins.
             If a list of floats is provided, it will specify the bin edges.
             Defaults to 20.
+        bin_width: If specified, this is the width of each bin. Bins will be determined by dividing the range into equal-sized bins of this width.
         strategy: Labeling strategy for the bins.
             - 'full': Labels the bins using the full interval (i.e., both left and right edges).
             - 'left': Labels the bins using only the left edge.
@@ -923,10 +933,12 @@ def bin_data(
 
     Example:
         df = pd.DataFrame({'value': np.random.randn(100)})
-        df['binned'] = bin_data(df, 'value', n_bins=5, strategy='right')
+        df['binned'] = bin_data(df, 'value', bins=5, strategy='right')
     """
 
     # Perform initial binning based on n_bins or custom bin edges
+    if bin_width:
+        bins = np.arange(start=df[x].min(), stop=df[x].max() + bin_width, step=bin_width)
     _bins = pd.cut(df[x], bins=bins, include_lowest=True)
     dtype = df[x].dtype  # Get the dtype of the column to maintain consistency in bin edges
 

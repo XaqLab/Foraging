@@ -8,7 +8,7 @@ import numpy as np
 import scipy.stats
 from numpy.typing import ArrayLike
 from scipy.stats import gamma
-from . import INDEX, MIN_INDEX
+from foraging.utils import INDEX, MIN_INDEX
 
 ## ABSTRACT CLASSES
 class AbstractBelief(ABC):

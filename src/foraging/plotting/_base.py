@@ -19,10 +19,9 @@ from scipy.spatial.distance import euclidean
 from tqdm import tqdm
 from matplotlib.ticker import FuncFormatter
 
-from foraging import utils
-from foraging.utils import BOX_LABELS, flatten, kwargs_handler
+from foraging.config.constants import BOX_LABELS
+from foraging.utils import flatten, kwargs_handler
 from foraging.utils.data import filter_df
-from foraging.plotting import BOX_COLORS
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -43,7 +42,7 @@ def unitler(label: str, unit: str):
     return label+ ' ('+unit+')'
 
 def format_yticks(axes, func):
-    for ax in utils.flatten(axes):
+    for ax in flatten(axes):
         ax.yaxis.set_major_formatter(FuncFormatter(func))
 
 def get_bar_positions(ax: plt.Axes, hue_order: list = BOX_LABELS, x_centers: ArrayLike = None):
@@ -96,142 +95,6 @@ def palette_handler(palette: dict | list, categories: list):
     """Corrects for any mismatch between `palette` and observed `categories`. If `palette` is list, return first `len(categories)` entries."""
     return {k: v for k, v in palette.items() if k in categories} if type(palette) == dict else palette[:len(categories)]
 
-def bp2(func: Callable):
-    """
-    Wraps seaborn-style function with custom figure settings
-
-    Args:
-        func: function to wrap, typically seaborn-style function that takes the following as input:
-            - df: DataFrame.
-            - x: Name of x variable to be plotted.
-            - hue (Optional): Name of variable to color-code data by.
-            - hue_order (Optional): List specifying the order to assign colors to the `hue` variable.
-            - palette (Optional): List of colors to map onto `hue` ordered by `hue_order`.
-            - ax (Optional): axes to plot on.
-
-    Returns:
-        wrapped function
-    """
-
-    @wraps(func)
-    def wrapper(df: pd.DataFrame = None, x: str = None, conds: dict = None, accumulate: bool = False, palette: list = None, box_colors: list = BOX_COLORS, box_labels: list = BOX_LABELS, title: str = None, title_prefix: str = '', x_unit: str = None, y_unit: str = None, min_obs: int = None, attempt_index: bool = True, ax: plt.Axes = None, **kwargs) -> Any:
-        """
-        Convenience decorator that customizes figure in formulaic fashion
-
-        Args:
-            df: DataFrame of block(s) data.
-            x: Name of x variable to be plotted.
-            conds: Dictionary mapping level keys to values to be used to filter DataFrame. Necessary for setting title.
-            accumulate: True indicates df consists of multiple blocks whose data should be accumulated.
-            palette: List of colors. If None, defaults to `box_colors`.
-            box_colors: List of colors for each box.
-            box_labels: List of labels for each box.
-            title: Title for figure (overrides `title_prefix`).
-            title_prefix: Prefix string that precedes the string template that enumerates conditions for this block(s).
-            x_unit: Unit of the x-axis. If None, then ignored.
-            y_unit: Unit of the y-axis. If None, then ignored.
-            min_obs: Threshold for min number of observations a bin must have to be displayed. Only used if not None.
-            attempt_index: Refer to `filter_df` for more details.
-            ax: Axis to plot on (not None if reusing premade figure and axis object).
-            **kwargs: keyword arguments
-                - fig_kwargs: keyword arguments to be passed to `plt.subplots`.
-                - legend_kwargs: keyword arguments to be passed to `Axes.legend`.
-                - title_kwargs: keyword arguments to be passed to `Axes.set_title`.
-                - xlabel_kwargs: keyword arguments to be passed to `Axes.set_xlabel`.
-                - ylabel_kwargs: keyword arguments to be passed to `Axes.set_ylabel`.
-                - additional keyword arguments get passed to wrapped function, which is meant to be a seaborn-style function.
-
-        Returns:
-            ax, or optional return arguments from wrapped function usually in the form of ax + extra
-        """
-
-        # Filter df
-        if conds is None:
-            conds = {}
-        else:
-            conds = deepcopy(conds)
-        df = filter_df(df, conds, attempt_index=attempt_index)
-
-        # Context dependent plot settings
-        if accumulate: # If plotting multiple blocks at once
-            hue = kwargs.pop('hue', 'box')
-            hue_order = kwargs.pop('hue_order', box_labels)
-        else: # If only plotting individual block
-            schedules = np.sort(df['schedule'].unique())
-            kappa = df.index.unique('kappa')
-            stim_type = df.index.unique('stimulus type')
-            shape = df.index.unique('shape')
-            if len(kappa) > 1 or len(stim_type) > 1 or len(shape) > 1:
-                logger.debug(f"length of kappa: {len(kappa)}, length of stim_type: {len(stim_type)}, length of shape: {len(shape)}")
-                raise Exception("Multiple experiment parameters found for single block. Make sure only single block is being supplied, or set collapse to True.")
-
-            # For titling purposes, add block metadata
-            conds['kappa'] = kappa[0]
-            conds['stim type'] = stim_type[0]
-            conds['shape'] = shape[0]
-
-            hue = kwargs.pop('hue','schedule')
-            hue_order = kwargs.pop('hue_order', schedules)
-            box_labels = schedules
-
-        palette = list(box_colors) if not palette else palette
-
-        # If plotting kappa on x-axis, create dummy column in order to plot kappa data evenly
-        if x == 'kappa':
-            df['stimulus reliability'] = pd.Series(df['kappa'].rank(method ='dense') - 1, index = df.index)
-            x = 'stimulus reliability'
-
-        # Create ax if none
-        fig, ax = fig_init(ax, **kwargs_handler(kwargs, 'fig_kwargs'))
-
-        # Pop any last keyword args not needed for seaborn here before running function
-        legend_kwargs = kwargs_handler(kwargs, 'legend_kwargs', dict(loc='upper right', title = 'schedule'))
-        title_kwargs = kwargs_handler(kwargs, 'title_kwargs')
-        xlabel_kwargs = kwargs_handler(kwargs, 'xlabel_kwargs')
-        ylabel_kwargs = kwargs_handler(kwargs, 'ylabel_kwargs')
-
-        # Run function, assuming seaborn plotting func
-        if min_obs:
-            ret = func(df.groupby([x, hue], as_index=False).filter(lambda g: len(g) >= min_obs), x = x, ax=ax, hue=hue, hue_order=hue_order, palette=palette, **kwargs)
-        else:
-            ret = func(df, x = x, ax=ax, hue=hue, hue_order=hue_order, palette=palette, **kwargs)
-
-        # Adjust xticks to only show actual data
-        if x == 'stimulus reliability':
-            xticks = df.index.unique('kappa')
-            [_ax.set_xticks(range(len(xticks)), xticks) for _ax in flatten(ax)]
-
-        # Set title (if multiple axes, this does the first one)
-        title = titler(title= title, title_prefix= title_prefix, conds = conds)
-        _ax = np.atleast_1d(ax)
-        _ax[0].set_title(title, **title_kwargs)
-
-        # Set units if specified
-        if x_unit:
-            _ax[0].set_xlabel(unitler(_ax[0].get_xlabel(), x_unit), **xlabel_kwargs)
-        else:
-            _ax[0].set_xlabel(_ax[0].get_xlabel(), **xlabel_kwargs)
-
-        if y_unit:
-            _ax[0].set_ylabel(unitler(_ax[0].get_ylabel(), y_unit), **ylabel_kwargs)
-        else:
-            _ax[0].set_ylabel(_ax[0].get_ylabel(), **ylabel_kwargs)
-
-        # Modify legend
-        if kwargs.pop('legend', True):
-            for _ax in utils.flatten(ax):
-                try:
-                    legend = _ax.get_legend()
-                    handles = legend.legend_handles
-                    _ax.legend(handles, box_labels, **legend_kwargs)
-                except Exception as e:
-                    print(e)
-                    _ax.legend(box_labels, **legend_kwargs)
-        fig.tight_layout()
-        if ret is None:
-            return ax
-        return ret # Assume there is usually an ax in here
-    return wrapper
 
 def bp(func: Callable):
     """
@@ -251,7 +114,7 @@ def bp(func: Callable):
     """
 
     @wraps(func)
-    def wrapper(df: pd.DataFrame = None, x: str = None, hue: str = None, conds: dict = None, single_block: bool = False, title: str = '', title_prefix: str = '', legend: bool = True, x_unit: str = None, y_unit: str = None, min_obs: int = None, attempt_index: bool = True, ax: plt.Axes = None, **kwargs) -> Any:
+    def wrapper(df: pd.DataFrame = None, x: str = None, hue: str = None, palette: list = None,conds: dict = None, single_block: bool = False, title: str = '', title_prefix: str = '', legend: bool = True, x_unit: str = None, y_unit: str = None, min_obs: int = None, attempt_index: bool = True, ax: plt.Axes = None, **kwargs) -> Any:
         """
         Convenience decorator that customizes figure in formulaic fashion
 
@@ -259,10 +122,9 @@ def bp(func: Callable):
             df: DataFrame of block(s) data.
             x: Name of x variable to be plotted.
             hue: Name of hue variable to be plotted.
+            palette: List or dictionary mapping hue levels to colors.
             conds: Dictionary mapping level keys to values to be used to filter `df`. Necessary for setting title.
             single_block: True indicates `df` should be treated as a single block.
-            box_colors: List of colors for each box. Will be combined with `box_labels` to make `palette`.
-            box_labels: List of labels for each box.
             title: Title for figure (overrides `title_prefix`).
             title_prefix: Prefix string that precedes the string template that enumerates conditions for this block(s).
             legend: If True, display figure.
@@ -291,13 +153,13 @@ def bp(func: Callable):
         df = filter_df(df, conds, attempt_index=attempt_index)
 
         # Context dependent plot settings
-        if hue and 'palette' in kwargs:
+        if hue and palette:
             hue_keys = sorted(df[hue].unique())
-            kwargs['palette'] = palette_handler(kwargs['palette'], hue_keys)
+            palette = palette_handler(palette, hue_keys)
 
             # Control hue order based on inputs
-            if type(kwargs['palette']) is dict:
-                kwargs['hue_order'] = list(kwargs['palette'].keys())
+            if type(palette) is dict:
+                kwargs['hue_order'] = list(palette.keys())
             else:
                 kwargs['hue_order'] = hue_keys
 
@@ -333,12 +195,12 @@ def bp(func: Callable):
         # Run function, assuming seaborn plotting func
         if min_obs:
             if hue:
-                ret = func(df.groupby([x, hue], as_index=False).filter(lambda g: len(g) >= min_obs), x = x, hue= hue, ax=ax, legend = legend, **kwargs)
+                ret = func(df.groupby([x, hue], as_index=False).filter(lambda g: len(g) >= min_obs), x = x, hue= hue, palette = palette, ax=ax, legend = legend, **kwargs)
             else:
-                ret = func(df.groupby(x, as_index=False).filter(lambda g: len(g) >= min_obs), x=x, hue= hue, ax=ax, legend = legend,
+                ret = func(df.groupby(x, as_index=False).filter(lambda g: len(g) >= min_obs), x=x, hue= hue, palette = palette, ax=ax, legend = legend,
                            **kwargs)
         else:
-            ret = func(df, x = x, hue= hue, ax=ax, legend = legend,  **kwargs)
+            ret = func(df, x = x, hue= hue, palette = palette, ax=ax, legend = legend,  **kwargs)
 
         # Adjust xticks to only show actual data
         if x == 'stimulus reliability':
@@ -364,7 +226,7 @@ def bp(func: Callable):
 
         # Modify legend
         if legend:
-            for _ax in utils.flatten(ax):
+            for _ax in flatten(ax):
                 _ax.legend(**legend_kwargs)
                 # try:
                 #     legend = _ax.get_legend()
@@ -421,7 +283,7 @@ def _figure_saver(fig: plt.Figure, ax: plt.Axes, figure_path: str):
     """
     Path(figure_path).parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(figure_path, facecolor = 'white')
-    [x.clear() for x in utils.flatten(ax)]
+    [x.clear() for x in flatten(ax)]
 
 def per_block(func: Callable, df: pd.DataFrame, figure_dir: str, filename_prefix: str, conds: dict = None, fig_kwargs: dict = None, use_tqdm: bool = True, attempt_index: bool = True, by_subject: bool = False, **kwargs):
     """
@@ -646,63 +508,6 @@ def regplot(
         ax.scatter(x, y, c=h[0].get_color(), **scatter_kws)
 
     return fit_results
-
-
-def plot_elbow(x: ArrayLike, y: ArrayLike, fit: bool=False, func: Callable=None, method: str='default', curve='concave', n_pts=1000, ax: plt.Axes = None, **kwargs):
-    """
-    Plots the "elbow" of a curve, often used for determining the optimal number of clusters or points in algorithms like K-means.
-
-    Args:
-        x: The x-values (independent variable).
-        y: The y-values (dependent variable).
-        fit: If True, fits the data using the given function.
-        func: The function to fit the data (required if `fit=True`).
-        method: The method used to locate the elbow. Options are 'default' (using KneeLocator) or 'triangle' (using the triangle method).
-        curve: The shape of the curve, either 'concave' or 'convex'.
-        n_pts: Number of points to use for plotting the fitted curve (default is 1000).
-        ax: The matplotlib axes to plot on (optional). If not provided, a new plot is created.
-        **kwargs: Additional arguments passed to `ax.axvline()` for plotting the elbow line.
-
-    Returns:
-        x_elbow: The x-coordinate of the elbow.
-        y_elbow: The y-coordinate of the elbow.
-        k_fit: The fitting parameters (if `fit=True`).
-        ax: The matplotlib axes object with the elbow plot.
-    """
-    x_elbow, y_elbow, k_fit = 0, 0, None
-
-    # Fit func if specified
-    if fit and func is not None:
-        params, _ = curve_fit(func, x, y, p0=[1])  # Fit the function to the data
-        k_fit = params[0]  # The fit parameter
-        x_fit = np.linspace(0, max(x), n_pts)
-        y_fit = func(x_fit, k_fit)
-        x, y = x_fit, y_fit  # Use fitted data for further analysis
-
-    # Default method (KneeLocator)
-    if method == 'default':
-        knee_locator = KneeLocator(x, y, curve=curve, S=3)
-        x_elbow = knee_locator.knee
-        y_elbow = knee_locator.knee_y
-
-    # Triangle method
-    if method == 'triangle':
-        # Define the line between the first and last points
-        p1, p2 = np.array([x[0], y[0]]), np.array([x[-1], y[-1]])
-
-        # Compute the perpendicular distance of each point from the line
-        distances = np.array([np.abs(np.cross(p2 - p1, p1 - np.array([x[i], y[i]]))) / euclidean(p1, p2) for i in range(len(x))])
-
-        # Find the elbow (point with max distance)
-        elbow_idx = np.argmax(distances)
-        x_elbow = x[elbow_idx]
-        y_elbow = y[elbow_idx]
-
-    # Plot the elbow
-    if ax is None:
-        _, ax = plt.subplots(**kwargs_handler(kwargs, 'fig_kwargs'))
-    ax.axvline(x_elbow, **kwargs)
-    return x_elbow, y_elbow, k_fit, ax
 
 
 def plot_variable_subplots(df: pd.DataFrame, func: Callable, row_cond: str, col_cond: str, axes: Iterable[plt.Axes] = None, legend: bool = True, simplify_row_title: bool = False, savefig: str = None, **kwargs):

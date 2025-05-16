@@ -11,45 +11,46 @@ from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
 from scipy.spatial.distance import jensenshannon
 
-from foraging.plotting import BOX_COLORS, PALETTE
-from foraging.utils import INDEX, MIN_INDEX, BOX_LABELS, kwargs_handler
+from foraging.config.constants import BOX_LABELS, BOX_COLORS, BOX_POSITIONS
+from foraging.plotting import PALETTE
+from foraging.utils import INDEX, MIN_INDEX, kwargs_handler
 from foraging.utils.data import get_blocks, filter_df
-from ._base import fig_init, titler, unitler, bp, regplot, get_bar_heights
+from foraging.plotting._base import fig_init, titler, unitler, bp, regplot, get_bar_heights, palette_handler
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-
-#todo: update the x-positions to reflect the end and start of block, not just first or last push in block
-def plot_experiment_overview(df: pd.DataFrame, conds: dict = None, title: str = '', title_prefix: str = '', palette: dict = PALETTE, label_rotation: float = 35, annotate_kappa: bool = False, ax: plt.Axes = None, **kwargs):
+def plot_experiment_overview(df: pd.DataFrame, conds: dict = None, title: str = '', title_prefix: str = '', palette: dict = PALETTE, label_rotation: float = 35, annotate_block: bool = False, ax: plt.Axes = None, **kwargs):
 
     df = filter_df(df, conds)
 
     # Offset x-coord
-    x_offset = get_blocks(df)['push times'].last()
+    x_offset = get_blocks(df)['duration'].last()
     x_offset.iloc[1:] = x_offset.groupby(['subject', 'session']).cumsum().iloc[:-1]
     session_start = x_offset.reset_index(level='block').groupby(['subject','session'])['block'].first()
     for idx, x in session_start.items(): # Make sure each row (session) starts from 0 on the x-axis
         x_offset.loc[idx + (x,)] = 0
     df_temp = df.join(x_offset, rsuffix = '_offset', on=INDEX[:MIN_INDEX-1])
-    df_temp['x'] = df_temp['push times'] + df_temp['push times_offset']
+    df_temp['x'] = df_temp['push times'] + df_temp['duration_offset']
 
     # Offset y-coord
     session_order = sorted(df_temp.index.unique('session'))
     session_offsets = {session: i for i, session in enumerate(session_order)}
     box_order = sorted(df_temp['box position'].unique())
-    box_offsets = {box: box - 2 for box in box_order}
+    box_offsets = {box: box - 1 for box in box_order}
 
-    y_offset_1_factor = 1
-    y_offset_2_factor = 6
-    df_temp['y_offset_1'] = y_offset_1_factor * df_temp['box position'].map(box_offsets)
-    df_temp['y_offset_2'] = y_offset_2_factor * df_temp.index.map(lambda x: session_offsets[x[INDEX.index('session')]])
+    df_temp['y_offset_1'] = df_temp['box position'].map(box_offsets)
+    df_temp['y_offset_2'] = df_temp.index.map(lambda x: session_offsets[x[INDEX.index('session')]])
 
     # Finally, normalize the frequencies
     df_temp['push frequencies'] = df_temp['same-box push intervals'].transform(lambda x: 1/x)
     df_temp.loc[df_temp['push frequencies'] > 1,'push frequencies'] = 1
     assert df_temp['push frequencies'].min() >= 0 and df_temp['push frequencies'].max() <= 1
-    df_temp['y'] = 1 + df_temp['y_offset_1'] + df_temp['y_offset_2'] # change multiplier to control spacing between sessions and rows
+
+    # Change multiplier to control spacing between sessions and rows
+    y_offset_1_factor = 1
+    y_offset_2_factor = 6
+    df_temp['y'] = 1 + y_offset_1_factor * df_temp['y_offset_1'] + y_offset_2_factor * df_temp['y_offset_2']
 
     # Create ax if none provided
     fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs')
@@ -72,32 +73,42 @@ def plot_experiment_overview(df: pd.DataFrame, conds: dict = None, title: str = 
         )
         legend = False
 
+    # Annotate block parameters
     y_text_offset = 0.5
-    if annotate_kappa:
+    if annotate_block:
         for session in session_order:
             df_session = filter_df(df_temp, {'session': session})
             y_text = df_session['y'].max() + y_text_offset
             blocks = df_session.index.get_level_values('block')
             kappas = df_session.index.get_level_values('kappa')
             kappas = kappas[np.insert(blocks[1:] != blocks[:-1], 0, True)]
-            x_text = df_temp.xs(session, level = 'session')['push times_offset'].unique()
-            for i, kappa in enumerate(kappas):
-                ax.text(x_text[i], y_text, rf'$\kappa$={kappa}')
+            shapes = df_session.index.get_level_values('shape')
+            shapes = shapes[np.insert(blocks[1:] != blocks[:-1], 0, True)]
+            x_text = df_session['duration_offset'].unique()
+            for i in range(len(kappas)):
+                ax.text(x_text[i], y_text, rf'$\kappa$={kappas[i]},$\alpha$={shapes[i]}')
+
+    # Demarcate blocks
+    for session in session_order:
+        df_session = filter_df(df_temp, {'session': session})
+        x_text = df_session['duration_offset'].unique()[1:]
+        ax.vlines(x_text, y_offset_2_factor * df_session['y_offset_2'].unique()[0] - 0.5, y_offset_2_factor * df_session['y_offset_2'].unique()[0] + 2.5, linestyles = 'dotted', colors = 'black')
 
     # Tidy up axes
     ax.set_yticks(
-        [offset + 0.5 for offset in sorted(df_temp['y_offset_2'].unique())],
+        [y_offset_2_factor * offset + 0.5 for offset in sorted(df_temp['y_offset_2'].unique())],
         [str(s) for s in session_order]
     )
     ax.tick_params(axis = 'y', labelrotation = label_rotation)
     ax.set_xlabel('time in block (s)')
     ax.set_ylabel('session')
     ax.set_title(titler(title=title, title_prefix=title_prefix, conds=conds))
+    fig.tight_layout()
     return ax
 
 
-def plot_block_events(df: pd.DataFrame, conds: dict = None, x: str = 'push times', y: str = 'box rank', x_unit: str = 's', y_unit: str = None, title: str = None, title_prefix: str = 'Block activity',
-                      box_colors: list = BOX_COLORS, legend: bool = True, ax: plt.Axes = None, **kwargs) -> plt.Axes:
+def plot_block_events(df: pd.DataFrame, conds: dict = None, x: str = 'push times', y: str = 'box position', x_unit: str = 's', y_unit: str = None, title: str = None, title_prefix: str = 'Block activity',
+                      palette: dict = PALETTE, legend: bool = True, ax: plt.Axes = None, **kwargs) -> plt.Axes:
     """
     Plot the push-related variable in the block.
 
@@ -128,7 +139,7 @@ def plot_block_events(df: pd.DataFrame, conds: dict = None, x: str = 'push times
 
     # Get block data and metadata
     df_block = utils.data.filter_df(df, conds)
-    schedules = np.sort(df_block['schedule'].unique())
+    schedules = sorted(df_block['schedule'].unique())
     kappa = df_block.index.unique('kappa')
     stim_type = df_block.index.unique('stimulus type')
     shape = df_block.index.unique('shape')
@@ -161,7 +172,7 @@ def plot_block_events(df: pd.DataFrame, conds: dict = None, x: str = 'push times
     ax.set_xlabel(unitler(x, x_unit))
 
     # Add reward outcomes with shaded (rewarded) and empty (not rewarded) markers
-    colors = np.array([box_colors[i] for i in df_block['box rank'].values])
+    colors = np.array([palette[i] for i in df_block['box'].values])
     mask = df_block['reward outcomes'] == True
     ax.scatter(x_vals[mask], y_vals[mask], c=colors[mask], marker='^', s = 80, zorder = 2)
     ax.scatter(x_vals[~mask], y_vals[~mask], edgecolors=colors[~mask], marker='v', s = 80, zorder = 2, facecolors ="none")
@@ -169,7 +180,8 @@ def plot_block_events(df: pd.DataFrame, conds: dict = None, x: str = 'push times
     # Create legend manually with proxy artists
     if legend:
         legend_kwargs = kwargs_handler(kwargs, 'legend_kwargs', dict(loc='upper right'))
-        legend_elements = ([Line2D([0], [0], color=box_colors[j], linestyle='-', label=schedules[i]) for i, j in enumerate(sorted(df_block['box rank'].unique()))]
+        palette = palette_handler(palette, df_block['box'].unique)
+        legend_elements = ([Line2D([0], [0], color=palette[j], linestyle='-', label=schedules[i]) for i, j in enumerate(palette.keys())]
                            + [Line2D([0], [0], color='black', linestyle='', marker='^', label='rewarded'),
                               Line2D([0], [0], color='black', linestyle='', marker='v', markerfacecolor = 'none', label='no reward')])
         ax.legend(handles=legend_elements, **legend_kwargs)
@@ -177,18 +189,18 @@ def plot_block_events(df: pd.DataFrame, conds: dict = None, x: str = 'push times
 
 
 def plot_pushes(df: pd.DataFrame, conds: dict = None, title: str = None, title_prefix: str = 'Pushes for ',
-                      box_colors: list = BOX_COLORS, box_labels: list = BOX_LABELS,
+                      palette: dict = PALETTE, box_labels: list = BOX_POSITIONS,
                       legend: bool = True, ax: plt.Axes = None, **kwargs) -> plt.Axes:
 
 
-    ax = plot_block_events(df, conds= conds, title= title, title_prefix= title_prefix, box_colors= box_colors, legend= legend, ax= ax, **kwargs)
+    ax = plot_block_events(df, conds= conds, title= title, title_prefix= title_prefix, palette= palette, legend= legend, ax= ax, **kwargs)
 
     # Custom plotting logic
     df_block = utils.data.filter_df(df, conds).reset_index()
-    schedules = np.sort(df_block['schedule'].unique())
     x_vals = df_block['push times'].values
     ax.set_xlim([0, x_vals.max() + 1])
-    ax.set_yticks(range(len(schedules)), box_labels, rotation = 90, va = 'center')
+    box_labels = [box_labels[i] for i in sorted(df_block['box position'].unique())]
+    ax.set_yticks(range(len(box_labels)), box_labels, rotation = 90, va = 'center')
     ax.set_ylabel('')
     return ax
 
@@ -481,7 +493,7 @@ def plot_push_intervals_vs_reward_intervals(df: pd.DataFrame, y = 'same-box push
     # Remove first push from each box, since reward time is messed up for first pushes
     df = df.copy()
     n_boxes = df['box position'].nunique()
-    [df.drop(df.loc[df['box position'] == i + 1].index[0], inplace=True) for i in range(n_boxes)]
+    [df.drop(df.loc[df['box position'] == i].index[0], inplace=True) for i in range(n_boxes)]
     ax = bp(sns.scatterplot)(df, x='reward intervals', y=y, title_prefix = title_prefix, title = title, **kwargs)
 
     # Filter df here or inside regplot using conds

@@ -3,18 +3,15 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-import statsmodels.formula.api as smf
 from numpy.typing import ArrayLike
 from scipy.stats import uniform
 from sklearn.linear_model import LogisticRegression
 from sklearn.utils.class_weight import compute_sample_weight
 
-from . import models
-from . import stats
-from . import data
-from foraging import utils
-from ._base import discrete_time
-from .data import process_block_safely
+from foraging.utils.models import IndependentBoxesPosterior, GammaObservation, MyNormalizer, BetaBoxes, Posterior
+from foraging.utils.stats import mcfadden_pseudo_rsquared, permutation_test_logistic
+from foraging.utils import discrete_time
+from foraging.utils.data import process_block_safely
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -26,7 +23,7 @@ def compute_posteriors(
         schedule_candidates: ArrayLike,
         record: bool = True,
         shape: int = None
-) -> models.IndependentBoxesPosterior:
+) -> IndependentBoxesPosterior:
     """
     Computes the posterior belief over reward schedules for each box, updating after each push.
 
@@ -58,14 +55,14 @@ def compute_posteriors(
     )
 
     # Normalize the prior
-    normalizer = models.MyNormalizer()
+    normalizer = MyNormalizer()
     prior = normalizer.normalize(prior)
 
     # Initialize observation model
-    obs_model = models.GammaObservation(shape)
+    obs_model = GammaObservation(shape)
 
     # Construct posterior belief model
-    posterior = models.IndependentBoxesPosterior(
+    posterior = IndependentBoxesPosterior(
         n_boxes, obs_model, prior, schedule_candidates, normalizer, record=record
     )
 
@@ -91,7 +88,7 @@ def compute_beta_posteriors(
         df: pd.DataFrame,
         index: tuple,
         record: bool = True,
-) -> models.BetaBoxes:
+) -> BetaBoxes:
     # Extract data corresponding to the given index
     block_data = df.loc[index]
 
@@ -99,7 +96,7 @@ def compute_beta_posteriors(
     n_boxes = block_data['schedule'].nunique()
 
     # Construct posterior belief model
-    posterior = models.BetaBoxes(
+    posterior = BetaBoxes(
         n_boxes, 1, 1, record=record
     )
 
@@ -126,7 +123,7 @@ def compute_beta_posteriors(
 def compute_latent_beliefs_over_time(
         df: pd.DataFrame,
         index: tuple,
-        posterior: models.Posterior,
+        posterior: Posterior,
         dt: float = 0.5,
         padding_time: float = 0.5
 ) -> np.ndarray[float]:
@@ -165,7 +162,7 @@ def compute_latent_beliefs_over_time(
 def compute_reward_beliefs(
         df: pd.DataFrame,
         index: tuple,
-        posterior: models.Posterior
+        posterior: Posterior
 ) -> np.ndarray:
     """
     Compute the belief of reward availability for each box as an event-based representation.
@@ -287,10 +284,10 @@ def compute_reward_probabilities(
         schedules: list = None,
 ) -> np.ndarray:
     """
-    Compute the exact reward probability of each right before each push.
+    Compute the exact reward probability right before each push.
 
     Args:
-        df: Pandas DataFrame containing session data.
+        df: DataFrame containing session data.
         index: Index to locate the relevant block data.
 
     Returns:
@@ -306,7 +303,7 @@ def compute_reward_probabilities(
         shape = df_block.index.unique('shape')[0]  # Assume agent knows number of states perfectly
 
     # Construct likelihood/observation model
-    obs_model = models.GammaObservation(shape)
+    obs_model = GammaObservation(shape)
 
     # Compute availability marginal for each push
     n_obs = df_block['push times'].size - np.count_nonzero(np.isnan(df_block['push times']))
@@ -356,7 +353,7 @@ def compute_surprise(
         shape = df_block.index.unique('shape')[0]  # Assume agent knows number of states perfectly
 
     # Construct likelihood/observation model
-    obs_model = models.GammaObservation(shape)
+    obs_model = GammaObservation(shape)
 
     # Compute availability marginal for each push
     n_obs = len(df_block)
@@ -401,7 +398,7 @@ def compute_fisher(
         shape = df_block.index.unique('shape')[0]  # Assume agent knows number of states perfectly
 
     # Construct likelihood/observation model
-    obs_model = models.GammaObservation(shape)
+    obs_model = GammaObservation(shape)
 
     # Compute availability marginal for each push
     n_obs = len(df_block)
@@ -449,7 +446,7 @@ def compute_deriv(
         shape = df_block.index.unique('shape')[0]  # Assume agent knows number of states perfectly
 
     # Construct likelihood/observation model
-    obs_model = models.GammaObservation(shape)
+    obs_model = GammaObservation(shape)
 
     # Compute availability marginal for each push
     n_obs = len(df_block)
@@ -470,7 +467,7 @@ def compute_deriv(
 def compute_joint_beliefs(
         df: pd.DataFrame,
         index: tuple,
-        posterior: models.Posterior
+        posterior: Posterior
 ) -> np.ndarray:
     """
     Computes the joint belief of the reward availability and schedule of each box for each push event.
@@ -539,9 +536,9 @@ def predict_pushed_box(df: pd.DataFrame, x: str | list[str], y: str = 'box rank'
         mdl = LogisticRegression()
         mdl.fit(X, y, sample_weight=weights)
         accuracy = mdl.score(X, y, sample_weight=weights)
-        rsq = stats.mcfadden_pseudo_rsquared(mdl, X, y)
+        rsq = mcfadden_pseudo_rsquared(mdl, X, y)
         if perm_test:
-            pval_accu, pval_rsq = stats.permutation_test_logistic(X, y, accuracy, rsq, weights=weights, n_perms= n_perms)
+            pval_accu, pval_rsq = permutation_test_logistic(X, y, accuracy, rsq, weights=weights, n_perms= n_perms)
             return accuracy, rsq, pval_accu, pval_rsq, mdl
         return accuracy, rsq, mdl
     except Exception as e:
