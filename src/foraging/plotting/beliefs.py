@@ -115,19 +115,19 @@ def schedule_beliefs_block(df: pd.DataFrame, index: tuple, x: str = 'push #', bo
 
     # Plot the mean schedule as a line plot
     bp(sns.lineplot)(df_block, x=x, y='mean schedule', title_prefix=f'Beliefs about schedule for {index}',
-                     **kwargs.pop('plt_kwargs', {}), ax = ax)
+                     **kwargs.pop('plt_kwargs', {}), ax = ax, c= 'black', linestyle = '--')
 
     # Loop over each box and add error bands using fill_between
     for i, (cat, sub_df2) in enumerate(df_block.groupby("box rank")):
         if x in sub_df2.columns:
             ax.fill_between(sub_df2[x], sub_df2["mean schedule"] - sub_df2["uncertainty schedule"],
                             sub_df2["mean schedule"] + sub_df2["uncertainty schedule"],
-                            color=box_colors[cat], alpha=0.1)
+                            color=box_colors[cat], alpha=0.5)
         else:
             ax.fill_between(sub_df2.index.get_level_values(x),
                             sub_df2["mean schedule"] - sub_df2["uncertainty schedule"],
                             sub_df2["mean schedule"] + sub_df2["uncertainty schedule"],
-                            color=box_colors[cat], alpha=0.1)
+                            color=box_colors[cat], alpha=0.5)
 
     # Draw horizontal lines for true schedules
     schedules = np.sort(df_block['schedule'].unique())
@@ -140,8 +140,8 @@ def schedule_beliefs_block(df: pd.DataFrame, index: tuple, x: str = 'push #', bo
         x = df_block.index.get_level_values(x)
     y = df_block['mean schedule']
     mask = df_block['reward outcomes'] == True
-    ax.scatter(x[mask], y[mask], c='g', marker='^', s = 50)  # Rewarded
-    ax.scatter(x[~mask], y[~mask], c='r', marker='v', s = 50)  # Not rewarded
+    ax.scatter(x[mask], y[mask], c='g', marker='^', s = 100)  # Rewarded
+    ax.scatter(x[~mask], y[~mask], c='r', marker='v', s = 100)  # Not rewarded
 
     # Add legend with proxy artists
     legend_kwargs = {'loc': 'upper right'} | kwargs.pop('lgd_kwargs', {})

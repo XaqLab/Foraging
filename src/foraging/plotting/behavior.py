@@ -92,7 +92,7 @@ def plot_experiment_overview(df: pd.DataFrame, conds: dict = None, title: str = 
     for session in session_order:
         df_session = filter_df(df_temp, {'session': session})
         x_text = df_session['duration_offset'].unique()[1:]
-        ax.vlines(x_text, y_offset_2_factor * df_session['y_offset_2'].unique()[0] - 0.5, y_offset_2_factor * df_session['y_offset_2'].unique()[0] + 2.5, linestyles = 'dotted', colors = 'black')
+        ax.vlines(x_text, y_offset_2_factor * df_session['y_offset_2'].unique()[0] + 0.5, y_offset_2_factor * df_session['y_offset_2'].unique()[0] + 3.5, linestyles = 'dotted', colors = 'black')
 
     # Tidy up axes
     ax.set_yticks(
@@ -107,7 +107,7 @@ def plot_experiment_overview(df: pd.DataFrame, conds: dict = None, title: str = 
     return ax
 
 
-def plot_block_events(df: pd.DataFrame, conds: dict = None, x: str = 'push times', y: str = 'box position', x_unit: str = 's', y_unit: str = None, title: str = None, title_prefix: str = 'Block activity',
+def plot_block_events(df: pd.DataFrame, conds: dict = None, x: str = 'push times', y: str = 'box position', x_unit: str = 's', y_unit: str = None, title: str = '', title_prefix: str = 'Block activity',
                       palette: dict = PALETTE, legend: bool = True, ax: plt.Axes = None, **kwargs) -> plt.Axes:
     """
     Plot the push-related variable in the block.
@@ -180,7 +180,7 @@ def plot_block_events(df: pd.DataFrame, conds: dict = None, x: str = 'push times
     # Create legend manually with proxy artists
     if legend:
         legend_kwargs = kwargs_handler(kwargs, 'legend_kwargs', dict(loc='upper right'))
-        palette = palette_handler(palette, df_block['box'].unique)
+        palette = palette_handler(palette, df_block['box'].unique())
         legend_elements = ([Line2D([0], [0], color=palette[j], linestyle='-', label=schedules[i]) for i, j in enumerate(palette.keys())]
                            + [Line2D([0], [0], color='black', linestyle='', marker='^', label='rewarded'),
                               Line2D([0], [0], color='black', linestyle='', marker='v', markerfacecolor = 'none', label='no reward')])
@@ -188,17 +188,15 @@ def plot_block_events(df: pd.DataFrame, conds: dict = None, x: str = 'push times
     return ax
 
 
-def plot_pushes(df: pd.DataFrame, conds: dict = None, title: str = None, title_prefix: str = 'Pushes for ',
+def plot_pushes(df: pd.DataFrame, conds: dict = None, title: str = '', title_prefix: str = 'Pushes for ',
                       palette: dict = PALETTE, box_labels: list = BOX_POSITIONS,
                       legend: bool = True, ax: plt.Axes = None, **kwargs) -> plt.Axes:
-
 
     ax = plot_block_events(df, conds= conds, title= title, title_prefix= title_prefix, palette= palette, legend= legend, ax= ax, **kwargs)
 
     # Custom plotting logic
     df_block = utils.data.filter_df(df, conds).reset_index()
-    x_vals = df_block['push times'].values
-    ax.set_xlim([0, x_vals.max() + 1])
+    ax.set_xlim([0, df_block['push times'].max() + 1])
     box_labels = [box_labels[i] for i in sorted(df_block['box position'].unique())]
     ax.set_yticks(range(len(box_labels)), box_labels, rotation = 90, va = 'center')
     ax.set_ylabel('')

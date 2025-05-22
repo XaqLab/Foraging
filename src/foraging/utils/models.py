@@ -542,7 +542,19 @@ class GammaObservation(Observation):
     def fisher_info(self, obs: (bool, float), latent: float | ArrayLike, *args, **kwargs):
         # Extract the reward availability and push interval.
         t = obs[1]
-        return ((t/latent**2) * gamma.pdf(t, self.shape, scale = latent / self.shape))**2 / gamma.cdf(t, self.shape, scale = latent / self.shape)  + ((t/latent**2) * gamma.pdf(t, self.shape, scale = latent / self.shape))**2 / (1 - gamma.cdf(t, self.shape, scale = latent / self.shape))
+        scale = latent / self.shape
+        cdf = gamma.cdf(t, a=self.shape, scale=scale)
+        return (t / latent) ** 2 * gamma.pdf(t, a=self.shape, scale=scale) ** 2 / (cdf * (1 - cdf))
+
+    def fisher_info_rate(self, obs: (bool, float), latent: float | ArrayLike, *args, **kwargs):
+        # Extract the reward availability and push interval.
+        t = obs[1]
+        scale = latent / self.shape
+        cdf = gamma.cdf(t, a=self.shape, scale=scale)
+        return (t / latent) ** 2 * gamma.pdf(t, a=self.shape, scale=scale) ** 2 / (cdf * (1 - cdf)) / t
+
+        #
+        # return ((t/latent**2) * gamma.pdf(t, self.shape, scale = latent / self.shape))**2 / gamma.cdf(t, self.shape, scale = latent / self.shape)  + ((t/latent**2) * gamma.pdf(t, self.shape, scale = latent / self.shape))**2 / (1 - gamma.cdf(t, self.shape, scale = latent / self.shape))
 
     def specific_fisher_info(self, obs: (bool, float), latent: float | ArrayLike, *args, **kwargs):
         # Extract the reward availability and push interval.
