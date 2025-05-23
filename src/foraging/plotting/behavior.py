@@ -20,8 +20,25 @@ from foraging.plotting._base import fig_init, titler, unitler, bp, regplot, get_
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-def plot_experiment_overview(df: pd.DataFrame, conds: dict = None, title: str = '', title_prefix: str = '', palette: dict = PALETTE, label_rotation: float = 35, annotate_block: bool = False, ax: plt.Axes = None, **kwargs):
+def plot_experiment_overview(df: pd.DataFrame, conds: dict = None, title: str = '', title_prefix: str = '', palette: dict = PALETTE, label_rotation: float = 35, annotate_block: bool = False, ax: plt.Axes = None, **kwargs) -> plt.Axes:
+    """
+    Plot the pushes over all blocks in the experiment, organized by sessions. This assumes one subject is specified in the `conds` dictionary.
 
+    Args:
+        df: DataFrame.
+        conds: Dictionary to filter df.
+        title: Title of figure. If specified, overrides `title_prefix`.
+        title_prefix: Prefix of title that is used to construct the contents of the title together with conds. See `titler` for more details. Ignored if `title` is specified.
+        palette: Dictionary mapping box schedules to colors. Can also be a list of just colors.
+        label_rotation: Angle to rotate y-tick labels by.
+        annotate_block: if True, also display the block parameters above each block.
+        ax: Axes to plot on. If None, a new figure and axes are created using plt.subplots. Specify keyword arguments in `fig_kwargs`.
+        **kwargs: Keyword arguments passed to seaborn. May also contain nested kwargs.
+            - 'fig_kwargs': Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
+
+    Returns:
+        The axes.
+    """
     df = filter_df(df, conds)
 
     # Offset x-coord
@@ -41,11 +58,6 @@ def plot_experiment_overview(df: pd.DataFrame, conds: dict = None, title: str = 
 
     df_temp['y_offset_1'] = df_temp['box position'].map(box_offsets)
     df_temp['y_offset_2'] = df_temp.index.map(lambda x: session_offsets[x[INDEX.index('session')]])
-
-    # Finally, normalize the frequencies
-    df_temp['push frequencies'] = df_temp['same-box push intervals'].transform(lambda x: 1/x)
-    df_temp.loc[df_temp['push frequencies'] > 1,'push frequencies'] = 1
-    assert df_temp['push frequencies'].min() >= 0 and df_temp['push frequencies'].max() <= 1
 
     # Change multiplier to control spacing between sessions and rows
     y_offset_1_factor = 1
@@ -121,7 +133,7 @@ def plot_block_events(df: pd.DataFrame, conds: dict = None, x: str = 'push times
         y_unit: Unit to assign to y. Defaults to None. Ignored if None.
         title: Title of figure. If specified, overrides `title_prefix`.
         title_prefix: Prefix of title that is used to construct the contents of the title together with conds. See `titler` for more details. Ignored if `title` is specified.
-        box_colors: List of colors for each box. Defaults to `BOX_COLORS`.
+        palette: Dictionary mapping box schedules to colors. Can also be a list of just colors.
         legend: If True, display legend. Specify keyword arguments in `legend_kwargs`.
         ax: Axes to plot on. If None, a new figure and axes are created using plt.subplots. Specify keyword arguments in `fig_kwargs`.
         **kwargs: Additional keyword arguments.

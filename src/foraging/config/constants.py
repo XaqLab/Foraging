@@ -7,4 +7,4 @@ BOX_COLORS_DARK = list(np.array([(0, 109, 163), (207, 107, 0), (207, 0, 0)]) / 2
 
 BOX_LABELS = ['fast','medium','slow']
 BOX_POSITIONS = ['S', 'NE', 'NW']
-BOX_POSITIONS_ORDER = [2, 0, 1]
+BOX_POSITIONS_ORDER = [2, 0, 1] # NW S NE ordering

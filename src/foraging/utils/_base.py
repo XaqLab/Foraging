@@ -35,7 +35,7 @@ def kwargs_handler(kwargs: dict, key: str, default: dict = None) -> dict:
     Intelligently extract keyword arguments from kwargs object, merging with default arguments the user may specify
     inside a function in a way that only overrides them when necessary, such as when the user later provides different
     inputs. This is usually the case when a single function accepts a nested kwargs dictionary that may contain the
-    kwargs for severa different subroutines.
+    kwargs for several different subroutines.
 
     Args:
         kwargs: Keyword arguments object to extract arguments from.
