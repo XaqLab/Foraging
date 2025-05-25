@@ -18,6 +18,7 @@ from scipy.optimize import curve_fit
 from scipy.spatial.distance import euclidean
 from tqdm import tqdm
 from matplotlib.ticker import FuncFormatter
+from matplotlib.collections import PolyCollection
 
 from foraging.config.constants import BOX_LABELS
 from foraging.utils import flatten, kwargs_handler
@@ -368,7 +369,7 @@ def across_blocks(func: Callable, df: pd.DataFrame, figure_dir: str, filename_pr
                 _figure_saver(fig, ax, figure_path)
     _inner()
 
-## common routines
+## Common routines
 def enhanced_violinplot(df: pd.DataFrame, x: str, y: str, hue: str = None, hue_order = None, palette = None, ax: plt.Axes = None, **kwargs) -> plt.Axes:
     """
     Plot a violinplot with mean + s.e. overlaid on top.
@@ -399,22 +400,35 @@ def enhanced_violinplot(df: pd.DataFrame, x: str, y: str, hue: str = None, hue_o
         ['mean', 'std', 'count']).reset_index()
     stats_df['se'] = stats_df['std'] / np.sqrt(stats_df['count'])
 
-    n_subgroups = stats_df[hue].nunique() if hue else 1
-    violin_width = 0.8 / n_subgroups
+    # Calculate x-coordinates for the means
+    violin_positions = []
+    for patch in ax.collections:
+        if isinstance(patch, PolyCollection):
+            # Find the x position of the violin by averaging the x-values of the patch
+            verts = patch.get_paths()[0].vertices
+            x_pos = np.mean(verts[:, 0])
+            violin_positions.append(x_pos)
+    x_positions = violin_positions
 
     # Plot means and error bars for each subgroup with connecting lines
     if hue and hue != x:
+
+        # Sort violins by hue_order or default ordering in seaborn
+        if hue_order is None:
+            if hue in df.columns:
+                hue_order = df[hue].unique()
+            else:
+                hue_order = df.index.unique(hue)
+        stats_df[hue] = pd.Categorical(stats_df[hue], categories=hue_order, ordered=True)
+        stats_df = stats_df.sort_values(hue)
         for group_idx, group in enumerate(stats_df[x].unique()):
+
             subgroup_stats = stats_df[stats_df[x] == group]
             n_subgroups = subgroup_stats[hue].nunique()
 
-            # Calculate x-coordinates for the means
-            # For each condition, we need to center the subgroup means over their respective violins
-            x_positions = group_idx + (violin_width * (n_subgroups - 1) / 2) - np.arange(n_subgroups)[::-1] * (
-                        violin_width * (n_subgroups - 1) / 2)  # + (violin_width * subgroup_idx)
-
             # Plot error bars and means
-            ax.errorbar(x=x_positions,
+            group_x = x_positions[group_idx*n_subgroups:(group_idx+1)*n_subgroups]
+            ax.errorbar(x=group_x,
                         y=subgroup_stats['mean'],
                         yerr=subgroup_stats['se'],
                         fmt='o',
@@ -425,14 +439,10 @@ def enhanced_violinplot(df: pd.DataFrame, x: str, y: str, hue: str = None, hue_o
                         markersize=8)
 
             # Add connecting lines within subgroup
-            ax.plot(x_positions,
+            ax.plot(group_x,
                     subgroup_stats['mean'],
                     color='black')
     else:
-        # Calculate x-coordinates for the means
-        # For each condition, we need to center the subgroup means over their respective violins
-        x_positions = np.arange(n_subgroups)  # + (violin_width * subgroup_idx)
-
         # Plot error bars and means
         ax.errorbar(x=x_positions,
                     y=stats_df['mean'],
@@ -448,7 +458,6 @@ def enhanced_violinplot(df: pd.DataFrame, x: str, y: str, hue: str = None, hue_o
         ax.plot(x_positions,
                 stats_df['mean'],
                 color='black')
-
     return ax
 
 
