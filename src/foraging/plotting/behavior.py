@@ -203,6 +203,23 @@ def plot_block_events(df: pd.DataFrame, conds: dict = None, x: str = 'push times
 def plot_pushes(df: pd.DataFrame, conds: dict = None, title: str = '', title_prefix: str = 'Pushes for ',
                       palette: dict = PALETTE, box_labels: list = BOX_POSITIONS,
                       legend: bool = True, ax: plt.Axes = None, **kwargs) -> plt.Axes:
+    """
+    Plot the pushes in the block by the box they occur at.
+
+    Args:
+        df: DataFrame.
+        conds: Dictionary to filter df.
+        title: Title of figure. If specified, overrides `title_prefix`.
+        title_prefix: Prefix of title that is used to construct the contents of the title together with conds. See `titler` for more details. Ignored if `title` is specified.
+        palette: Dictionary mapping box schedules to colors. Can also be a list of just colors.
+        box_labels: Labels on y-axis for each box.
+        legend: If True, display legend. Specify keyword arguments in `legend_kwargs`.
+        ax: Axes to plot on. If None, a new figure and axes are created using plt.subplots. Specify keyword arguments in `fig_kwargs`.
+        **kwargs: Additional keyword arguments passed to `plot_block_events`.
+
+    Returns:
+        The axes.
+    """
 
     ax = plot_block_events(df, conds= conds, title= title, title_prefix= title_prefix, palette= palette, legend= legend, ax= ax, **kwargs)
 
