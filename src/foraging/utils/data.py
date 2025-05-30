@@ -90,13 +90,12 @@ def open_pickle_file(path: str) -> Any:
     # Return all contents
     return ds
 
-#todo: add end block and start block meta data
 def make_df(path: str) -> pd.DataFrame:
     """
     Given experiment matfiles and metadata, construct a DataFrame.
 
     Args:
-        path: Path to the experiment data to load into a DataFrame.
+        path: Path to the folder containing the experiment data to load into a DataFrame.
 
     Returns:
         A DataFrame where each row represents a push and each column encodes experiment variables, such as session, block, reliablity conditions, etc.

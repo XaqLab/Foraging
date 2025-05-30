@@ -115,7 +115,7 @@ def bp(func: Callable):
     """
 
     @wraps(func)
-    def wrapper(df: pd.DataFrame = None, x: str = None, hue: str = None, palette: list = None,conds: dict = None, single_block: bool = False, title: str = '', title_prefix: str = '', legend: bool = True, x_unit: str = None, y_unit: str = None, min_obs: int = None, attempt_index: bool = True, ax: plt.Axes = None, **kwargs) -> Any:
+    def wrapper(df: pd.DataFrame = None, x: str = None, hue: str = None, palette: list = None,conds: dict = None, single_block: bool = False, title: str = '', title_prefix: str = '', legend: Any = 'auto', x_unit: str = None, y_unit: str = None, min_obs: int = None, attempt_index: bool = True, ax: plt.Axes = None, **kwargs) -> Any:
         """
         Convenience decorator that customizes figure in formulaic fashion
 
@@ -155,7 +155,7 @@ def bp(func: Callable):
 
         # Context dependent plot settings
         if hue and palette:
-            hue_keys = sorted(df[hue].unique())
+            hue_keys = sorted(df[hue].unique()) if hue in df.columns else df.index.unique(hue)
             palette = palette_handler(palette, hue_keys)
 
             # Control hue order based on inputs
@@ -176,8 +176,6 @@ def bp(func: Callable):
             conds['kappa'] = kappa[0]
             conds['stim type'] = stim_type[0]
             conds['shape'] = shape[0]
-
-        # palette = list(box_colors) if not palette else palette
 
         # If plotting kappa on x-axis, create dummy column in order to plot kappa data evenly
         if x == 'kappa':
@@ -228,7 +226,8 @@ def bp(func: Callable):
         # Modify legend
         if legend:
             for _ax in flatten(ax):
-                _ax.legend(**legend_kwargs)
+                if not _ax.get_legend_handles_labels() == ([], []):
+                    _ax.legend(**legend_kwargs)
                 # try:
                 #     legend = _ax.get_legend()
                 #     handles = legend.legend_handles

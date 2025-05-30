@@ -12,7 +12,7 @@ from matplotlib.lines import Line2D
 from scipy.spatial.distance import jensenshannon
 
 from foraging.config.constants import BOX_LABELS, BOX_COLORS, BOX_POSITIONS
-from foraging.plotting import PALETTE
+from foraging.plotting import PALETTE, PALETTE_DARK
 from foraging.utils import INDEX, MIN_INDEX, kwargs_handler
 from foraging.utils.data import get_blocks, filter_df
 from foraging.plotting._base import fig_init, titler, unitler, bp, regplot, get_bar_heights, palette_handler
@@ -232,6 +232,137 @@ def plot_pushes(df: pd.DataFrame, conds: dict = None, title: str = '', title_pre
     return ax
 
 
+def plot_stay_switch_pushes(df: pd.DataFrame, palette: dict = PALETTE, palette_dark: dict = PALETTE_DARK, title: str = None, **kwargs) -> plt.Axes:
+    """
+    Plot the stay and switch push intervals.
+
+    Args:
+        df: DataFrame.
+        palette: Dictionary mapping box schedules to colors.
+        palette_dark: Dictionary mapping box schedules to darkened colors.
+        title: Title of figure.
+        **kwargs: Additional keyword arguments.
+            - 'fig_kwargs': Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
+
+    Returns:
+        The axes.
+    """
+    n_boxes = len(palette)
+    fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', dict(figsize=(12, 10), sharex=True, sharey=True))
+    fig, axes = plt.subplots(n_boxes, n_boxes, **fig_kwargs)
+    for i, source in enumerate(BOX_LABELS):
+        for j, dest in enumerate(BOX_LABELS):
+            ax = axes[i, j]
+            subset = df[(df['prev box'] == source) & (df['box'] == dest)]
+            color_fill = palette[dest]
+            color_fill_dark = palette_dark[dest]
+            color_outline = palette[source]
+            if not subset.empty:
+                sns.kdeplot(data=subset, x="consecutive push intervals", fill=True, ax=ax, color=color_fill, alpha=0.6)
+                if source != dest:
+                    sns.kdeplot(data=subset, x="consecutive push intervals", fill=True, ax=ax, color=color_fill_dark,
+                                alpha=0.6)
+                    sns.kdeplot(data=subset, x="consecutive push intervals", fill=False, ax=ax, color=color_outline,
+                                linewidth=2)
+
+            ax.set_xlabel("")
+            if i == 0:
+                ax.set_title(dest, fontsize = 15)
+            else:
+                ax.set_title("")
+
+            if j == 0:
+                ax.set_ylabel(source, fontsize = 15)
+                if i == n_boxes - 1:
+                    ax.set_xlabel("push interval (s)")
+            else:
+                ax.set_ylabel("")
+    if title:
+        fig.suptitle(title, y = 1)
+        fig.text(0.5, 0.95, 'TO', ha='center')
+    else:
+        fig.text(0.5, 1, 'TO', ha='center')
+    fig.text(0.0, 0.5, 'FROM', va='center', rotation='vertical')
+    fig.tight_layout()
+    return axes
+
+
+def plot_runlengths(df: pd.DataFrame, palette: dict = PALETTE, kappas: list = None, null_model: bool = False, disp_js: bool = False, ax: plt.Axes = None, **kwargs) -> plt.Axes:
+    """
+    Plot the
+
+    Args:
+        df:
+        palette:
+        kappas:
+        null_model:
+        disp_js:
+        ax:
+        **kwargs: Additional keyword arguments.
+            - 'fig_kwargs': Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
+
+    Returns:
+
+    """
+
+    # Identify consecutive pushes and when they switch
+    x = df.index.get_level_values('push #')
+    consecutive_mask = x[1:] - x[:-1] == 1
+    change_mask = (df['stay/switch'] == 'switch') & np.insert(consecutive_mask, 0, True)
+    push_nums = utils.data.get_blocks(df)["push times"].rank().astype(
+        int)  # Calculate from scratch in case pushes got dropped
+    change_mask[push_nums == 1] = True
+
+    # Count the runlengths at different boxes
+    group_labels = change_mask.cumsum()
+    labeled_lengths = pd.DataFrame(
+        {"group": group_labels, "box": df['box'],
+         "next box": utils.data.get_blocks(df['box']).shift(-1).fillna('missing')}
+    ).set_index(df.index)
+    labeled_lengths_all = labeled_lengths.groupby(['kappa', 'box', 'group']).size().to_frame().rename(
+        columns={0: 'length'})
+    labeled_lengths_all = labeled_lengths_all[
+        (labeled_lengths_all['length'] > 1) & (labeled_lengths_all['length'] <= 10)]
+
+    # Calculate the distribution of runlengths under a dice that is rolled by visitation frequencies
+    visit_freqs = df.groupby(['kappa'])['box'].value_counts(normalize=True).to_frame()
+    fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'ncols': len(kappas)})
+    fig, axes = fig_init(ax, **fig_kwargs)
+    for i, kappa in enumerate(kappas):
+        bp(sns.histplot)(labeled_lengths_all.reset_index(), x='length', conds={'kappa': kappa}, hue = 'box', palette = PALETTE,
+                         title_prefix="Distribution of runlengths", discrete=True, stat='probability',
+                         common_norm=True, multiple='dodge', ax=axes[i])
+
+        # Overlay random dice probabilities from geometric distribution
+        if null_model:
+            bars = axes[i].patches
+            bar_width = bars[0].get_width()  # Width of one bar
+            probs = visit_freqs.loc[kappa] # Visit probabilities
+            boxes = sorted(probs.index.unique('box'))
+            handles = axes[i].get_legend().legend_handles
+            labels = [t.get_text() for t in axes[i].get_legend().get_texts()]
+            for b, box in enumerate(boxes):
+                try:
+                    p = probs.loc[box].iloc[0]
+                    run_lengths = labeled_lengths_all.loc[(kappa, box), 'length'].sort_values().unique()
+                    geom = p ** run_lengths * (1 - p)
+                    offset = (b - (len(boxes) - 1) / 2) * bar_width
+                    x = run_lengths + offset
+                    axes[i].plot(x, geom, c=palette[box], label = 'random dice')
+                    if disp_js:
+                        bar_heights = get_bar_heights(axes[i], x_centers=run_lengths)
+                        # for k, bar in enumerate(bar_heights[box]):
+                        #     axes[i, j].text(x[k], bar, f'{jensenshannon(geom, bar):.1f}', ha='center', va='bottom', fontsize = 7)
+                        axes[i].set_title(axes[i].get_title() + f'\nJS-distance = {jensenshannon(geom, bar_heights[box])}')
+                        # print(f"Jensen-shannon distance between empirical distribution and null distribution of ({subj}, {kappa}, {box}): {jensenshannon(geom, bar_heights[box])}")
+                except:
+                    continue
+            axes[i].legend(handles = handles + [Line2D([0], [0], color='black', linestyle='-', label='random dice')], labels = labels + ['random dice'] )
+        axes[i].sharex(axes[i])
+        axes[i].sharey(axes[i])
+    fig.tight_layout()
+    return axes
+
 def plot_frequencies_over_experiment(df: pd.DataFrame, category: str, conds: dict = None, title: str = None, title_prefix: str = None, palette: list = BOX_COLORS, label_rotation: float = 35, ax: plt.Axes = None, **kwargs):
 
     # Get frequencies for specified category
@@ -284,77 +415,6 @@ def plot_frequencies_over_experiment(df: pd.DataFrame, category: str, conds: dic
     ax.legend(loc='upper right', title=category)
     fig.tight_layout()
     return ax
-
-
-
-
-def plot_runlengths(df: pd.DataFrame, null_model: bool = False, disp_js: bool = False) -> plt.Axes:
-    # Identify consecutive pushes and when they switch
-    x = df.index.get_level_values('push #')
-    consecutive_mask = x[1:] - x[:-1] == 1
-    change_mask = (df['stay/switch'] == 'switch') & np.insert(consecutive_mask, 0, True)
-    push_nums = utils.data.get_blocks(df)["push times"].rank().astype(
-        int)  # Calculate from scratch in case pushes got dropped
-    change_mask[push_nums == 1] = True
-
-    # Count the runlengths at different boxes
-    group_labels = change_mask.cumsum()
-    labeled_lengths = pd.DataFrame(
-        {"group": group_labels, "box": df['box'],
-         "next box": utils.data.get_blocks(df['box']).shift(-1).fillna('missing')}
-    ).set_index(df.index)
-    labeled_lengths_all = labeled_lengths.groupby(['subject', 'kappa', 'box', 'group']).size().to_frame().rename(
-        columns={0: 'length'})
-    labeled_lengths_all = labeled_lengths_all[
-        (labeled_lengths_all['length'] > 1) & (labeled_lengths_all['length'] <= 10)]
-
-    # Calculate the distribution of runlengths under a dice that is rolled by visitation frequencies
-    visit_freqs = df.groupby(['subject', 'kappa'])['box'].value_counts(normalize=True).to_frame()
-
-    # Contrast low and high kappa conditions
-    kappas = {
-        'marco': (0.01, 0.1),
-        'dylan': (0.01, 0.1),
-        'humans': (0.0, 0.1),
-        'viktor': (0.0, 0.1)
-    }
-    subjects = df.index.unique('subject')
-    fig, axes = plt.subplots(len(subjects), 2, figsize=(15, 5 * len(subjects)))
-    for i, subj in enumerate(subjects):
-        for j, kappa in enumerate(kappas[subj]):
-            bp(sns.histplot)(labeled_lengths_all, x='length', accumulate=True, conds={'subject': subj, 'kappa': kappa},
-                             title_prefix="Distribution of runlengths", discrete=True, stat='probability',
-                             common_norm=True, multiple='dodge', ax=axes[i, j])
-
-            # Overlay random dice probabilities from geometric distribution
-            if null_model:
-                bars = axes[i,j].patches
-                bar_width = bars[0].get_width()  # Width of one bar
-                probs = visit_freqs.loc[(subj, kappa)] # Visit probabilities
-                boxes = sorted(probs.index.unique('box'))
-                handles = axes[i, j].get_legend().legend_handles
-                labels = [t.get_text() for t in axes[i, j].get_legend().get_texts()]
-                for b, box in enumerate(boxes):
-                    try:
-                        p = probs.loc[box].iloc[0]
-                        run_lengths = labeled_lengths_all.loc[(subj, kappa, box), 'length'].sort_values().unique()
-                        geom = p ** run_lengths * (1 - p)
-                        offset = (b - (len(boxes) - 1) / 2) * bar_width
-                        x = run_lengths + offset
-                        axes[i, j].plot(x, geom, c=BOX_COLORS[BOX_LABELS.index(box)], label = 'random dice')
-                        if disp_js:
-                            bar_heights = get_bar_heights(axes[i, j], x_centers=run_lengths)
-                            # for k, bar in enumerate(bar_heights[box]):
-                            #     axes[i, j].text(x[k], bar, f'{jensenshannon(geom, bar):.1f}', ha='center', va='bottom', fontsize = 7)
-                            axes[i, j].set_title(axes[i, j].get_title() + f'\nJS-distance = {jensenshannon(geom, bar_heights[box])}')
-                            # print(f"Jensen-shannon distance between empirical distribution and null distribution of ({subj}, {kappa}, {box}): {jensenshannon(geom, bar_heights[box])}")
-                    except:
-                        continue
-                axes[i, j].legend(handles = handles + [Line2D([0], [0], color='black', linestyle='-', label='random dice')], labels = labels + ['random dice'] )
-            axes[i, j].sharex(axes[i, 0])
-            axes[i, j].sharey(axes[i, 0])
-    fig.tight_layout()
-    return axes
 
 
 # def plot_runlengths_by_box(df: pd.DataFrame) -> plt.Axes:
