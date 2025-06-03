@@ -305,6 +305,7 @@ def plot_experiment_parameters(df: pd.DataFrame, conds: dict, title: str = "Expe
     ax.set_title(title)
     return ax
 
+#todo: wrap all these functions to reduce redundant code
 def plot_wait_times(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS, palette: dict = PALETTE, palette_dark: dict = PALETTE_DARK, title: str = None, ax: plt.Axes = None, **kwargs) -> plt.Axes:
     """
 
@@ -443,7 +444,7 @@ def plot_runlengths(df: pd.DataFrame, palette: dict = PALETTE, stim_reliabilitie
     fig, ax = fig_init(ax, **fig_kwargs)
     for i, kappa in enumerate(stim_reliabilities):
         bp(sns.histplot)(labeled_lengths_all.reset_index(), x='length', conds={'stimulus reliability': kappa}, hue = 'box', palette = PALETTE,
-                         discrete=True, stat='probability', common_norm=True, multiple='stack', ax=ax[i])
+                         discrete=True, stat='count', common_norm=True, multiple='stack', legend = i == len(stim_reliabilities) - 1, ax=ax[i], **kwargs)
 
         # Overlay random dice probabilities from geometric distribution
         if null_model:
@@ -545,7 +546,7 @@ def plot_next_push_surprise(df: pd.DataFrame, palette: dict = PALETTE, palette_d
         for j, kappa in enumerate(stim_reliabilities):
             cnt += 1
             bp(sns.scatterplot)(df, x='wait times', y='change in wait time', conds={'stimulus reliability': kappa, 'rewarded': ro}, hue='box', palette=palette if ro == 'yes' else palette_dark,
-                         style='stay/switch', alpha=0.5, ax=axes[i][j], legend = cnt == 3, **kwargs)
+                         style='stay/switch', alpha=0.5, ax=axes[i][j], legend = cnt == len(stim_reliabilities), **kwargs)
             axes[i][j].hlines(0, 0, axes[i][j].get_xlim()[1], linestyles='dashed', colors='black')
             axes[i][j].set_xlim([0, 40])
             axes[i][j].set_ylim([-40, 40])
@@ -578,8 +579,9 @@ def plot_stay_probabilities(df: pd.DataFrame, stim_reliabilities: list = KAPPA_L
     return ax
 
 
-def plot_reward_rates(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS, by_box: bool = False,  bin_width: float = 60, title: str = None, ax: plt.Axes = None, **kwargs):
+def plot_reward_rates_in_block(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS, palette: dict = PALETTE, by_box: bool = False, bin_width: float = 60, title: str = None, ax: plt.Axes = None, **kwargs):
     x_bins = 'time'
+    df = df.copy()
     df[x_bins] = bin_data(df, 'push times', bin_width=bin_width)
     if by_box:
         rr = df.groupby(['subject', 'session', 'stimulus reliability', 'block', 'time', 'box'], observed = True)['reward outcomes'].sum()
@@ -592,14 +594,56 @@ def plot_reward_rates(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS,
     fig, ax = fig_init(ax, **fig_kwargs)
     for i, kappa in enumerate(stim_reliabilities):
         if by_box:
-            bp(sns.lineplot)(rr, conds = {'stimulus reliability': kappa}, x = 'time', y='reward rate', hue='box', palette=PALETTE, ax = ax[i], **kwargs)
+            bp(sns.lineplot)(rr, conds = {'stimulus reliability': kappa}, x = 'time', y='reward rate', hue='box', palette=palette, ax = ax[i], legend = i == len(stim_reliabilities) - 1, **kwargs)
         else:
-            bp(sns.lineplot)(rr, conds = {'stimulus reliability': kappa}, x = 'time', y='reward rate', ax = ax[i], **kwargs)
+            # sns.lineplot(filter_df(rr, conds = {'stimulus reliability': kappa}), x= 'time', y = 'reward rate', ax = ax[i], legend = i == len(stim_reliabilities) - 1)
+            bp(sns.lineplot)(rr, conds = {'stimulus reliability': kappa}, x = 'time', y='reward rate', ax = ax[i], legend = i == len(stim_reliabilities) - 1, **kwargs)
     if title:
         fig.suptitle(title, y = 1)
     fig.tight_layout()
     return ax
 
+
+def plot_quantity_in_block(df: pd.DataFrame, y: str = None, stim_reliabilities: list = KAPPA_LEVELS, palette: dict = PALETTE, bin_width: float = 60, title: str = None, ax: plt.Axes = None, **kwargs):
+    x_bins = 'time'
+    df.copy()
+    df[x_bins] = bin_data(df, 'push times', bin_width=bin_width)
+
+    fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'ncols': len(stim_reliabilities), 'sharey': True, 'sharex': True})
+    fig, ax = fig_init(ax, **fig_kwargs)
+    for i, kappa in enumerate(stim_reliabilities):
+        bp(sns.lineplot)(df, conds={'stimulus reliability': kappa}, x='time', y=y, hue='box',
+                         palette=palette, ax=ax[i], legend = i == len(stim_reliabilities) - 1, **kwargs)
+
+    if title:
+        fig.suptitle(title, y = 1)
+    fig.tight_layout()
+    return ax
+
+
+def plot_matching_law(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS, palette: dict = PALETTE, bin_width: float = 60, title: str = None, ax: plt.Axes = None, **kwargs):
+    x_bins = 'time'
+    df = df.copy()
+    df[x_bins] = bin_data(df, 'push times', bin_width=bin_width)
+    grouped = df.groupby(['subject', 'session', 'stimulus reliability', 'block', 'time', 'box'], observed=True)
+    rr = grouped['reward outcomes'].sum()
+    rr = rr.to_frame().reset_index()
+    rr['reward rate'] = rr['reward outcomes'] / bin_width
+    rr['push rate'] = (grouped.size() / bin_width).reset_index()[0]
+    rr['ratio'] = rr['reward rate'] / rr['push rate']
+
+    fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'ncols': len(stim_reliabilities), 'sharey': True, 'sharex': True})
+    fig, ax = fig_init(ax, **fig_kwargs)
+    for i, kappa in enumerate(stim_reliabilities):
+        bp(sns.lineplot)(rr, conds = {'stimulus reliability': kappa}, x = 'time', y='ratio', hue='box', palette=palette, ax = ax[i], legend = i == len(stim_reliabilities) - 1, **kwargs)
+        if i == 0:
+            ax[i].set_ylabel(r'$\frac{\text{reward rate}}{\text{push rate}}$')
+    if title:
+        fig.suptitle(title, y = 1)
+    fig.tight_layout()
+    return ax
+#
+# def plot_fisher_info_in_block()
 
 def plot_frequencies_over_experiment(df: pd.DataFrame, category: str, conds: dict = None, title: str = None, title_prefix: str = None, palette: list = BOX_COLORS, label_rotation: float = 35, ax: plt.Axes = None, **kwargs):
 

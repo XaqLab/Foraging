@@ -21,7 +21,7 @@ from typing import Callable, Any
 
 from tqdm import tqdm
 
-from foraging.config.constants import BOX_LABELS, BOX_POSITIONS, KAPPA_LEVELS
+from foraging.config.constants import BOX_LABELS, BOX_POSITIONS, KAPPA_LEVELS, KAPPA_DISCRETIZATION
 from foraging.utils import INDEX
 
 
@@ -323,14 +323,7 @@ def make_df(path: str) -> pd.DataFrame:
     df = df[df["consecutive push intervals"] > 0]
 
     # Categorize stimulus reliabilities
-    kappas = {
-        'dylan': dict(zip(['low', 'high'],[(0.01, 0.04), (0.07, 0.1)])),
-        'marco': dict(zip(['low', 'high'], [(0.01,), (0.1, 0.2)])),
-        'humans': dict(zip(['low', 'medium', 'high'], [(0.0, 0.02), (0.03, 0.04, 0.06), (0.07, 0.08, 0.1)])),
-        'viktor': dict(zip(['low', 'medium', 'high'], [(0.0, 0.01, 0.02), (0.03, 0.04, 0.05), (0.07, 0.08, 0.1)]))
-    }
-
-    for subject, kappa_filter in kappas.items():
+    for subject, kappa_filter in KAPPA_DISCRETIZATION.items():
         for label, values in kappa_filter.items():
             df_filter = filter_df(df, {'subject': subject, 'kappa': values})
             df.loc[df_filter.index, 'stimulus reliability'] = label

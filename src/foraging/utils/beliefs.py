@@ -389,11 +389,9 @@ def compute_fisher(
         np.ndarray: An event-based array of shape (n_obs, n_boxes),
                     where reward probabilities are evaluated before each push.
     """
-
     df_block = df.loc[index]
     if schedules is None:
         schedules = np.sort(df_block['schedule'].unique())
-    n_boxes = len(schedules)
     if shape is None:
         shape = df_block.index.unique('shape')[0]  # Assume agent knows number of states perfectly
 
@@ -403,7 +401,7 @@ def compute_fisher(
     # Compute availability marginal for each push
     n_obs = len(df_block)
     information = np.zeros(n_obs)
-    push_ints_and_box = df_block[['same-box push intervals', 'box rank']].values[:n_obs]
+    push_ints_and_box = df_block[['wait times', 'box rank']].values[:n_obs]
     for i, (t, box) in enumerate(push_ints_and_box):
         if rate:
             information[i] = obs_model.fisher_info_rate((True, t), schedules[int(box)])
