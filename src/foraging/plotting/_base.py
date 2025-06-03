@@ -178,9 +178,11 @@ def bp(func: Callable):
             conds['shape'] = shape[0]
 
         # If plotting kappa on x-axis, create dummy column in order to plot kappa data evenly
+        old_x = None
         if x == 'kappa':
             df['stimulus reliability'] = pd.Series(df['kappa'].rank(method ='dense') - 1, index = df.index)
             x = 'stimulus reliability'
+            old_x = True
 
         # Create ax if none
         fig, ax = fig_init(ax, **kwargs_handler(kwargs, 'fig_kwargs'))
@@ -194,15 +196,15 @@ def bp(func: Callable):
         # Run function, assuming seaborn plotting func
         if min_obs:
             if hue:
-                ret = func(df.groupby([x, hue], as_index=False).filter(lambda g: len(g) >= min_obs), x = x, hue= hue, palette = palette, ax=ax, legend = legend, **kwargs)
+                ret = func(df.groupby([x, hue], observed = True, as_index=False).filter(lambda g: len(g) >= min_obs), x = x, hue= hue, palette = palette, ax=ax, legend = legend, **kwargs)
             else:
-                ret = func(df.groupby(x, as_index=False).filter(lambda g: len(g) >= min_obs), x=x, hue= hue, palette = palette, ax=ax, legend = legend,
+                ret = func(df.groupby(x, observed = True, as_index=False).filter(lambda g: len(g) >= min_obs), x=x, hue= hue, palette = palette, ax=ax, legend = legend,
                            **kwargs)
         else:
             ret = func(df, x = x, hue= hue, palette = palette, ax=ax, legend = legend,  **kwargs)
 
         # Adjust xticks to only show actual data
-        if x == 'stimulus reliability':
+        if x == 'stimulus reliability' and old_x:
             xticks = df.index.unique('kappa')
             [_ax.set_xticks(range(len(xticks)), xticks) for _ax in flatten(ax)]
 

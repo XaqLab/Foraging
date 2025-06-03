@@ -21,7 +21,7 @@ from typing import Callable, Any
 
 from tqdm import tqdm
 
-from foraging.config.constants import BOX_LABELS, BOX_POSITIONS
+from foraging.config.constants import BOX_LABELS, BOX_POSITIONS, KAPPA_LEVELS
 from foraging.utils import INDEX
 
 
@@ -116,7 +116,7 @@ def make_df(path: str) -> pd.DataFrame:
         "duration": [],
         "box position": [],
         "push times": [],
-        "same-box push intervals": [],
+        "wait times": [],
         "reward outcomes": [],
         "reward intervals": [],
     }
@@ -240,7 +240,7 @@ def make_df(path: str) -> pd.DataFrame:
 
                             # Populate push-specific data
                             staging_dict["push times"].extend(push_times)
-                            staging_dict["same-box push intervals"].extend(
+                            staging_dict["wait times"].extend(
                                 np.insert(
                                     push_times[1:] - push_times[:-1], 0, push_times[0]
                                 )
@@ -298,7 +298,7 @@ def make_df(path: str) -> pd.DataFrame:
     df['box'] = df['box rank'].map(box_labels)
     df['box position label'] = df['box position'].map(box_pos_labels)
     df['prev box'] = get_blocks(df)['box'].shift(1)
-    df["normalized pushes"] = df["same-box push intervals"] / df["schedule"]
+    df["normalized pushes"] = df["wait times"] / df["schedule"]
     df["consecutive push intervals"] = df["push times"].diff()
 
     df["push #"] = (
@@ -321,6 +321,19 @@ def make_df(path: str) -> pd.DataFrame:
 
     # Finally, drop all push intervals with value 0 as these are bad data
     df = df[df["consecutive push intervals"] > 0]
+
+    # Categorize stimulus reliabilities
+    kappas = {
+        'dylan': dict(zip(['low', 'high'],[(0.01, 0.04), (0.07, 0.1)])),
+        'marco': dict(zip(['low', 'high'], [(0.01,), (0.1, 0.2)])),
+        'humans': dict(zip(['low', 'medium', 'high'], [(0.0, 0.02), (0.03, 0.04, 0.06), (0.07, 0.08, 0.1)])),
+        'viktor': dict(zip(['low', 'medium', 'high'], [(0.0, 0.01, 0.02), (0.03, 0.04, 0.05), (0.07, 0.08, 0.1)]))
+    }
+
+    for subject, kappa_filter in kappas.items():
+        for label, values in kappa_filter.items():
+            df_filter = filter_df(df, {'subject': subject, 'kappa': values})
+            df.loc[df_filter.index, 'stimulus reliability'] = label
 
     # Set index, refer to INDEX definition in utils
     df.set_index(INDEX, inplace=True)
@@ -412,7 +425,7 @@ def get_blocks(df: pd.DataFrame, **kwargs) -> DataFrameGroupBy:
         Grouped DataFrame object.
     """
 
-    return df.groupby(["subject", "session", "block"], **kwargs)
+    return df.groupby(["subject", "session", "block"], observed = True, **kwargs)
 
 
 def process_blocks(
@@ -905,7 +918,7 @@ def bin_data(
     df: pd.DataFrame,
     x: str,
     bins: int | list[float] = 20,
-    bin_width: int = None,
+    bin_width: float = None,
     strategy: str = 'left'
 ) -> pd.Series:
     """
@@ -951,6 +964,6 @@ def bin_data(
             bin_edges = _bins.cat.categories.left.astype(dtype)
 
     # Apply the bin labels to the original data
-    return pd.cut(df[x], bins=bins, include_lowest=True, labels=bin_edges)
+    return pd.cut(df[x], bins=bins, include_lowest=True, labels=bin_edges).cat.remove_unused_categories()
 
 
