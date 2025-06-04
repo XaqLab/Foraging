@@ -532,7 +532,7 @@ def plot_next_push_surprise(df: pd.DataFrame, palette: dict = PALETTE, palette_d
     push_deltas = df.groupby(['subject', 'session', 'block', 'box'])
     df['consecutive wait'] = push_deltas['push # by box'].diff().fillna(1)
     df = df.loc[df['consecutive wait'] == 1]
-    df['change in wait time'] = -push_deltas['wait times'].diff(-1)
+    df['change in next wait time'] = -push_deltas['wait times'].diff(-1)
     df['rewarded'] = df['reward outcomes'].map({
         True: 'yes',
         False: 'no'
@@ -545,7 +545,7 @@ def plot_next_push_surprise(df: pd.DataFrame, palette: dict = PALETTE, palette_d
     for i, ro in enumerate(df['rewarded'].unique()):
         for j, kappa in enumerate(stim_reliabilities):
             cnt += 1
-            bp(sns.scatterplot)(df, x='wait times', y='change in wait time', conds={'stimulus reliability': kappa, 'rewarded': ro}, hue='box', palette=palette if ro == 'yes' else palette_dark,
+            bp(sns.scatterplot)(df, x='wait times', y='change in next wait time', conds={'stimulus reliability': kappa, 'rewarded': ro}, hue='box', palette=palette if ro == 'yes' else palette_dark,
                          style='stay/switch', alpha=0.5, ax=axes[i][j], legend = cnt == len(stim_reliabilities), **kwargs)
             axes[i][j].hlines(0, 0, axes[i][j].get_xlim()[1], linestyles='dashed', colors='black')
             axes[i][j].set_xlim([0, 40])
