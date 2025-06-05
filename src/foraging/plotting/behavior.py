@@ -579,16 +579,19 @@ def plot_stay_probabilities(df: pd.DataFrame, stim_reliabilities: list = KAPPA_L
     return ax
 
 
-def plot_reward_rates_in_block(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS, palette: dict = PALETTE, by_box: bool = False, bin_width: float = 60, title: str = None, ax: plt.Axes = None, **kwargs):
+def plot_reward_rates_in_block(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS, palette: dict = PALETTE, by_box: bool = False, title: str = None, ax: plt.Axes = None, **kwargs):
     x_bins = 'time'
     df = df.copy()
-    df[x_bins] = bin_data(df, 'push times', bin_width=bin_width)
+    bin_kwargs = kwargs_handler(kwargs, 'bin_kwargs', dict(bin_width = 60, strategy = 'full'))
+    df[x_bins] = bin_data(df, 'push times', **bin_kwargs)
     if by_box:
         rr = df.groupby(['subject', 'session', 'stimulus reliability', 'block', 'time', 'box'], observed = True)['reward outcomes'].sum()
     else:
         rr = df.groupby(['subject', 'session', 'stimulus reliability', 'block', 'time'], observed = True)['reward outcomes'].sum()
+
     rr = rr.to_frame().reset_index()
-    rr['reward rate'] = rr['reward outcomes'] / bin_width
+    rr['reward rate'] = rr['reward outcomes'] / rr['time'].apply(lambda x: x.length)
+    rr['time'] = rr['time'].apply(lambda x: float(x.left))
 
     fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'ncols': len(stim_reliabilities), 'sharey': True, 'sharex': True})
     fig, ax = fig_init(ax, **fig_kwargs)
@@ -596,7 +599,6 @@ def plot_reward_rates_in_block(df: pd.DataFrame, stim_reliabilities: list = KAPP
         if by_box:
             bp(sns.lineplot)(rr, conds = {'stimulus reliability': kappa}, x = 'time', y='reward rate', hue='box', palette=palette, ax = ax[i], legend = i == len(stim_reliabilities) - 1, **kwargs)
         else:
-            # sns.lineplot(filter_df(rr, conds = {'stimulus reliability': kappa}), x= 'time', y = 'reward rate', ax = ax[i], legend = i == len(stim_reliabilities) - 1)
             bp(sns.lineplot)(rr, conds = {'stimulus reliability': kappa}, x = 'time', y='reward rate', ax = ax[i], legend = i == len(stim_reliabilities) - 1, **kwargs)
     if title:
         fig.suptitle(title, y = 1)

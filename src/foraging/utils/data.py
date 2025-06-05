@@ -942,7 +942,7 @@ def bin_data(
     """
 
     # Perform initial binning based on n_bins or custom bin edges
-    if bin_width:
+    if bin_width and not bins:
         bins = np.arange(start=df[x].min(), stop=df[x].max() + bin_width, step=bin_width)
     _bins = pd.cut(df[x], bins=bins, include_lowest=True)
     dtype = df[x].dtype  # Get the dtype of the column to maintain consistency in bin edges
@@ -950,7 +950,7 @@ def bin_data(
     # Select the appropriate bin edges based on the strategy
     match strategy:
         case 'full':
-            bin_edges = _bins.cat.categories.astype(dtype)
+            bin_edges = _bins.cat.categories
         case 'right':
             bin_edges = _bins.cat.categories.right.astype(dtype)
         case _:
