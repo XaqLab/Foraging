@@ -500,9 +500,9 @@ def plot_push_intervals_vs_reward_intervals(df: pd.DataFrame, palette: dict = PA
     fit_results = []
     max_x = 0
     for i, kappa in enumerate(stim_reliabilities):
-        bp(sns.scatterplot)(df, x='reward intervals', y='same-box push intervals', conds={'stimulus reliability': kappa}, hue = 'box', palette = palette, **kwargs, ax = axes[i])
+        bp(sns.scatterplot)(df, x='reward intervals', y='wait times', conds={'stimulus reliability': kappa}, hue = 'box', palette = palette, **kwargs, ax = axes[i])
         df_subset = utils.data.filter_df(df, conds={'stimulus reliability': kappa})
-        fit_results.append(regplot(df_subset['reward intervals'].to_numpy(), df_subset['same-box push intervals'].to_numpy(),
+        fit_results.append(regplot(df_subset['reward intervals'].to_numpy(), df_subset['wait times'].to_numpy(),
                               line_kws={'color': 'black'}, ax=axes[i], **kwargs))
         max_x = max(max_x, axes[i].get_xlim()[1], axes[i].get_ylim()[1])
 
@@ -580,10 +580,27 @@ def plot_stay_probabilities(df: pd.DataFrame, stim_reliabilities: list = KAPPA_L
 
 
 def plot_reward_rates_in_block(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS, palette: dict = PALETTE, by_box: bool = False, title: str = None, ax: plt.Axes = None, **kwargs):
+    """
+
+    Args:
+        df:
+        stim_reliabilities:
+        palette:
+        by_box:
+        title:
+        ax:
+        **kwargs:
+
+    Returns:
+
+    """
+    # Bin time
     x_bins = 'time'
     df = df.copy()
     bin_kwargs = kwargs_handler(kwargs, 'bin_kwargs', dict(bin_width = 60, strategy = 'full'))
     df[x_bins] = bin_data(df, 'push times', **bin_kwargs)
+
+    # Aggregate rewards by box or across boxes
     if by_box:
         rr = df.groupby(['subject', 'session', 'stimulus reliability', 'block', 'time', 'box'], observed = True)['reward outcomes'].sum()
     else:
@@ -606,10 +623,11 @@ def plot_reward_rates_in_block(df: pd.DataFrame, stim_reliabilities: list = KAPP
     return ax
 
 
-def plot_quantity_in_block(df: pd.DataFrame, y: str = None, stim_reliabilities: list = KAPPA_LEVELS, palette: dict = PALETTE, bin_width: float = 60, title: str = None, ax: plt.Axes = None, **kwargs):
+def plot_quantity_in_block(df: pd.DataFrame, y: str = None, stim_reliabilities: list = KAPPA_LEVELS, palette: dict = PALETTE, title: str = None, ax: plt.Axes = None, **kwargs):
     x_bins = 'time'
     df.copy()
-    df[x_bins] = bin_data(df, 'push times', bin_width=bin_width)
+    bin_kwargs = kwargs_handler(kwargs, 'bin_kwargs', dict(bin_width = 60))
+    df[x_bins] = bin_data(df, 'push times', **bin_kwargs)
 
     fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'ncols': len(stim_reliabilities), 'sharey': True, 'sharex': True})
     fig, ax = fig_init(ax, **fig_kwargs)
@@ -623,16 +641,19 @@ def plot_quantity_in_block(df: pd.DataFrame, y: str = None, stim_reliabilities: 
     return ax
 
 
-def plot_matching_law(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS, palette: dict = PALETTE, bin_width: float = 60, title: str = None, ax: plt.Axes = None, **kwargs):
+def plot_matching_law(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS, palette: dict = PALETTE, title: str = None, ax: plt.Axes = None, **kwargs):
     x_bins = 'time'
     df = df.copy()
-    df[x_bins] = bin_data(df, 'push times', bin_width=bin_width)
+    bin_kwargs = kwargs_handler(kwargs, 'bin_kwargs', dict(bin_width = 60, strategy = 'full'))
+    df[x_bins] = bin_data(df, 'push times', **bin_kwargs)
     grouped = df.groupby(['subject', 'session', 'stimulus reliability', 'block', 'time', 'box'], observed=True)
     rr = grouped['reward outcomes'].sum()
     rr = rr.to_frame().reset_index()
-    rr['reward rate'] = rr['reward outcomes'] / bin_width
-    rr['push rate'] = (grouped.size() / bin_width).reset_index()[0]
+    time_bins = rr['time'].apply(lambda x: x.length)
+    rr['reward rate'] = rr['reward outcomes'] / time_bins
+    rr['push rate'] = (grouped.size().reset_index()[0] / time_bins) #.reset_index()[0]
     rr['ratio'] = rr['reward rate'] / rr['push rate']
+    rr['time'] = rr['time'].apply(lambda x: float(x.left))
 
     fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'ncols': len(stim_reliabilities), 'sharey': True, 'sharex': True})
     fig, ax = fig_init(ax, **fig_kwargs)
