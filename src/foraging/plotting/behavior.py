@@ -11,7 +11,7 @@ from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
 from scipy.spatial.distance import jensenshannon
-from scipy.stats import kstest, geom, fit
+from scipy.stats import kstest, expon, fit
 
 from foraging.config.constants import BOX_LABELS, BOX_COLORS, BOX_POSITIONS, KAPPA_LEVELS
 from foraging.plotting import PALETTE, PALETTE_DARK, enhanced_violinplot
@@ -343,7 +343,7 @@ def plot_stay_switch_pushes(df: pd.DataFrame, palette: dict = PALETTE, palette_d
         palette: Dictionary mapping box schedules to colors.
         palette_dark: Dictionary mapping box schedules to darkened colors.
         title: Title of figure.
-        null_model: If True, perform Kolmogorov-Smirnov Test to see if push intervals can be well described by geometric distribution
+        null_model: If True, perform Kolmogorov-Smirnov Test to see if push intervals can be well described by an exponential distribution
         axes: Axes to plot on. If None, a new figure and axes are created using plt.subplots. Specify keyword arguments in `fig_kwargs`.
         **kwargs: Additional keyword arguments.
             - 'fig_kwargs': Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
@@ -371,12 +371,12 @@ def plot_stay_switch_pushes(df: pd.DataFrame, palette: dict = PALETTE, palette_d
                     sns.kdeplot(data=subset, x="consecutive push intervals", fill=False, ax=ax, color=color_outline,
                                 linewidth=2)
                 if null_model:
-                    fit_dist = fit(geom, subset['consecutive push intervals'])
+                    fit_dist = fit(expon, subset['consecutive push intervals'])
                     print(f"Fitting geometric distribution to ({source} -> {dest}) push intervals", fit_dist.params)
-                    res = kstest(subset['consecutive push intervals'], geom.cdf, fit_dist.params)
+                    res = kstest(subset['consecutive push intervals'], expon.cdf, fit_dist.params)
                     print(f"KS-test of ({source} -> {dest}) push intervals", res.pvalue)
-                    # x = sorted(subset['consecutive push intervals'].unique())
-                    # ax.plot(x, geom.pmf(x, fit_dist.params[0]), color = 'black', linestyle = '-')
+                    x = sorted(subset['consecutive push intervals'].unique())
+                    ax.plot(x, expon.pdf(x, fit_dist.params[0]), color = 'black', linestyle = '-')
 
             ax.set_xlabel("")
             if i == 0:
@@ -500,7 +500,7 @@ def plot_push_intervals_vs_reward_intervals(df: pd.DataFrame, palette: dict = PA
     fit_results = []
     max_x = 0
     for i, kappa in enumerate(stim_reliabilities):
-        bp(sns.scatterplot)(df, x='reward intervals', y='wait times', conds={'stimulus reliability': kappa}, hue = 'box', palette = palette, **kwargs, ax = axes[i])
+        bp(sns.scatterplot)(df, x='reward intervals', y='wait times', conds={'stimulus reliability': kappa}, hue = 'box', palette = palette, ax = axes[i], legend = i == len(stim_reliabilities) - 1, **kwargs)
         df_subset = utils.data.filter_df(df, conds={'stimulus reliability': kappa})
         fit_results.append(regplot(df_subset['reward intervals'].to_numpy(), df_subset['wait times'].to_numpy(),
                               line_kws={'color': 'black'}, ax=axes[i], **kwargs))

@@ -188,7 +188,7 @@ def bp(func: Callable):
         fig, ax = fig_init(ax, **kwargs_handler(kwargs, 'fig_kwargs'))
 
         # Pop any last keyword args not needed for seaborn here before running function
-        legend_kwargs = kwargs_handler(kwargs, 'legend_kwargs', dict(loc='upper right', title = hue))
+        legend_kwargs = kwargs_handler(kwargs, 'legend_kwargs', dict(loc="upper left", bbox_to_anchor = (1,1), title = hue))
         title_kwargs = kwargs_handler(kwargs, 'title_kwargs')
         xlabel_kwargs = kwargs_handler(kwargs, 'xlabel_kwargs')
         ylabel_kwargs = kwargs_handler(kwargs, 'ylabel_kwargs')
@@ -237,7 +237,7 @@ def bp(func: Callable):
                 # except Exception as e:
                 #     print(e)
                 #     _ax.legend(box_labels, **legend_kwargs)
-        fig.tight_layout()
+        # fig.tight_layout()
         if ret is None:
             return ax
         return ret # Assume there is usually an ax in here

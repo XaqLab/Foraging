@@ -910,7 +910,7 @@ def exclusion_criteria(df: pd.DataFrame) -> pd.DataFrame:
 def bin_data(
     df: pd.DataFrame,
     x: str,
-    bins: int | list[float] = 20,
+    bins: int | list[float] = None,
     bin_width: float = None,
     strategy: str = 'left'
 ) -> pd.Series:
@@ -942,8 +942,10 @@ def bin_data(
     """
 
     # Perform initial binning based on n_bins or custom bin edges
-    if bin_width and not bins:
+    if bin_width and bins is None:
         bins = np.arange(start=df[x].min(), stop=df[x].max() + bin_width, step=bin_width)
+    if bins is None:
+        bins = 20
     _bins = pd.cut(df[x], bins=bins, include_lowest=True)
     dtype = df[x].dtype  # Get the dtype of the column to maintain consistency in bin edges
 
@@ -955,7 +957,7 @@ def bin_data(
             bin_edges = _bins.cat.categories.right.astype(dtype)
         case _:
             bin_edges = _bins.cat.categories.left.astype(dtype)
-
+    print(_bins)
     # Apply the bin labels to the original data
     return pd.cut(df[x], bins=bins, include_lowest=True, labels=bin_edges).cat.remove_unused_categories()
 
