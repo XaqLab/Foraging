@@ -370,6 +370,26 @@ def across_blocks(func: Callable, df: pd.DataFrame, figure_dir: str, filename_pr
                 _figure_saver(fig, ax, figure_path)
     _inner()
 
+def subject_plotter(subjects, plot_func, *args, **kwargs):
+    """
+    Generates plots for each subject
+
+    Args:
+        subjects: iterable of subjects
+        plot_func: plotting function
+        *args: arguments to `plot_func`
+        **kwargs: keyword arguments to `plot_func`
+
+    Returns:
+        list of any returned output from `plot_func`
+    """
+
+    returns = []
+    for i, subj in enumerate(subjects):
+        ret = plot_func(i, subj, *args, **kwargs)
+        returns.append(ret)
+    return returns
+
 ## Common routines
 def enhanced_violinplot(df: pd.DataFrame, x: str, y: str, hue: str = None, hue_order = None, palette = None, ax: plt.Axes = None, **kwargs) -> plt.Axes:
     """

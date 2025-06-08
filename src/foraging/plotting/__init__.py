@@ -15,4 +15,4 @@ current_dir = Path(__file__).resolve().parent
 # Configure matplotlib
 plt.style.use(current_dir.parent / os.getenv('PLOTCONFIG_PATH'))
 
-from ._base import fig_init, titler, unitler, get_bar_positions, bp, enhanced_violinplot, plot_variable_subplots, format_yticks, per_block, across_blocks
+from ._base import fig_init, titler, unitler, get_bar_positions, bp, subject_plotter, enhanced_violinplot, plot_variable_subplots, format_yticks, per_block, across_blocks

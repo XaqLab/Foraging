@@ -14,9 +14,9 @@ from scipy.spatial.distance import jensenshannon
 from scipy.stats import kstest, expon, fit
 
 from foraging.config.constants import BOX_LABELS, BOX_COLORS, BOX_POSITIONS, KAPPA_LEVELS
-from foraging.plotting import PALETTE, PALETTE_DARK, enhanced_violinplot
+from foraging.plotting import PALETTE, PALETTE_DARK, enhanced_violinplot, subject_plotter
 from foraging.utils import INDEX, MIN_INDEX, kwargs_handler
-from foraging.utils.data import get_blocks, filter_df, bin_data
+from foraging.utils.data import get_blocks, filter_df, bin_data, get_continuous_from_df_to_dict
 from foraging.plotting._base import fig_init, titler, unitler, bp, regplot, get_bar_heights, palette_handler
 
 logger = logging.getLogger(__name__)
@@ -120,6 +120,206 @@ def plot_experiment_overview(df: pd.DataFrame, conds: dict = None, title: str = 
     fig.tight_layout()
     return ax
 
+def plot_push_percentiles(df: pd.DataFrame, percentiles: dict, **kwargs):
+    def _plot(i, subj, **kwargs):
+        # Plot each push's percentiles
+        ax = bp(sns.scatterplot)(df, x='consecutive push intervals', y='push percentiles', conds={'subject': subj}, title_prefix="Percentiles of consecutive push intervals", x_unit='s', legend = False, **kwargs)
+        y = df.loc[(subj,), 'push percentiles'].sort_values()
+        x = df.loc[(subj,), 'consecutive push intervals'].sort_values()
+
+        # Mark specific percentile
+        percentile = percentiles[subj]
+        perc_idx = np.argmin((y - percentile)**2)
+        push_perc = x.iloc[perc_idx]
+        print(f'{subj}\'s {round(percentile * 100, 2)}% push {push_perc}')
+        ax.axvline(push_perc, color='black', linestyle='dashed', label=f'{round(percentile * 100, 2)}% push')
+        ax.legend(loc = 'upper right')
+    subject_plotter(df.index.unique('subject'), _plot, **kwargs)
+
+
+def plot_top_outliers(df: pd.DataFrame, top_n: int, figsize: tuple[float, float] = (20, 2.5), **kwargs):
+    # Sort data by magnitude of push interval in descending order
+    df_sorted = df.sort_values(by='consecutive push intervals', ascending=False)
+
+    def _plot(i, subj, **kwargs):
+        fig, axes = plt.subplots(1, top_n, figsize=figsize)
+        df_subject = filter_df(df_sorted, {'subject': subj}, attempt_index=False)
+
+        # Plot each block containing the `top_n` pushes
+        for i, (idx, g) in enumerate(get_blocks(df_subject, sort=False)):
+            if i >= top_n:
+                break
+            conds = dict(zip(INDEX[:MIN_INDEX - 1], idx))
+            plot_pushes(g.sort_index(), conds=conds, title_prefix='', legend=False, ax=axes[i], **kwargs)
+            axes[i].set_title(f"session {conds['session']} block {conds['block']}")
+        fig.suptitle(subj)
+        fig.tight_layout()
+    subject_plotter(df.index.unique('subject'), _plot, **kwargs)
+
+
+def plot_reward_outcomes_outlier_vs_control(df: pd.DataFrame, percentiles: dict, n_samples: int = 5000, window: float = 30, outlier_label: str = 'top pushes', control_label: str = 'middle pushes'):
+    df_rate_content = {'subject': [], 'push intervals': [], '% rewarded': [], 'previous wait time (s)': [],
+                       'previous reward outcome': [], 'type': []}
+    subjects = df.index.unique('subject')
+    def _helper(subject, percentile: float = None):
+        df_subject = filter_df(df, {'subject': subject}, attempt_index=False)
+        if percentile:
+            df_subject = df_subject[df_subject['push percentiles'] >= percentile]
+        else:
+            df_subject = df_subject[(df_subject['push percentiles'] >= 0.25) & (df_subject['push percentiles'] <= 0.75)]
+
+        for idx, row in df_subject.sample(n_samples, replace=True).iterrows():
+
+            # Get push immediately before current push
+            push_num = idx[INDEX.index('push #')]
+            new_idx = df.index.get_loc(idx) - 1
+            if push_num == 1:
+                continue
+
+            # Calculate reward fraction within a given time window of the previous push
+            new_row = df.iloc[new_idx]
+            if new_row['push percentiles'] > 0.75:  # if previous push is also outlier, then considering this push is redundant
+                continue
+
+            df_block = df.loc[idx[:MIN_INDEX - 1]]
+            df_window = df_block.loc[(df_block['push times'] <= new_row['push times']) & (
+                    df_block['push times'] >= new_row['push times'] - window)]
+
+            # Populate data arrays
+            if len(df_window) > 0:
+                df_rate_content['subject'].append(subject)
+                df_rate_content['push intervals'].append(row['consecutive push intervals'])
+                df_rate_content['% rewarded'].append(
+                    df_window['reward outcomes'].sum() / len(df_window['reward outcomes']))
+                df_rate_content['previous wait time (s)'].append(new_row['wait times'])
+                df_rate_content['previous reward outcome'].append(new_row['reward outcomes'])
+                df_rate_content['type'].append(outlier_label) if percentile else df_rate_content['type'].append(control_label)
+
+    # For each subject, find the top x% pushes and middle 50% pushes and calculate the reward fraction of the past `window` seconds prior to each push's onset
+    for subject in subjects:
+        _helper(subject, percentile = percentiles[subject])
+        _helper(subject)
+
+    fig, axes = plt.subplots(2, 1, figsize=(20, 10))
+    df_rate = pd.DataFrame(df_rate_content).set_index('subject').dropna()
+    df_rate = df_rate[df_rate['previous wait time (s)'] <= 30]
+    enhanced_violinplot(df_rate, x='subject', y='% rewarded', hue='type', hue_order=[control_label, outlier_label],
+                        ax=axes[0], inner=None)
+    axes[0].set_title(f"% rewarded (Outliers vs Control)")
+    sns.move_legend(axes[0], "upper left", bbox_to_anchor=(1, 1))
+
+    df_rate['reward outcome x type'] = df_rate['previous reward outcome'].astype(str) + '_' + df_rate['type']
+    enhanced_violinplot(df_rate, x='subject', y='previous wait time (s)', hue='reward outcome x type', ax=axes[1],
+                        palette=['#89ff87', '#28ab26', '#84ebf7', '#1cb7c9'],
+                        hue_order=['False_' + control_label, 'False_' + outlier_label, 'True_' + control_label,
+                                   'True_' + outlier_label], density_norm='width', inner=None)
+    axes[1].set_title(f"Previous wait time and outcome (Outliers vs Control)")
+    sns.move_legend(axes[1], "upper left", bbox_to_anchor=(1, 1))
+    fig.tight_layout()
+
+
+def plot_session_onsets_outlier_vs_control(df: pd.DataFrame, percentiles: dict, outlier_label: str = 'top pushes', control_label: str = 'middle pushes'):
+    subjects = df.index.unique('subject')
+
+    # Get time of each push in the session, not just block
+    x_offset = get_blocks(df)['duration'].last()
+    x_offset.iloc[1:] = x_offset.groupby(['subject', 'session']).cumsum().iloc[:-1]
+    session_start = x_offset.reset_index(level='block').groupby(['subject', 'session'])['block'].first()
+    for idx, x in session_start.items():  # Make sure each row (session) starts from 0 on the x-axis
+        x_offset.loc[idx + (x,)] = 0
+    df_temp = df.join(x_offset, rsuffix='_offset', on=INDEX[:MIN_INDEX - 1])
+    df_temp['push time in session'] = df_temp['push times'] + df_temp['duration_offset']
+    df_temp['onset (s)'] = get_blocks(df_temp['push time in session']).shift().fillna(0)
+
+    # Compare top pushes and middle pushes
+    df_temp_content = []
+    for i, subject in enumerate(subjects):
+        percentile = percentiles[subject]
+        df_subject = filter_df(df_temp, {'subject': subject}, attempt_index=False)
+        df_subject = df_subject[(df_subject['push percentiles'] >= percentile) | (
+                    (df_subject['push percentiles'] >= 0.25) & (df_subject['push percentiles'] <= 0.75))]
+        df_subject.loc[df_subject['push percentiles'] >= percentile, 'type'] = outlier_label
+        df_subject.loc[
+            (df_subject['push percentiles'] >= 0.25) & (df_subject['push percentiles'] <= 0.75), 'type'] = control_label
+        df_temp_content.append(df_subject)
+    df_temp = pd.concat(df_temp_content)
+    ax = enhanced_violinplot(df_temp, x='subject', y='onset (s)', hue='type', hue_order=[control_label, outlier_label],
+                             cut=0, inner=None)
+    ax.set_title('Onset of push in session')
+
+
+def plot_vertical_position_in_block(df: pd.DataFrame, conds: dict, data_dir: str):
+    # Get vertical data for block specified by `conds`
+    df_block = filter_df(df, conds).copy()
+    continuous_data, errors = get_continuous_from_df_to_dict(df_block, data_dir)
+    time = continuous_data[tuple(conds.values())]['time']
+    vertical = continuous_data[tuple(conds.values())]['position'][:, 2]
+
+    # Plot all vertical positions
+    fig, ax = plt.subplots()
+    ax.plot(time, vertical, c='grey', linewidth=1)
+
+    # Plot vertical position at time of push
+    idx = np.abs(time[None, :] - df_block['push times'].values[:, None]).argmin(axis=1)
+    df_block['z-coordinate'] = vertical[idx]
+    ax = plot_block_events(df_block, conds=conds, y='z-coordinate', y_unit='mm',
+                           title_prefix='Vertical position in block', ax=ax)
+    ax.axhline(y=500, label='screen', linestyle=':', c='black')
+    ax.set_xlabel("time (s)")
+    ax.set_ylabel("vertical position (mm)")
+    ax.set_title("Vertical position in block")
+
+def plot_vertical_position_outlier_vs_control(df: pd.DataFrame, data_dir: str, percentiles: dict, n_samples: int = 5000, outlier_label: str = 'top pushes', control_label: str = 'middle pushes'):
+    continuous_data, _ = get_continuous_from_df_to_dict(df, data_dir)
+    dfs_cont = []
+    cont_blocks = list(continuous_data.keys())
+    for block in cont_blocks:
+        dfs_cont.append(df.xs(block, level=('subject', 'session', 'block'), drop_level=False))
+    df = pd.concat(dfs_cont)
+    df_vertical = {'subject': [], 'push intervals': [], 'average vertical position (mm)': [], 'type': []}
+    return df
+    def _helper(subject, percentile: float = None):
+        df_subject = filter_df(df, {'subject': subject}, attempt_index=False)
+        if percentile:
+           df_subject = df_subject[df_subject['push percentiles'] >= percentile]
+        else:
+           df_subject = df_subject[(df_subject['push percentiles'] >= 0.25) & (df_subject['push percentiles'] <= 0.75)]
+           df_subject = df_subject.sample(n_samples, replace=True)
+
+        for idx, row in df_subject.iterrows():
+            try:
+                # Identify the push times in vertical
+                # Take average over each push interval
+                conds = dict(subject=subject, session=idx[INDEX.index('session')], block=idx[INDEX.index('block')])
+                time = continuous_data[tuple(conds.values())]['time']
+                vertical = continuous_data[tuple(conds.values())]['position'][:, 2]
+                push_interval_end = row['push times']
+                push_interval_start = push_interval_end - row['consecutive push intervals']
+                x = np.abs(time[None, :] - np.array([[push_interval_start], [push_interval_end]])).argmin(axis=1)
+                v = vertical[x[0]:x[1]].mean()
+                if len(v) == 0:
+                    continue
+                df_vertical['average vertical position (mm)'].append(vertical[x[0]:x[1]].mean())
+                df_vertical['type'].append(outlier_label) if percentile else df_vertical.append(control_label)
+                df_vertical['subject'].append(subject)
+                df_vertical['push intervals'].append(row['consecutive push intervals'])
+            except:
+                continue
+
+    subjects = df.index.unique('subject')
+    for subject in subjects:
+        # _helper(subject, percentile = percentiles[subject])
+        _helper(subject, percentile = 0.9)
+        _helper(subject)
+
+    return df_vertical
+    df_vertical = pd.DataFrame(df_vertical).set_index('subject').dropna()
+
+    # Plot each subject's vertical position distribution
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax = enhanced_violinplot(df_vertical, x='subject', y='average vertical position (mm)', hue='type',
+                             hue_order=[control_label, outlier_label], inner=None, ax=ax)
+    ax.set_title("Average vertical position occupied during push interval")
 
 def plot_block_events(df: pd.DataFrame, conds: dict = None, x: str = 'push times', y: str = 'box position', x_unit: str = 's', y_unit: str = None, title: str = '', title_prefix: str = 'Block activity',
                       palette: dict = PALETTE, legend: bool = True, ax: plt.Axes = None, **kwargs) -> plt.Axes:
@@ -665,8 +865,6 @@ def plot_matching_law(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS,
         fig.suptitle(title, y = 1)
     fig.tight_layout()
     return ax
-#
-# def plot_fisher_info_in_block()
 
 def plot_frequencies_over_experiment(df: pd.DataFrame, category: str, conds: dict = None, title: str = None, title_prefix: str = None, palette: list = BOX_COLORS, label_rotation: float = 35, ax: plt.Axes = None, **kwargs):
 
