@@ -20,6 +20,8 @@ import os, pickle
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
+from matplotlib import rcParams
+
 def plot_experiment_overview(df: pd.DataFrame, conds: dict = None, title: str = '', title_prefix: str = '', palette: dict = PALETTE, label_rotation: float = 35, annotate_block: bool = False, ax: plt.Axes = None, **kwargs) -> plt.Axes:
     """
     Plot the pushes over all blocks in the experiment, organized by sessions. This assumes one subject is specified in the `conds` dictionary.
@@ -395,6 +397,8 @@ def plot_block_events(df: pd.DataFrame, conds: dict = None, x: str = 'push times
     mask = df_block['reward outcomes'] == True
     ax.scatter(x_vals[mask], y_vals[mask], c=colors[mask], marker='^', s = 80, zorder = 2)
     ax.scatter(x_vals[~mask], y_vals[~mask], edgecolors=colors[~mask], marker='v', s = 80, zorder = 2, facecolors ="none")
+    ax.spines['left'].set_visible(False)
+    ax.spines['bottom'].set_visible(False)
 
     # Create legend manually with proxy artists
     if legend:
@@ -510,6 +514,38 @@ def plot_experiment_parameters(df: pd.DataFrame, conds: dict, title: str = "Expe
     ax.set_title(title)
     return ax
 
+
+def plot_wait_times_by_sessions(df: pd.DataFrame):
+
+    # Examine monkeys separately from humans
+    monkey_subjects = ['dylan', 'marco', 'viktor']
+    conds = {'subject': monkey_subjects}
+    df_monkey = filter_df(df, conds).copy()
+
+    # Reformat time data
+    df_monkey['session id'] = pd.to_datetime(df_monkey.index.get_level_values('session'), format='%Y%m%d')
+    df_ref = df_monkey.groupby('subject')['session id'].min()
+    df_monkey = df_monkey.join(df_ref, how='left', rsuffix='_ref', on=['subject'])
+    df_monkey['day'] = (df_monkey['session id'] - df_monkey['session id_ref']).dt.days
+    def _plot(i, subj):
+        # Plot experiment overview and wait time distribution
+        fig, axes = plt.subplots(2, 1, figsize=(25, 10), height_ratios=[1, 2], sharex = True)
+        plot_experiment_parameters(df_monkey, conds={'subject': subj}, ax=axes[0])
+        bp(sns.swarmplot)(df_monkey, x="day", y="consecutive push intervals", conds={'subject': subj}, hue='box',
+                          palette=PALETTE, title_prefix="Push intervals across sessions", size=1, log_scale=True,
+                          legend = False, ax=axes[1]) # legend_kwargs={'markerscale': 5}
+
+        # Add weekday labels
+        labels = axes[1].get_xticklabels()
+        days = df_monkey.xs(subj, level='subject').reset_index().groupby(['session'], as_index=False)['week day'].max()[
+            'week day']
+        for j, l in enumerate(labels):
+            tmp = l.get_text()
+            labels[j] = tmp + '\n' + days[j]
+        axes[1].set_xticklabels(labels)
+        fig.tight_layout()
+
+    subject_plotter(monkey_subjects, _plot)
 
 def plot_wait_times(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS, palette: dict = PALETTE, palette_dark: dict = PALETTE_DARK, title: str = None, ax: plt.Axes = None, **kwargs) -> plt.Axes:
     """

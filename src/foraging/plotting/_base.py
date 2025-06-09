@@ -237,7 +237,6 @@ def bp(func: Callable):
                 # except Exception as e:
                 #     print(e)
                 #     _ax.legend(box_labels, **legend_kwargs)
-        # fig.tight_layout()
         if ret is None:
             return ax
         return ret # Assume there is usually an ax in here
