@@ -4,21 +4,19 @@ from copy import deepcopy
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from foraging import utils
-from foraging.utils import data
 from matplotlib import pyplot as plt
-from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
 from scipy.spatial.distance import jensenshannon
 from scipy.stats import kstest, expon, fit
 
-from foraging.config.constants import BOX_LABELS, BOX_COLORS, BOX_POSITIONS, KAPPA_LEVELS
+from foraging.config.constants import BOX_COLORS, BOX_POSITIONS, KAPPA_LEVELS
 from foraging.plotting import PALETTE, PALETTE_DARK, enhanced_violinplot, subject_plotter
 from foraging.utils import INDEX, MIN_INDEX, kwargs_handler
 from foraging.utils.data import get_blocks, filter_df, bin_data, get_continuous_from_df_to_dict
 from foraging.plotting._base import fig_init, titler, unitler, bp, regplot, get_bar_heights, palette_handler
 
+import os, pickle
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
@@ -269,57 +267,64 @@ def plot_vertical_position_in_block(df: pd.DataFrame, conds: dict, data_dir: str
     ax.set_ylabel("vertical position (mm)")
     ax.set_title("Vertical position in block")
 
-def plot_vertical_position_outlier_vs_control(df: pd.DataFrame, data_dir: str, percentiles: dict, n_samples: int = 5000, outlier_label: str = 'top pushes', control_label: str = 'middle pushes'):
+def plot_vertical_position_outlier_vs_control(df: pd.DataFrame, data_dir: str):
     continuous_data, _ = get_continuous_from_df_to_dict(df, data_dir)
     dfs_cont = []
-    cont_blocks = list(continuous_data.keys())
-    for block in cont_blocks:
-        dfs_cont.append(df.xs(block, level=('subject', 'session', 'block'), drop_level=False))
-    df = pd.concat(dfs_cont)
-    df_vertical = {'subject': [], 'push intervals': [], 'average vertical position (mm)': [], 'type': []}
-    return df
-    def _helper(subject, percentile: float = None):
-        df_subject = filter_df(df, {'subject': subject}, attempt_index=False)
-        if percentile:
-           df_subject = df_subject[df_subject['push percentiles'] >= percentile]
-        else:
-           df_subject = df_subject[(df_subject['push percentiles'] >= 0.25) & (df_subject['push percentiles'] <= 0.75)]
-           df_subject = df_subject.sample(n_samples, replace=True)
 
+    # Only keep blocks that have real position data
+    for block, data in continuous_data.items():
+        if np.any(data['position'] != np.nan):
+            dfs_cont.append(df.xs(block, level=('subject', 'session', 'block'), drop_level=False))
+    df = pd.concat(dfs_cont)
+
+    def _plot(i, subject):
+        df_subject = filter_df(df, {'subject': subject}, attempt_index=False)
+        df_vertical = {'push intervals': [], 'average vertical position': [], 'push percentiles': []}
+        # Find average vertical position over each push interval
         for idx, row in df_subject.iterrows():
             try:
-                # Identify the push times in vertical
-                # Take average over each push interval
                 conds = dict(subject=subject, session=idx[INDEX.index('session')], block=idx[INDEX.index('block')])
                 time = continuous_data[tuple(conds.values())]['time']
                 vertical = continuous_data[tuple(conds.values())]['position'][:, 2]
                 push_interval_end = row['push times']
                 push_interval_start = push_interval_end - row['consecutive push intervals']
                 x = np.abs(time[None, :] - np.array([[push_interval_start], [push_interval_end]])).argmin(axis=1)
-                v = vertical[x[0]:x[1]].mean()
-                if len(v) == 0:
-                    continue
-                df_vertical['average vertical position (mm)'].append(vertical[x[0]:x[1]].mean())
-                df_vertical['type'].append(outlier_label) if percentile else df_vertical.append(control_label)
-                df_vertical['subject'].append(subject)
-                df_vertical['push intervals'].append(row['consecutive push intervals'])
+                v = vertical[x[0]:x[1]]
+                mean_vertical = v[~np.isnan(v)].mean()
+                if not np.isnan(mean_vertical):
+                    df_vertical['average vertical position'].append(mean_vertical)
+                    df_vertical['push intervals'].append(row['consecutive push intervals'])
+                    df_vertical['push percentiles'].append(row['push percentiles'])
             except:
                 continue
 
-    subjects = df.index.unique('subject')
-    for subject in subjects:
-        # _helper(subject, percentile = percentiles[subject])
-        _helper(subject, percentile = 0.9)
-        _helper(subject)
-
-    return df_vertical
-    df_vertical = pd.DataFrame(df_vertical).set_index('subject').dropna()
+        fig, ax = plt.subplots()
+        sns.histplot(df_vertical, x='push percentiles', y='average vertical position', ax = ax)
+        ax.set_title(f"{subject}'s average vertical position occupied during push interval")
 
     # Plot each subject's vertical position distribution
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax = enhanced_violinplot(df_vertical, x='subject', y='average vertical position (mm)', hue='type',
-                             hue_order=[control_label, outlier_label], inner=None, ax=ax)
-    ax.set_title("Average vertical position occupied during push interval")
+    subject_plotter(df.index.unique('subject'), _plot)
+
+
+def plot_hmm_probs_in_block(df: pd.DataFrame, filepath: str, block_idx: int = 30):
+
+    # Load HMM probabilities
+    with open(filepath, 'rb') as f:
+        saved = pickle.load(f)
+
+    subject, kappa, block_ids = saved['subject'], saved['kappa'], saved['block_ids']
+    pos, gaze = saved['pos'], saved['gaze']
+    push, move, look = saved['push'], saved['move'], saved['look']
+    p_policy = saved['p_policy']
+
+    # Overlay probabilities on top of a specific block
+    session_id, block = block_ids[block_idx]
+    hmm_probs = p_policy[block_idx]
+    ax = plot_pushes(df, conds=dict(subject=subject, session=int(session_id), block=block + 1),
+                     legend_kwargs={'loc': 'upper left', 'bbox_to_anchor': (1.1, 1)})
+    ax2 = ax.twinx()
+    ax2.plot(hmm_probs)
+    ax2.set_ylabel('HMM Policy Probability')
 
 def plot_block_events(df: pd.DataFrame, conds: dict = None, x: str = 'push times', y: str = 'box position', x_unit: str = 's', y_unit: str = None, title: str = '', title_prefix: str = 'Block activity',
                       palette: dict = PALETTE, legend: bool = True, ax: plt.Axes = None, **kwargs) -> plt.Axes:
@@ -352,7 +357,7 @@ def plot_block_events(df: pd.DataFrame, conds: dict = None, x: str = 'push times
     fig, ax = fig_init(ax, **fig_kwargs)
 
     # Get block data and metadata
-    df_block = utils.data.filter_df(df, conds)
+    df_block = filter_df(df, conds)
     schedules = sorted(df_block['schedule'].unique())
     kappa = df_block.index.unique('kappa')
     stim_type = df_block.index.unique('stimulus type')
@@ -426,7 +431,7 @@ def plot_pushes(df: pd.DataFrame, conds: dict = None, title: str = '', title_pre
     ax = plot_block_events(df, conds= conds, title= title, title_prefix= title_prefix, palette= palette, legend= legend, ax= ax, **kwargs)
 
     # Custom plotting logic
-    df_block = utils.data.filter_df(df, conds).reset_index()
+    df_block = filter_df(df, conds).reset_index()
     ax.set_xlim([0, df_block['push times'].max() + 1])
     box_labels = [box_labels[i] for i in sorted(df_block['box position'].unique())]
     ax.set_yticks(range(len(box_labels)), box_labels, rotation = 90, va = 'center')
@@ -468,7 +473,7 @@ def plot_experiment_parameters(df: pd.DataFrame, conds: dict, title: str = "Expe
     n_params = len(kappas) + len(stim_types) + len(shapes)
 
     # Filter df according to conditions
-    df = utils.data.filter_df(df, conds)
+    df = filter_df(df, conds)
     sessions = df.index.unique('session').sort_values()
     y_labels = [str(s) for s in shapes] + [str(s) for s in stim_types] + [str(k) for k in kappas]
     a, b, c = 2, 2, 1  # Constants to control spacing
@@ -505,7 +510,7 @@ def plot_experiment_parameters(df: pd.DataFrame, conds: dict, title: str = "Expe
     ax.set_title(title)
     return ax
 
-#todo: wrap all these functions to reduce redundant code
+
 def plot_wait_times(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS, palette: dict = PALETTE, palette_dark: dict = PALETTE_DARK, title: str = None, ax: plt.Axes = None, **kwargs) -> plt.Axes:
     """
 
@@ -533,6 +538,7 @@ def plot_wait_times(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS, p
         fig.suptitle(title, y = 1)
     fig.tight_layout()
     return ax
+
 
 def plot_stay_switch_pushes(df: pd.DataFrame, palette: dict = PALETTE, palette_dark: dict = PALETTE_DARK, title: str = None, null_model: bool = False, axes: plt.Axes = None, **kwargs) -> plt.Axes:
     """
@@ -623,7 +629,7 @@ def plot_runlengths(df: pd.DataFrame, palette: dict = PALETTE, stim_reliabilitie
     x = df.index.get_level_values('push #')
     consecutive_mask = x[1:] - x[:-1] == 1
     change_mask = (df['stay/switch'] == 'switch') & np.insert(consecutive_mask, 0, True)
-    push_nums = utils.data.get_blocks(df)["push times"].rank().astype(
+    push_nums = get_blocks(df)["push times"].rank().astype(
         int)  # Calculate from scratch in case pushes got dropped
     change_mask[push_nums == 1] = True
 
@@ -631,7 +637,7 @@ def plot_runlengths(df: pd.DataFrame, palette: dict = PALETTE, stim_reliabilitie
     group_labels = change_mask.cumsum()
     labeled_lengths = pd.DataFrame(
         {"group": group_labels, "box": df['box'],
-         "next box": utils.data.get_blocks(df['box']).shift(-1).fillna('missing')}
+         "next box": get_blocks(df['box']).shift(-1).fillna('missing')}
     ).set_index(df.index)
     labeled_lengths_all = labeled_lengths.groupby(['stimulus reliability', 'box', 'group']).size().to_frame().rename(
         columns={0: 'length'})
@@ -701,7 +707,7 @@ def plot_push_intervals_vs_reward_intervals(df: pd.DataFrame, palette: dict = PA
     max_x = 0
     for i, kappa in enumerate(stim_reliabilities):
         bp(sns.scatterplot)(df, x='reward intervals', y='wait times', conds={'stimulus reliability': kappa}, hue = 'box', palette = palette, ax = axes[i], legend = i == len(stim_reliabilities) - 1, **kwargs)
-        df_subset = utils.data.filter_df(df, conds={'stimulus reliability': kappa})
+        df_subset = filter_df(df, conds={'stimulus reliability': kappa})
         fit_results.append(regplot(df_subset['reward intervals'].to_numpy(), df_subset['wait times'].to_numpy(),
                               line_kws={'color': 'black'}, ax=axes[i], **kwargs))
         max_x = max(max_x, axes[i].get_xlim()[1], axes[i].get_ylim()[1])
