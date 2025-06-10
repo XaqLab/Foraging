@@ -7,9 +7,15 @@ font.sans-serif: Arial, Helvetica, DejaVu Sans
 axes.titlesize: larger
 xtick.labelsize: smaller
 ytick.labelsize: smaller
+xtick.major.size: 0
+xtick.minor.size: 0
+ytick.major.size: 0
+ytick.minor.size: 0
 axes.grid: False
 axes.spines.top: False
 axes.spines.right: False
+axes.spines.left: False
+axes.spines.bottom: False
 axes.facecolor: (0,0,0,0)
 
 # Legend settings

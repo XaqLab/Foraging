@@ -9,6 +9,8 @@ from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
 from scipy.spatial.distance import jensenshannon
 from scipy.stats import kstest, expon, fit
+from scipy.optimize import minimize_scalar
+from scipy.stats import gamma
 
 from foraging.config.constants import BOX_COLORS, BOX_POSITIONS, KAPPA_LEVELS
 from foraging.plotting import PALETTE, PALETTE_DARK, enhanced_violinplot, subject_plotter
@@ -546,7 +548,8 @@ def plot_wait_times_by_sessions(df: pd.DataFrame, label_rotation: float = 35):
         fig.tight_layout()
     subject_plotter(monkey_subjects, _plot)
 
-def plot_wait_times(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS, palette: dict = PALETTE, palette_dark: dict = PALETTE_DARK, title: str = None, ax: plt.Axes = None, **kwargs) -> plt.Axes:
+#todo: wrap all plots that take `stim_reliabilities` with dedicated function to remove repetition
+def plot_wait_times(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS, palette: dict = PALETTE, palette_dark: dict = PALETTE_DARK, **kwargs) -> plt.Axes:
     """
 
     Args:
@@ -554,28 +557,27 @@ def plot_wait_times(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS, p
         palette:
         palette_dark:
         stim_reliabilities:
-        title:
-        ax: Axes to plot on. If None, a new figure and axes are created using plt.subplots. Specify keyword arguments in `fig_kwargs`.
         **kwargs:
 
     Returns:
 
     """
     fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs')
-    fig, ax = fig_init(ax, **fig_kwargs)
-    bp(sns.swarmplot)(df, x='stimulus reliability', order = stim_reliabilities,
-                      y='wait times', hue='box', palette=palette_dark, legend=False, log_scale=True, size=0.5,
-                      dodge=True, ax=ax)
-    bp(enhanced_violinplot)(df, x='stimulus reliability', order = stim_reliabilities, y='wait times', hue='box', palette=palette,
-                            y_unit='s', cut=0, inner=None,
-                            log_scale=True, common_norm=True, ax=ax, **kwargs)
-    if title:
-        fig.suptitle(title, y = 1)
-    fig.tight_layout()
-    return ax
+    def _plot(i, subj):
+        fig, ax = fig_init(None, **fig_kwargs)
+        df_subj = filter_df(df, {'subject': subj})
+        bp(sns.swarmplot)(df_subj, x='stimulus reliability', order = stim_reliabilities,
+                        y='wait times', hue='box', palette=palette_dark, legend=False, log_scale=True, size=0.5,
+                        dodge=True, ax=ax)
+        bp(enhanced_violinplot)(df_subj, x='stimulus reliability', order = stim_reliabilities, y='wait times', hue='box', palette=palette,
+                                y_unit='s', cut=0, inner=None,
+                                log_scale=True, common_norm=True, ax=ax, **kwargs)
+        fig.suptitle(f'Wait times for {subj}')
+        fig.tight_layout()
+    subject_plotter(df.index.unique('subject'), _plot)
 
 
-def plot_stay_switch_pushes(df: pd.DataFrame, palette: dict = PALETTE, palette_dark: dict = PALETTE_DARK, title: str = None, null_model: bool = False, axes: plt.Axes = None, **kwargs) -> plt.Axes:
+def plot_stay_switch_pushes(df: pd.DataFrame, palette: dict = PALETTE, palette_dark: dict = PALETTE_DARK, null_model: bool = False, **kwargs) -> plt.Axes:
     """
     Plot the stay and switch push intervals.
 
@@ -583,9 +585,7 @@ def plot_stay_switch_pushes(df: pd.DataFrame, palette: dict = PALETTE, palette_d
         df: DataFrame.
         palette: Dictionary mapping box schedules to colors.
         palette_dark: Dictionary mapping box schedules to darkened colors.
-        title: Title of figure.
         null_model: If True, perform Kolmogorov-Smirnov Test to see if push intervals can be well described by an exponential distribution
-        axes: Axes to plot on. If None, a new figure and axes are created using plt.subplots. Specify keyword arguments in `fig_kwargs`.
         **kwargs: Additional keyword arguments.
             - 'fig_kwargs': Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
 
@@ -596,52 +596,51 @@ def plot_stay_switch_pushes(df: pd.DataFrame, palette: dict = PALETTE, palette_d
     n_boxes = len(palette)
     box_labels = palette.keys()
     fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', dict(nrows = n_boxes, ncols = n_boxes, figsize=(12, 10), sharex=True, sharey=True))
-    fig, axes = fig_init(axes, **fig_kwargs)
-    for i, source in enumerate(box_labels):
-        for j, dest in enumerate(box_labels):
-            ax = axes[i, j]
-            subset = df[(df['prev box'] == source) & (df['box'] == dest)]
-            color_fill = palette[dest]
-            color_fill_dark = palette_dark[dest]
-            color_outline = palette[source]
-            if not subset.empty:
-                sns.kdeplot(data=subset, x="consecutive push intervals", fill=True, ax=ax, color=color_fill, alpha=0.6)
-                if source != dest:
-                    sns.kdeplot(data=subset, x="consecutive push intervals", fill=True, ax=ax, color=color_fill_dark,
-                                alpha=0.6)
-                    sns.kdeplot(data=subset, x="consecutive push intervals", fill=False, ax=ax, color=color_outline,
-                                linewidth=2)
-                if null_model:
-                    fit_dist = fit(expon, subset['consecutive push intervals'])
-                    print(f"Fitting geometric distribution to ({source} -> {dest}) push intervals", fit_dist.params)
-                    res = kstest(subset['consecutive push intervals'], expon.cdf, fit_dist.params)
-                    print(f"KS-test of ({source} -> {dest}) push intervals", res.pvalue)
-                    x = sorted(subset['consecutive push intervals'].unique())
-                    ax.plot(x, expon.pdf(x, fit_dist.params[0]), color = 'black', linestyle = '-')
 
-            ax.set_xlabel("")
-            if i == 0:
-                ax.set_title(dest, fontsize = 15)
-            else:
-                ax.set_title("")
+    def _plot(i, subj):
+        fig, axes = fig_init(None, **fig_kwargs)
+        for i, source in enumerate(box_labels):
+            for j, dest in enumerate(box_labels):
+                ax = axes[i, j]
+                subset = df[(df['prev box'] == source) & (df['box'] == dest)]
+                color_fill = palette[dest]
+                color_fill_dark = palette_dark[dest]
+                color_outline = palette[source]
+                if not subset.empty:
+                    sns.kdeplot(data=subset, x="consecutive push intervals", fill=True, ax=ax, color=color_fill, alpha=0.6)
+                    if source != dest:
+                        sns.kdeplot(data=subset, x="consecutive push intervals", fill=True, ax=ax, color=color_fill_dark,
+                                    alpha=0.6)
+                        sns.kdeplot(data=subset, x="consecutive push intervals", fill=False, ax=ax, color=color_outline,
+                                    linewidth=2)
+                    if null_model:
+                        fit_dist = fit(expon, subset['consecutive push intervals'])
+                        print(f"Fitting geometric distribution to ({source} -> {dest}) push intervals", fit_dist.params)
+                        res = kstest(subset['consecutive push intervals'], expon.cdf, fit_dist.params)
+                        print(f"KS-test of ({source} -> {dest}) push intervals", res.pvalue)
+                        x = sorted(subset['consecutive push intervals'].unique())
+                        ax.plot(x, expon.pdf(x, fit_dist.params[0]), color = 'black', linestyle = '-')
 
-            if j == 0:
-                ax.set_ylabel(source, fontsize = 15)
-                if i == n_boxes - 1:
-                    ax.set_xlabel("push interval (s)")
-            else:
-                ax.set_ylabel("")
-    if title:
-        fig.suptitle(title, y = 1)
+                ax.set_xlabel("")
+                if i == 0:
+                    ax.set_title(dest, fontsize = 15)
+                else:
+                    ax.set_title("")
+
+                if j == 0:
+                    ax.set_ylabel(source, fontsize = 15)
+                    if i == n_boxes - 1:
+                        ax.set_xlabel("push interval (s)")
+                else:
+                    ax.set_ylabel("")
+        fig.suptitle(f'Stay and switch push intervals for {subj}', y = 1)
         fig.text(0.5, 0.95, 'TO', ha='center')
-    else:
-        fig.text(0.5, 1, 'TO', ha='center')
-    fig.text(0.0, 0.5, 'FROM', va='center', rotation='vertical')
-    fig.tight_layout()
-    return axes
+        fig.text(0.0, 0.5, 'FROM', va='center', rotation='vertical')
+        fig.tight_layout()
+    subject_plotter(df.index.unique('subject'), _plot)
 
 
-def plot_runlengths(df: pd.DataFrame, palette: dict = PALETTE, stim_reliabilities: list = KAPPA_LEVELS, title: str = None, null_model: bool = False, disp_js: bool = False, ax: plt.Axes = None, **kwargs) -> plt.Axes:
+def plot_runlengths(df: pd.DataFrame, palette: dict = PALETTE, stim_reliabilities: list = KAPPA_LEVELS, null_model: bool = False, disp_js: bool = False, **kwargs) -> plt.Axes:
     """
     Plot the
 
@@ -660,65 +659,65 @@ def plot_runlengths(df: pd.DataFrame, palette: dict = PALETTE, stim_reliabilitie
 
     """
 
-    # Identify consecutive pushes and when they switch
-    x = df.index.get_level_values('push #')
-    consecutive_mask = x[1:] - x[:-1] == 1
-    change_mask = (df['stay/switch'] == 'switch') & np.insert(consecutive_mask, 0, True)
-    push_nums = get_blocks(df)["push times"].rank().astype(
-        int)  # Calculate from scratch in case pushes got dropped
-    change_mask[push_nums == 1] = True
+    def _plot(i, subj):   
+        # Identify consecutive pushes and when they switch
+        df_subj = filter_df(df, {'subject': subj})
+        x = df_subj.index.get_level_values('push #')
+        consecutive_mask = x[1:] - x[:-1] == 1
+        change_mask = (df_subj['stay/switch'] == 'switch') & np.insert(consecutive_mask, 0, True)
+        push_nums = get_blocks(df_subj)["push times"].rank().astype(
+            int)  # Calculate from scratch in case pushes got dropped
+        change_mask[push_nums == 1] = True
 
-    # Count the runlengths at different boxes
-    group_labels = change_mask.cumsum()
-    labeled_lengths = pd.DataFrame(
-        {"group": group_labels, "box": df['box'],
-         "next box": get_blocks(df['box']).shift(-1).fillna('missing')}
-    ).set_index(df.index)
-    labeled_lengths_all = labeled_lengths.groupby(['stimulus reliability', 'box', 'group']).size().to_frame().rename(
-        columns={0: 'length'})
-    labeled_lengths_all = labeled_lengths_all[
-        (labeled_lengths_all['length'] > 1) & (labeled_lengths_all['length'] <= 10)]
+        # Count the runlengths at different boxes
+        group_labels = change_mask.cumsum()
+        labeled_lengths = pd.DataFrame(
+            {"group": group_labels, "box": df_subj['box'],
+            "next box": get_blocks(df_subj['box']).shift(-1).fillna('missing')}
+        ).set_index(df_subj.index)
+        labeled_lengths_all = labeled_lengths.groupby(['stimulus reliability', 'box', 'group']).size().to_frame().rename(
+            columns={0: 'length'})
+        labeled_lengths_all = labeled_lengths_all[
+            (labeled_lengths_all['length'] > 1) & (labeled_lengths_all['length'] <= 10)]
 
-    # Calculate the distribution of runlengths under a dice that is rolled by visitation frequencies
-    visit_freqs = df.groupby(['stimulus reliability'])['box'].value_counts(normalize=True).to_frame()
-    fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'ncols': len(stim_reliabilities), 'sharey': True, 'sharex': True})
-    fig, ax = fig_init(ax, **fig_kwargs)
-    for i, kappa in enumerate(stim_reliabilities):
-        bp(sns.histplot)(labeled_lengths_all.reset_index(), x='length', conds={'stimulus reliability': kappa}, hue = 'box', palette = PALETTE,
-                         discrete=True, stat='count', common_norm=True, multiple='stack', legend = i == len(stim_reliabilities) - 1, ax=ax[i], **kwargs)
+        # Calculate the distribution of runlengths under a dice that is rolled by visitation frequencies
+        visit_freqs = df_subj.groupby(['stimulus reliability'])['box'].value_counts(normalize=True).to_frame()
+        fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'ncols': len(stim_reliabilities), 'sharey': True, 'sharex': True})
+        fig, ax = fig_init(None, **fig_kwargs)
+        for i, kappa in enumerate(stim_reliabilities):
+            bp(sns.histplot)(labeled_lengths_all.reset_index(), x='length', conds={'stimulus reliability': kappa}, hue = 'box', palette = PALETTE,
+                            discrete=True, stat='count', common_norm=True, multiple='stack', legend = i == len(stim_reliabilities) - 1, ax=ax[i], **kwargs)
 
-        # Overlay random dice probabilities from geometric distribution
-        if null_model:
-            bars = ax[i].patches
-            bar_width = bars[0].get_width()  # Width of one bar
-            probs = visit_freqs.loc[kappa] # Visit probabilities
-            boxes = sorted(probs.index.unique('box'))
-            handles = ax[i].get_legend().legend_handles
-            labels = [t.get_text() for t in ax[i].get_legend().get_texts()]
-            for b, box in enumerate(boxes):
-                try:
-                    p = probs.loc[box].iloc[0]
-                    run_lengths = labeled_lengths_all.loc[(kappa, box), 'length'].sort_values().unique()
-                    geom = p ** run_lengths * (1 - p)
-                    offset = (b - (len(boxes) - 1) / 2) * bar_width
-                    x = run_lengths + offset
-                    ax[i].plot(x, geom, c=palette[box], label = 'random dice')
-                    if disp_js:
-                        bar_heights = get_bar_heights(ax[i], x_centers=run_lengths)
-                        # for k, bar in enumerate(bar_heights[box]):
-                        #     axes[i, j].text(x[k], bar, f'{jensenshannon(geom, bar):.1f}', ha='center', va='bottom', fontsize = 7)
-                        ax[i].set_title(ax[i].get_title() + f'\nJS-distance = {jensenshannon(geom, bar_heights[box])}')
-                        # print(f"Jensen-shannon distance between empirical distribution and null distribution of ({subj}, {kappa}, {box}): {jensenshannon(geom, bar_heights[box])}")
-                except:
-                    continue
-            ax[i].legend(handles = handles + [Line2D([0], [0], color='black', linestyle='-', label='random dice')], labels = labels + ['random dice'] )
-    if title:
-        fig.suptitle(title, y = 1)
-    fig.tight_layout()
-    return ax
+            # Overlay random dice probabilities from geometric distribution
+            if null_model:
+                bars = ax[i].patches
+                bar_width = bars[0].get_width()  # Width of one bar
+                probs = visit_freqs.loc[kappa] # Visit probabilities
+                boxes = sorted(probs.index.unique('box'))
+                handles = ax[i].get_legend().legend_handles
+                labels = [t.get_text() for t in ax[i].get_legend().get_texts()]
+                for b, box in enumerate(boxes):
+                    try:
+                        p = probs.loc[box].iloc[0]
+                        run_lengths = labeled_lengths_all.loc[(kappa, box), 'length'].sort_values().unique()
+                        geom = p ** run_lengths * (1 - p)
+                        offset = (b - (len(boxes) - 1) / 2) * bar_width
+                        x = run_lengths + offset
+                        ax[i].plot(x, geom, c=palette[box], label = 'random dice')
+                        if disp_js:
+                            bar_heights = get_bar_heights(ax[i], x_centers=run_lengths)
+                            # for k, bar in enumerate(bar_heights[box]):
+                            #     axes[i, j].text(x[k], bar, f'{jensenshannon(geom, bar):.1f}', ha='center', va='bottom', fontsize = 7)
+                            ax[i].set_title(ax[i].get_title() + f'\nJS-distance = {jensenshannon(geom, bar_heights[box])}')
+                            # print(f"Jensen-shannon distance between empirical distribution and null distribution of ({subj}, {kappa}, {box}): {jensenshannon(geom, bar_heights[box])}")
+                    except:
+                        continue
+                ax[i].legend(handles = handles + [Line2D([0], [0], color='black', linestyle='-', label='random dice')], labels = labels + ['random dice'] )
+        fig.suptitle(f'Runlengths for {subj}')
+        fig.tight_layout()
+    subject_plotter(df.index.unique('subject'), _plot)
 
-
-def plot_push_intervals_vs_reward_intervals(df: pd.DataFrame, palette: dict = PALETTE, stim_reliabilities: list = KAPPA_LEVELS, title: str = None, unity = True, annotate_reg: bool = False, ax: plt.Axes = None, **kwargs) -> plt.Axes:
+def plot_push_intervals_vs_reward_intervals(df: pd.DataFrame, palette: dict = PALETTE, stim_reliabilities: list = KAPPA_LEVELS, unity = True, annotate_reg: bool = False, **kwargs) -> plt.Axes:
     """
     Plot linear regression of push intervals against reward intervals in a block
 
@@ -737,37 +736,36 @@ def plot_push_intervals_vs_reward_intervals(df: pd.DataFrame, palette: dict = PA
     # Remove first push from each box, since reward time is messed up for first pushes
     df = df.drop(df[df['push # by box'] == 1].index)
     fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'ncols': len(stim_reliabilities), 'sharey': True, 'sharex': True})
-    fig, axes = fig_init(ax, **fig_kwargs)
-    fit_results = []
-    max_x = 0
-    for i, kappa in enumerate(stim_reliabilities):
-        bp(sns.scatterplot)(df, x='reward intervals', y='wait times', conds={'stimulus reliability': kappa}, hue = 'box', palette = palette, ax = axes[i], legend = i == len(stim_reliabilities) - 1, **kwargs)
-        df_subset = filter_df(df, conds={'stimulus reliability': kappa})
-        fit_results.append(regplot(df_subset['reward intervals'].to_numpy(), df_subset['wait times'].to_numpy(),
-                              line_kws={'color': 'black'}, ax=axes[i], **kwargs))
-        max_x = max(max_x, axes[i].get_xlim()[1], axes[i].get_ylim()[1])
+    def _plot(i, subj):
+        fig, axes = fig_init(None, **fig_kwargs)
+        fit_results = []
+        max_x = 0
+        for i, kappa in enumerate(stim_reliabilities):
+            bp(sns.scatterplot)(df, x='reward intervals', y='wait times', conds={'stimulus reliability': kappa}, hue = 'box', palette = palette, ax = axes[i], legend = i == len(stim_reliabilities) - 1, **kwargs)
+            df_subset = filter_df(df, conds={'stimulus reliability': kappa})
+            fit_results.append(regplot(df_subset['reward intervals'].to_numpy(), df_subset['wait times'].to_numpy(),
+                                line_kws={'color': 'black'}, ax=axes[i], **kwargs))
+            max_x = max(max_x, axes[i].get_xlim()[1], axes[i].get_ylim()[1])
 
-    # Add some aesthetics
-    for i in range(len(stim_reliabilities)):
-        if unity:
-            # max_x = max(axes[i].get_xlim()[1], axes[i].get_ylim()[1])
-            x = np.arange(max_x)
-            axes[i].plot([0, max_x], [0, max_x], linestyle='dashed', color='black')
-            axes[i].fill_between(x, x, max_x, color="green", alpha=0.1)
-            axes[i].fill_between(x, x, color="red", alpha=0.1)
+        # Add some aesthetics
+        for i in range(len(stim_reliabilities)):
+            if unity:
+                # max_x = max(axes[i].get_xlim()[1], axes[i].get_ylim()[1])
+                x = np.arange(max_x)
+                axes[i].plot([0, max_x], [0, max_x], linestyle='dashed', color='black')
+                axes[i].fill_between(x, x, max_x, color="green", alpha=0.1)
+                axes[i].fill_between(x, x, color="red", alpha=0.1)
 
-        if annotate_reg:
-            axes[i].text(0.75, 0.1, f'slope={fit_results[i].params[1]:.2f}',
-                         transform=axes[i].transAxes,
-                         fontsize = 10)
+            if annotate_reg:
+                axes[i].text(0.75, 0.1, f'slope={fit_results[i].params[1]:.2f}',
+                            transform=axes[i].transAxes,
+                            fontsize = 10)
 
-    if title:
-        fig.suptitle(title, y = 1)
-    fig.tight_layout()
-    return axes
+        fig.suptitle(f"Push intervals vs reward intervals for {subj}")
+        fig.tight_layout()
+    subject_plotter(df.index.unique('subject'), _plot)
 
-
-def plot_next_push_surprise(df: pd.DataFrame, palette: dict = PALETTE, palette_dark: dict = PALETTE_DARK, stim_reliabilities: list = KAPPA_LEVELS, title: str = None, ax: plt.Axes = None, **kwargs):
+def plot_next_push_surprise(df: pd.DataFrame, palette: dict = PALETTE, palette_dark: dict = PALETTE_DARK, stim_reliabilities: list = KAPPA_LEVELS, **kwargs):
 
     df = df.copy()
     push_deltas = df.groupby(['subject', 'session', 'block', 'box'])
@@ -781,21 +779,21 @@ def plot_next_push_surprise(df: pd.DataFrame, palette: dict = PALETTE, palette_d
     df['stay/switch'] = df['stay/switch'].shift(-1)
 
     fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'nrows': 2, 'ncols': len(stim_reliabilities), 'sharey': True, 'sharex': True})
-    fig, axes = fig_init(ax, **fig_kwargs)
-    cnt = 0
-    for i, ro in enumerate(df['rewarded'].unique()):
-        for j, kappa in enumerate(stim_reliabilities):
-            cnt += 1
-            bp(sns.scatterplot)(df, x='wait times', y='change in next wait time', conds={'stimulus reliability': kappa, 'rewarded': ro}, hue='box', palette=palette if ro == 'yes' else palette_dark,
-                         style='stay/switch', alpha=0.5, ax=axes[i][j], legend = cnt == len(stim_reliabilities), **kwargs)
-            axes[i][j].hlines(0, 0, axes[i][j].get_xlim()[1], linestyles='dashed', colors='black')
-            axes[i][j].set_xlim([0, 40])
-            axes[i][j].set_ylim([-40, 40])
-    if title:
-        fig.suptitle(title, y = 1)
-    fig.tight_layout()
-    return axes
-
+    def _plot(i, subj):
+        fig, axes = fig_init(None, **fig_kwargs)
+        cnt = 0
+        df_subj = filter_df(df, {'subject': subj})
+        for i, ro in enumerate(df_subj['rewarded'].unique()):
+            for j, kappa in enumerate(stim_reliabilities):
+                cnt += 1
+                bp(sns.scatterplot)(df_subj, x='wait times', y='change in next wait time', conds={'stimulus reliability': kappa, 'rewarded': ro}, hue='box', palette=palette if ro == 'yes' else palette_dark,
+                            style='stay/switch', alpha=0.5, ax=axes[i][j], legend = cnt == len(stim_reliabilities), **kwargs)
+                axes[i][j].hlines(0, 0, axes[i][j].get_xlim()[1], linestyles='dashed', colors='black')
+                axes[i][j].set_xlim([0, 40])
+                axes[i][j].set_ylim([-40, 40])
+        fig.suptitle(f'Change in waiting time as a function of reward outcome for {subj}')
+        fig.tight_layout()
+    subject_plotter(df.index.unique('subject'), _plot)
 
 def plot_stay_probabilities(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS,  bin_width: float = 10, title: str = None, ax: plt.Axes = None, **kwargs):
     df = df.copy()
@@ -810,14 +808,14 @@ def plot_stay_probabilities(df: pd.DataFrame, stim_reliabilities: list = KAPPA_L
     })
 
     fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'ncols': len(stim_reliabilities), 'sharey': True, 'sharex': True})
-    fig, ax = fig_init(ax, **fig_kwargs)
-    for i, kappa in enumerate(stim_reliabilities):
-        bp(sns.lineplot)(df, conds = {'stimulus reliability': kappa}, x='time', y='P(stay)', x_unit = 's', hue='rewarded', hue_order=['no', 'yes'],
-                            errorbar='se', ax = ax[i], **kwargs)
-    if title:
-        fig.suptitle(title, y = 1)
-    fig.tight_layout()
-    return ax
+    def _plot(i, subj):
+        fig, ax = fig_init(None, **fig_kwargs)
+        for i, kappa in enumerate(stim_reliabilities):
+            bp(sns.lineplot)(df, conds = {'stimulus reliability': kappa}, x='time', y='P(stay)', x_unit = 's', hue='rewarded', hue_order=['no', 'yes'],
+                                errorbar='se', ax = ax[i], **kwargs)
+        fig.suptitle(f"P(stay) as a function of wait time for {subj}")
+        fig.tight_layout()
+    subject_plotter(df.index.unique('subject'), _plot)
 
 
 def plot_reward_rates_in_block(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS, palette: dict = PALETTE, by_box: bool = False, title: str = None, ax: plt.Axes = None, **kwargs):
@@ -852,16 +850,18 @@ def plot_reward_rates_in_block(df: pd.DataFrame, stim_reliabilities: list = KAPP
     rr['time'] = rr['time'].apply(lambda x: float(x.left))
 
     fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'ncols': len(stim_reliabilities), 'sharey': True, 'sharex': True})
-    fig, ax = fig_init(ax, **fig_kwargs)
-    for i, kappa in enumerate(stim_reliabilities):
-        if by_box:
-            bp(sns.lineplot)(rr, conds = {'stimulus reliability': kappa}, x = 'time', y='reward rate', hue='box', palette=palette, ax = ax[i], legend = i == len(stim_reliabilities) - 1, **kwargs)
-        else:
-            bp(sns.lineplot)(rr, conds = {'stimulus reliability': kappa}, x = 'time', y='reward rate', ax = ax[i], legend = i == len(stim_reliabilities) - 1, **kwargs)
-    if title:
-        fig.suptitle(title, y = 1)
-    fig.tight_layout()
-    return ax
+
+    def _plot(i, subj):
+        fig, ax = fig_init(None, **fig_kwargs)
+        rr_subj = filter_df(rr, {'subject': subj})
+        for i, kappa in enumerate(stim_reliabilities):
+            if by_box:
+                bp(sns.lineplot)(rr_subj, conds = {'stimulus reliability': kappa}, x = 'time', y='reward rate', hue='box', palette=palette, ax = ax[i], legend = i == len(stim_reliabilities) - 1, **kwargs)
+            else:
+                bp(sns.lineplot)(rr_subj, conds = {'stimulus reliability': kappa}, x = 'time', y='reward rate', ax = ax[i], legend = i == len(stim_reliabilities) - 1, **kwargs)
+        fig.suptitle(f"Reward rate for {subj}")
+        fig.tight_layout()
+    subject_plotter(df.index.unique('subject'), _plot)
 
 
 def plot_quantity_in_block(df: pd.DataFrame, y: str = None, stim_reliabilities: list = KAPPA_LEVELS, palette: dict = PALETTE, title: str = None, ax: plt.Axes = None, **kwargs):
@@ -871,18 +871,19 @@ def plot_quantity_in_block(df: pd.DataFrame, y: str = None, stim_reliabilities: 
     df[x_bins] = bin_data(df, 'push times', **bin_kwargs)
 
     fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'ncols': len(stim_reliabilities), 'sharey': True, 'sharex': True})
-    fig, ax = fig_init(ax, **fig_kwargs)
-    for i, kappa in enumerate(stim_reliabilities):
-        bp(sns.lineplot)(df, conds={'stimulus reliability': kappa}, x='time', y=y, hue='box',
-                         palette=palette, ax=ax[i], legend = i == len(stim_reliabilities) - 1, **kwargs)
+    def _plot(i, subj):
+        fig, ax = fig_init(None, **fig_kwargs)
+        df_subj = filter_df(df, {'subject': subj})
+        for i, kappa in enumerate(stim_reliabilities):
+            bp(sns.lineplot)(df_subj, conds={'stimulus reliability': kappa}, x='time', y=y, hue='box',
+                            palette=palette, ax=ax[i], legend = i == len(stim_reliabilities) - 1, **kwargs)
 
-    if title:
-        fig.suptitle(title, y = 1)
-    fig.tight_layout()
-    return ax
+        fig.suptitle(f"{y} for {subj}")
+        fig.tight_layout()
+    subject_plotter(df.index.unique('subject'), _plot)
 
 
-def plot_matching_law(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS, palette: dict = PALETTE, title: str = None, ax: plt.Axes = None, **kwargs):
+def plot_matching_law(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS, palette: dict = PALETTE, **kwargs):
     x_bins = 'time'
     df = df.copy()
     bin_kwargs = kwargs_handler(kwargs, 'bin_kwargs', dict(bin_width = 60, strategy = 'full'))
@@ -897,15 +898,51 @@ def plot_matching_law(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS,
     rr['time'] = rr['time'].apply(lambda x: float(x.left))
 
     fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'ncols': len(stim_reliabilities), 'sharey': True, 'sharex': True})
-    fig, ax = fig_init(ax, **fig_kwargs)
-    for i, kappa in enumerate(stim_reliabilities):
-        bp(sns.lineplot)(rr, conds = {'stimulus reliability': kappa}, x = 'time', y='ratio', hue='box', palette=palette, ax = ax[i], legend = i == len(stim_reliabilities) - 1, **kwargs)
-        if i == 0:
-            ax[i].set_ylabel(r'$\frac{\text{reward rate}}{\text{push rate}}$')
-    if title:
-        fig.suptitle(title, y = 1)
-    fig.tight_layout()
-    return ax
+    def _plot(i, subj):
+        fig, ax = fig_init(None, **fig_kwargs)
+        rr_subj = filter_df(rr, {'subject': subj})
+        for i, kappa in enumerate(stim_reliabilities):
+            bp(sns.lineplot)(rr_subj, conds = {'stimulus reliability': kappa}, x = 'time', y='ratio', hue='box', palette=palette, ax = ax[i], legend = i == len(stim_reliabilities) - 1, **kwargs)
+            if i == 0:
+                ax[i].set_ylabel(r'$\frac{\text{reward rate}}{\text{push rate}}$')
+        fig.suptitle(f"Matching law for {subj}")
+        fig.tight_layout()
+    subject_plotter(df.index.unique('subject'), _plot)
+
+
+def plot_theoretical_fisher_info(t, schedules = [7, 14, 21], alpha = 10, figsize = (10, 5)):
+    def _fisher_info(t, schedule, alpha):
+        scale = schedule / alpha
+        cdf = gamma.cdf(t, a = alpha, scale = scale)
+        return (t/schedule)**2*gamma.pdf(t, a = alpha, scale = scale)**2/(cdf*(1-cdf))
+
+    schedules = [7, 14, 21]
+    alpha = 10
+    optimal_fisher_t = {}
+    optimal_fisher_info = {}
+    for schedule in schedules:
+        print(f'Finding optimal t for schedule {schedule}')
+        res = minimize_scalar(lambda x: -_fisher_info(x, schedule, alpha))
+        # res = minimize_scalar(lambda x: -gamma.pdf(x, a = alpha, scale = schedule / alpha))
+
+        # Result
+        x_max = res.x
+        f_max = _fisher_info(x_max, schedule, alpha)
+
+        print(f"Argmax: {x_max:.4f}, Max value: {f_max:.4f}")
+        optimal_fisher_info[schedule] = f_max
+        optimal_fisher_t[schedule] = x_max
+
+    fig, ax = plt.subplots(figsize = figsize)
+    fishers = []
+    for schedule in schedules:
+        fishers.append(_fisher_info(t, schedule, alpha))
+    [ax.plot(t, fishers[j], label = schedules[j], color = BOX_COLORS[j]) for j in range(len(schedules))]
+    ax.set_ylabel("fisher information")
+    ax.set_xlabel("push time (s)")
+    ax.vlines(x = optimal_fisher_t.values(), ymin = 0, ymax = 0.15, color = BOX_COLORS, linestyle = '--', label = r'$t^*=\underset{t}{\mathrm{argmax}}J_{\lambda}(t)$')# ax.legend()
+
+
 
 def plot_frequencies_over_experiment(df: pd.DataFrame, category: str, conds: dict = None, title: str = None, title_prefix: str = None, palette: list = BOX_COLORS, label_rotation: float = 35, ax: plt.Axes = None, **kwargs):
 

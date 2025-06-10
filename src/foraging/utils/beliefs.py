@@ -443,6 +443,7 @@ def compute_normalized_fisher(
     # Compute availability marginal for each push
     n_obs = len(df_block)
     information = np.zeros(n_obs)
+    
     push_ints_and_box = df_block[['wait times', 'box rank']].values[:n_obs]
     old_idx = np.zeros(n_boxes, dtype=int)  # Track last observed index per box
     old_t = np.zeros(n_boxes)  # Track last push time per box
