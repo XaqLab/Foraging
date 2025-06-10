@@ -20,8 +20,6 @@ import os, pickle
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-from matplotlib import rcParams
-
 def plot_experiment_overview(df: pd.DataFrame, conds: dict = None, title: str = '', title_prefix: str = '', palette: dict = PALETTE, label_rotation: float = 35, annotate_block: bool = False, ax: plt.Axes = None, **kwargs) -> plt.Axes:
     """
     Plot the pushes over all blocks in the experiment, organized by sessions. This assumes one subject is specified in the `conds` dictionary.
@@ -515,7 +513,7 @@ def plot_experiment_parameters(df: pd.DataFrame, conds: dict, title: str = "Expe
     return ax
 
 
-def plot_wait_times_by_sessions(df: pd.DataFrame):
+def plot_wait_times_by_sessions(df: pd.DataFrame, label_rotation: float = 35):
 
     # Examine monkeys separately from humans
     monkey_subjects = ['dylan', 'marco', 'viktor']
@@ -532,7 +530,7 @@ def plot_wait_times_by_sessions(df: pd.DataFrame):
         fig, axes = plt.subplots(2, 1, figsize=(25, 10), height_ratios=[1, 2], sharex = True)
         plot_experiment_parameters(df_monkey, conds={'subject': subj}, ax=axes[0])
         bp(sns.swarmplot)(df_monkey, x="day", y="consecutive push intervals", conds={'subject': subj}, hue='box',
-                          palette=PALETTE, title_prefix="Push intervals across sessions", size=1, log_scale=True,
+                          palette=PALETTE, title="Push intervals across sessions", size=1, log_scale=True,
                           legend = False, ax=axes[1]) # legend_kwargs={'markerscale': 5}
 
         # Add weekday labels
@@ -543,8 +541,9 @@ def plot_wait_times_by_sessions(df: pd.DataFrame):
             tmp = l.get_text()
             labels[j] = tmp + '\n' + days[j]
         axes[1].set_xticklabels(labels)
+        axes[1].tick_params(axis = 'x', labelrotation = label_rotation)
+        fig.suptitle(f"Wait times for {subj}")
         fig.tight_layout()
-
     subject_plotter(monkey_subjects, _plot)
 
 def plot_wait_times(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS, palette: dict = PALETTE, palette_dark: dict = PALETTE_DARK, title: str = None, ax: plt.Axes = None, **kwargs) -> plt.Axes:

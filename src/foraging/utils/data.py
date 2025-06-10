@@ -100,7 +100,6 @@ def make_df(path: str) -> pd.DataFrame:
     Returns:
         A DataFrame where each row represents a push and each column encodes experiment variables, such as session, block, reliablity conditions, etc.
     """
-
     # Identify all subjects in the given directory
     subjects = get_subjects(path)
     df_dict = {
