@@ -308,7 +308,7 @@ def plot_vertical_position_outlier_vs_control(df: pd.DataFrame, data_dir: str):
     subject_plotter(df.index.unique('subject'), _plot)
 
 
-def plot_hmm_probs_in_block(df: pd.DataFrame, filepath: str, block_idx: int = 30):
+def plot_hmm_probabilities_in_block(df: pd.DataFrame, filepath: str, block_idx: int = 30):
 
     # Load HMM probabilities
     with open(filepath, 'rb') as f:
@@ -548,12 +548,12 @@ def plot_wait_times_by_sessions(df: pd.DataFrame, label_rotation: float = 35):
         fig.tight_layout()
     subject_plotter(monkey_subjects, _plot)
 
-#todo: wrap all plots that take `stim_reliabilities` with dedicated function to remove repetition
-def plot_wait_times(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS, palette: dict = PALETTE, palette_dark: dict = PALETTE_DARK, **kwargs) -> plt.Axes:
+def plot_wait_times(df: pd.DataFrame, stim_reliabilities: dict = KAPPA_LEVELS, palette: dict = PALETTE, palette_dark: dict = PALETTE_DARK, **kwargs) -> plt.Axes:
     """
 
     Args:
         df:
+        stim_reliabilities:
         palette:
         palette_dark:
         stim_reliabilities:
@@ -566,10 +566,10 @@ def plot_wait_times(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS, p
     def _plot(i, subj):
         fig, ax = fig_init(None, **fig_kwargs)
         df_subj = filter_df(df, {'subject': subj})
-        bp(sns.swarmplot)(df_subj, x='stimulus reliability', order = stim_reliabilities,
+        bp(sns.swarmplot)(df_subj, x='stimulus reliability', order = stim_reliabilities[subj].keys(),
                         y='wait times', hue='box', palette=palette_dark, legend=False, log_scale=True, size=0.5,
                         dodge=True, ax=ax)
-        bp(enhanced_violinplot)(df_subj, x='stimulus reliability', order = stim_reliabilities, y='wait times', hue='box', palette=palette,
+        bp(enhanced_violinplot)(df_subj, x='stimulus reliability', order = stim_reliabilities[subj].keys(), y='wait times', hue='box', palette=palette,
                                 y_unit='s', cut=0, inner=None,
                                 log_scale=True, common_norm=True, ax=ax, **kwargs)
         fig.suptitle(f'Wait times for {subj}')
@@ -640,7 +640,7 @@ def plot_stay_switch_pushes(df: pd.DataFrame, palette: dict = PALETTE, palette_d
     subject_plotter(df.index.unique('subject'), _plot)
 
 
-def plot_runlengths(df: pd.DataFrame, palette: dict = PALETTE, stim_reliabilities: list = KAPPA_LEVELS, null_model: bool = False, disp_js: bool = False, **kwargs) -> plt.Axes:
+def plot_runlengths(df: pd.DataFrame, palette: dict = PALETTE, stim_reliabilities: dict = KAPPA_LEVELS, null_model: bool = False, disp_js: bool = False, **kwargs) -> plt.Axes:
     """
     Plot the
 
@@ -682,11 +682,12 @@ def plot_runlengths(df: pd.DataFrame, palette: dict = PALETTE, stim_reliabilitie
 
         # Calculate the distribution of runlengths under a dice that is rolled by visitation frequencies
         visit_freqs = df_subj.groupby(['stimulus reliability'])['box'].value_counts(normalize=True).to_frame()
-        fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'ncols': len(stim_reliabilities), 'sharey': True, 'sharex': True})
+        kappas = stim_reliabilities[subj].keys()
+        fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'ncols': len(kappas), 'sharey': True, 'sharex': True})
         fig, ax = fig_init(None, **fig_kwargs)
-        for i, kappa in enumerate(stim_reliabilities):
+        for i, kappa in enumerate(kappas):
             bp(sns.histplot)(labeled_lengths_all.reset_index(), x='length', conds={'stimulus reliability': kappa}, hue = 'box', palette = PALETTE,
-                            discrete=True, stat='count', common_norm=True, multiple='stack', legend = i == len(stim_reliabilities) - 1, ax=ax[i], **kwargs)
+                            discrete=True,  common_norm=True, multiple='stack', legend = i == len(kappas) - 1, ax=ax[i], **kwargs)
 
             # Overlay random dice probabilities from geometric distribution
             if null_model:
@@ -717,7 +718,7 @@ def plot_runlengths(df: pd.DataFrame, palette: dict = PALETTE, stim_reliabilitie
         fig.tight_layout()
     subject_plotter(df.index.unique('subject'), _plot)
 
-def plot_push_intervals_vs_reward_intervals(df: pd.DataFrame, palette: dict = PALETTE, stim_reliabilities: list = KAPPA_LEVELS, unity = True, annotate_reg: bool = False, **kwargs) -> plt.Axes:
+def plot_push_intervals_vs_reward_intervals(df: pd.DataFrame, palette: dict = PALETTE, stim_reliabilities: dict = KAPPA_LEVELS, unity = True, annotate_reg: bool = False, **kwargs) -> plt.Axes:
     """
     Plot linear regression of push intervals against reward intervals in a block
 
@@ -734,21 +735,24 @@ def plot_push_intervals_vs_reward_intervals(df: pd.DataFrame, palette: dict = PA
     """
 
     # Remove first push from each box, since reward time is messed up for first pushes
-    df = df.drop(df[df['push # by box'] == 1].index)
-    fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'ncols': len(stim_reliabilities), 'sharey': True, 'sharex': True})
+    # df = df.drop(df[df['push # by box'] == 1].index)
+    fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'sharey': True, 'sharex': True})
     def _plot(i, subj):
+        kappas = stim_reliabilities[subj].keys()
+        fig_kwargs['ncols'] = len(kappas)
         fig, axes = fig_init(None, **fig_kwargs)
         fit_results = []
         max_x = 0
-        for i, kappa in enumerate(stim_reliabilities):
-            bp(sns.scatterplot)(df, x='reward intervals', y='wait times', conds={'stimulus reliability': kappa}, hue = 'box', palette = palette, ax = axes[i], legend = i == len(stim_reliabilities) - 1, **kwargs)
-            df_subset = filter_df(df, conds={'stimulus reliability': kappa})
+        df_subj = filter_df(df, {'subject': subj})
+        for i, kappa in enumerate(kappas):
+            bp(sns.scatterplot)(df_subj, x='reward intervals', y='wait times', conds={'stimulus reliability': kappa}, hue = 'box', palette = palette, ax = axes[i], legend = i == len(kappas) - 1, **kwargs)
+            df_subset = filter_df(df_subj, conds={'stimulus reliability': kappa})
             fit_results.append(regplot(df_subset['reward intervals'].to_numpy(), df_subset['wait times'].to_numpy(),
                                 line_kws={'color': 'black'}, ax=axes[i], **kwargs))
             max_x = max(max_x, axes[i].get_xlim()[1], axes[i].get_ylim()[1])
 
         # Add some aesthetics
-        for i in range(len(stim_reliabilities)):
+        for i in range(len(kappas)):
             if unity:
                 # max_x = max(axes[i].get_xlim()[1], axes[i].get_ylim()[1])
                 x = np.arange(max_x)
@@ -765,7 +769,16 @@ def plot_push_intervals_vs_reward_intervals(df: pd.DataFrame, palette: dict = PA
         fig.tight_layout()
     subject_plotter(df.index.unique('subject'), _plot)
 
-def plot_next_push_surprise(df: pd.DataFrame, palette: dict = PALETTE, palette_dark: dict = PALETTE_DARK, stim_reliabilities: list = KAPPA_LEVELS, **kwargs):
+def plot_next_push_surprise(df: pd.DataFrame, stim_reliabilities: dict = KAPPA_LEVELS, palette: dict = PALETTE, palette_dark: dict = PALETTE_DARK, **kwargs):
+    """Plot the change in wait time after each push.
+
+    Args:
+        df: DataFrame containing experiment data
+        stim_reliabilities: Dictionary mapping subjects to their stimulus reliability levels
+        palette: Dictionary mapping box schedules to colors
+        palette_dark: Dictionary mapping box schedules to darkened colors
+        **kwargs: Additional keyword arguments
+    """
 
     df = df.copy()
     push_deltas = df.groupby(['subject', 'session', 'block', 'box'])
@@ -778,16 +791,18 @@ def plot_next_push_surprise(df: pd.DataFrame, palette: dict = PALETTE, palette_d
     })
     df['stay/switch'] = df['stay/switch'].shift(-1)
 
-    fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'nrows': 2, 'ncols': len(stim_reliabilities), 'sharey': True, 'sharex': True})
+    fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'nrows': 2, 'sharey': True, 'sharex': True})
     def _plot(i, subj):
+        df_subj = filter_df(df, {'subject': subj})
+        kappas = stim_reliabilities[subj].keys()
+        fig_kwargs['ncols'] = len(kappas)
         fig, axes = fig_init(None, **fig_kwargs)
         cnt = 0
-        df_subj = filter_df(df, {'subject': subj})
         for i, ro in enumerate(df_subj['rewarded'].unique()):
-            for j, kappa in enumerate(stim_reliabilities):
+            for j, kappa in enumerate(kappas):
                 cnt += 1
                 bp(sns.scatterplot)(df_subj, x='wait times', y='change in next wait time', conds={'stimulus reliability': kappa, 'rewarded': ro}, hue='box', palette=palette if ro == 'yes' else palette_dark,
-                            style='stay/switch', alpha=0.5, ax=axes[i][j], legend = cnt == len(stim_reliabilities), **kwargs)
+                            style='stay/switch', alpha=0.5, ax=axes[i][j], legend = cnt == len(kappas), **kwargs)
                 axes[i][j].hlines(0, 0, axes[i][j].get_xlim()[1], linestyles='dashed', colors='black')
                 axes[i][j].set_xlim([0, 40])
                 axes[i][j].set_ylim([-40, 40])
@@ -795,7 +810,7 @@ def plot_next_push_surprise(df: pd.DataFrame, palette: dict = PALETTE, palette_d
         fig.tight_layout()
     subject_plotter(df.index.unique('subject'), _plot)
 
-def plot_stay_probabilities(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS,  bin_width: float = 10, title: str = None, ax: plt.Axes = None, **kwargs):
+def plot_stay_probabilities(df: pd.DataFrame, stim_reliabilities: dict = KAPPA_LEVELS,  bin_width: float = 10, **kwargs):
     df = df.copy()
     df['rewarded'] = df['reward outcomes'].map({
         True: 'yes',
@@ -807,18 +822,21 @@ def plot_stay_probabilities(df: pd.DataFrame, stim_reliabilities: list = KAPPA_L
         'switch': 0
     })
 
-    fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'ncols': len(stim_reliabilities), 'sharey': True, 'sharex': True})
+    fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'sharey': True, 'sharex': True})
     def _plot(i, subj):
+        df_subj = filter_df(df, {'subject': subj})
+        kappas = stim_reliabilities[subj].keys()
+        fig_kwargs['ncols'] = len(kappas)
         fig, ax = fig_init(None, **fig_kwargs)
-        for i, kappa in enumerate(stim_reliabilities):
-            bp(sns.lineplot)(df, conds = {'stimulus reliability': kappa}, x='time', y='P(stay)', x_unit = 's', hue='rewarded', hue_order=['no', 'yes'],
+        for i, kappa in enumerate(kappas):
+            bp(sns.lineplot)(df_subj, conds = {'stimulus reliability': kappa}, x='time', y='P(stay)', x_unit = 's', hue='rewarded', hue_order=['no', 'yes'],
                                 errorbar='se', ax = ax[i], **kwargs)
         fig.suptitle(f"P(stay) as a function of wait time for {subj}")
         fig.tight_layout()
     subject_plotter(df.index.unique('subject'), _plot)
 
 
-def plot_reward_rates_in_block(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS, palette: dict = PALETTE, by_box: bool = False, title: str = None, ax: plt.Axes = None, **kwargs):
+def plot_reward_rates_in_block(df: pd.DataFrame, stim_reliabilities: dict = KAPPA_LEVELS, palette: dict = PALETTE, by_box: bool = False, **kwargs):
     """
 
     Args:
@@ -848,35 +866,37 @@ def plot_reward_rates_in_block(df: pd.DataFrame, stim_reliabilities: list = KAPP
     rr = rr.to_frame().reset_index()
     rr['reward rate'] = rr['reward outcomes'] / rr['time'].apply(lambda x: x.length)
     rr['time'] = rr['time'].apply(lambda x: float(x.left))
-
-    fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'ncols': len(stim_reliabilities), 'sharey': True, 'sharex': True})
-
+    fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'sharey': True, 'sharex': True})
     def _plot(i, subj):
-        fig, ax = fig_init(None, **fig_kwargs)
         rr_subj = filter_df(rr, {'subject': subj})
-        for i, kappa in enumerate(stim_reliabilities):
+        kappas = stim_reliabilities[subj].keys()
+        fig_kwargs['ncols'] = len(kappas)
+        fig, ax = fig_init(None, **fig_kwargs)
+        for i, kappa in enumerate(kappas):
             if by_box:
-                bp(sns.lineplot)(rr_subj, conds = {'stimulus reliability': kappa}, x = 'time', y='reward rate', hue='box', palette=palette, ax = ax[i], legend = i == len(stim_reliabilities) - 1, **kwargs)
+                bp(sns.lineplot)(rr_subj, conds = {'stimulus reliability': kappa}, x = 'time', y='reward rate', hue='box', palette=palette, ax = ax[i], legend = i == len(kappas) - 1, **kwargs)
             else:
-                bp(sns.lineplot)(rr_subj, conds = {'stimulus reliability': kappa}, x = 'time', y='reward rate', ax = ax[i], legend = i == len(stim_reliabilities) - 1, **kwargs)
+                bp(sns.lineplot)(rr_subj, conds = {'stimulus reliability': kappa}, x = 'time', y='reward rate', ax = ax[i], legend = i == len(kappas) - 1, **kwargs)
         fig.suptitle(f"Reward rate for {subj}")
         fig.tight_layout()
     subject_plotter(df.index.unique('subject'), _plot)
 
 
-def plot_quantity_in_block(df: pd.DataFrame, y: str = None, stim_reliabilities: list = KAPPA_LEVELS, palette: dict = PALETTE, title: str = None, ax: plt.Axes = None, **kwargs):
+def plot_quantity_in_block(df: pd.DataFrame, y: str = None, stim_reliabilities: list = KAPPA_LEVELS, palette: dict = PALETTE, **kwargs):
     x_bins = 'time'
     df.copy()
     bin_kwargs = kwargs_handler(kwargs, 'bin_kwargs', dict(bin_width = 60))
     df[x_bins] = bin_data(df, 'push times', **bin_kwargs)
 
-    fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'ncols': len(stim_reliabilities), 'sharey': True, 'sharex': True})
+    fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'sharey': True, 'sharex': True})
     def _plot(i, subj):
-        fig, ax = fig_init(None, **fig_kwargs)
         df_subj = filter_df(df, {'subject': subj})
-        for i, kappa in enumerate(stim_reliabilities):
+        kappas = stim_reliabilities[subj].keys()
+        fig_kwargs['ncols'] = len(kappas)
+        fig, ax = fig_init(None, **fig_kwargs)
+        for i, kappa in enumerate(kappas):
             bp(sns.lineplot)(df_subj, conds={'stimulus reliability': kappa}, x='time', y=y, hue='box',
-                            palette=palette, ax=ax[i], legend = i == len(stim_reliabilities) - 1, **kwargs)
+                            palette=palette, ax=ax[i], legend = i == len(kappas) - 1, **kwargs)
 
         fig.suptitle(f"{y} for {subj}")
         fig.tight_layout()
@@ -892,19 +912,21 @@ def plot_matching_law(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS,
     rr = grouped['reward outcomes'].sum()
     rr = rr.to_frame().reset_index()
     time_bins = rr['time'].apply(lambda x: x.length)
-    rr['reward rate'] = rr['reward outcomes'] / time_bins
-    rr['push rate'] = (grouped.size().reset_index()[0] / time_bins) #.reset_index()[0]
-    rr['ratio'] = rr['reward rate'] / rr['push rate']
+    rr['reward rate'] = rr['reward outcomes']
+    rr['push rate'] = (grouped.size().reset_index()[0]) #.reset_index()[0]
+    rr['ratio'] = rr['reward rate'] / rr['push rate'] / time_bins
     rr['time'] = rr['time'].apply(lambda x: float(x.left))
 
-    fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'ncols': len(stim_reliabilities), 'sharey': True, 'sharex': True})
+    fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'sharey': True, 'sharex': True})
     def _plot(i, subj):
+        kappas = stim_reliabilities[subj].keys()
+        fig_kwargs['ncols'] = len(kappas)
         fig, ax = fig_init(None, **fig_kwargs)
         rr_subj = filter_df(rr, {'subject': subj})
-        for i, kappa in enumerate(stim_reliabilities):
-            bp(sns.lineplot)(rr_subj, conds = {'stimulus reliability': kappa}, x = 'time', y='ratio', hue='box', palette=palette, ax = ax[i], legend = i == len(stim_reliabilities) - 1, **kwargs)
+        for i, kappa in enumerate(kappas):
+            bp(sns.lineplot)(rr_subj, conds = {'stimulus reliability': kappa}, x = 'time', y='ratio', hue='box', palette=palette, ax = ax[i], legend = i == len(kappas) - 1, **kwargs)
             if i == 0:
-                ax[i].set_ylabel(r'$\frac{\text{reward rate}}{\text{push rate}}$')
+                ax[i].set_ylabel('efficiency')
         fig.suptitle(f"Matching law for {subj}")
         fig.tight_layout()
     subject_plotter(df.index.unique('subject'), _plot)

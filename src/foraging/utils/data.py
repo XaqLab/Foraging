@@ -21,7 +21,7 @@ from typing import Callable, Any
 
 from tqdm import tqdm
 
-from foraging.config.constants import BOX_LABELS, BOX_POSITIONS, KAPPA_LEVELS, KAPPA_DISCRETIZATION
+from foraging.config.constants import BOX_LABELS, BOX_POSITIONS, KAPPA_CATEGORIES, KAPPA_LEVELS
 from foraging.utils import INDEX
 
 
@@ -100,6 +100,7 @@ def make_df(path: str) -> pd.DataFrame:
     Returns:
         A DataFrame where each row represents a push and each column encodes experiment variables, such as session, block, reliablity conditions, etc.
     """
+
     # Identify all subjects in the given directory
     subjects = get_subjects(path)
     df_dict = {
@@ -322,7 +323,7 @@ def make_df(path: str) -> pd.DataFrame:
     df = df[df["consecutive push intervals"] > 0]
 
     # Categorize stimulus reliabilities
-    for subject, kappa_filter in KAPPA_DISCRETIZATION.items():
+    for subject, kappa_filter in KAPPA_LEVELS.items():
         for label, values in kappa_filter.items():
             df_filter = filter_df(df, {'subject': subject, 'kappa': values})
             df.loc[df_filter.index, 'stimulus reliability'] = label

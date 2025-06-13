@@ -28,13 +28,13 @@ BOX_POSITIONS_ORDER = [
     0,
     1
 ] # NW S NE ordering
-KAPPA_LEVELS = [
+KAPPA_CATEGORIES = [
     'low',
     'medium',
     'high'
 ]
 
-KAPPA_DISCRETIZATION =  {
+KAPPA_LEVELS =  {
         'dylan': dict(zip(['low', 'high'],[(0.01, 0.04), (0.07, 0.1)])),
         'marco': dict(zip(['low', 'high'], [(0.01,), (0.1, 0.2)])),
         'humans': dict(zip(['low', 'medium', 'high'], [(0.0, 0.02), (0.03, 0.04, 0.06), (0.07, 0.08, 0.1)])),

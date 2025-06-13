@@ -71,7 +71,7 @@ def compute_posteriors(
         box_mask = block_data['box rank'] == i
 
         push_times = block_data.loc[box_mask, 'push times'].values
-        push_intervals = block_data.loc[box_mask, 'same-box push intervals'].values
+        push_intervals = block_data.loc[box_mask, 'wait times'].values
         reward_outcomes = block_data.loc[box_mask, 'reward outcomes'].values
 
         # Number of non-NaN observations
@@ -408,6 +408,31 @@ def compute_fisher(
         else:
             information[i] = obs_model.fisher_info((True, t), schedules[int(box)])
     return information
+
+@process_block_safely
+def compute_mutual_information(
+        df: pd.DataFrame,
+        index: tuple,
+        shape: int = None,
+        schedules: list = None,
+) -> np.ndarray[float]:
+    """
+    Compute the mutual information between the reward and the schedule.
+    """
+    df_block = df.loc[index]
+    if schedules is None:
+        schedules = np.sort(df_block['schedule'].unique())
+    n_boxes = len(schedules)
+    if shape is None:
+        shape = df_block.index.unique('shape')[0]  # Assume agent knows number of states perfectly
+    
+    def _mutual_information(t, box):
+        cond_entropy = 0
+
+        return np.log(6) - 0
+
+    # Construct likelihood/observation model
+    obs_model = GammaObservation(shape)
 
 @process_block_safely
 def compute_normalized_fisher(
