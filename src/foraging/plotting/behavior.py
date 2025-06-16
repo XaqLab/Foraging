@@ -1,5 +1,6 @@
 import logging
 from copy import deepcopy
+from typing import Callable
 
 import numpy as np
 import pandas as pd
@@ -12,7 +13,7 @@ from scipy.stats import kstest, expon, fit
 from scipy.optimize import minimize_scalar
 from scipy.stats import gamma
 
-from foraging.config.constants import BOX_COLORS, BOX_POSITIONS, KAPPA_LEVELS
+from foraging.config.constants import BOX_COLORS, BOX_POSITIONS, KAPPA_LEVELS, SEED
 from foraging.plotting import PALETTE, PALETTE_DARK, enhanced_violinplot, subject_plotter
 from foraging.utils import INDEX, MIN_INDEX, kwargs_handler
 from foraging.utils.data import get_blocks, filter_df, bin_data, get_continuous_from_df_to_dict
@@ -106,7 +107,7 @@ def plot_experiment_overview(df: pd.DataFrame, conds: dict = None, title: str = 
     for session in session_order:
         df_session = filter_df(df_temp, {'session': session})
         x_text = df_session['duration_offset'].unique()[1:]
-        ax.vlines(x_text, y_offset_2_factor * df_session['y_offset_2'].unique()[0] + 0.5, y_offset_2_factor * df_session['y_offset_2'].unique()[0] + 3.5, linestyles = 'dotted', colors = 'black')
+        ax.vlines(x_text, y_offset_2_factor * df_session['y_offset_2'].unique()[0] - 0.5, y_offset_2_factor * df_session['y_offset_2'].unique()[0] + 2.5, linestyles = 'dotted', colors = 'black')
 
     # Tidy up axes
     ax.set_yticks(
@@ -137,13 +138,13 @@ def plot_push_percentiles(df: pd.DataFrame, percentiles: dict, **kwargs):
     subject_plotter(df.index.unique('subject'), _plot, **kwargs)
 
 
-def plot_top_outliers(df: pd.DataFrame, top_n: int, figsize: tuple[float, float] = (20, 2.5), **kwargs):
+def plot_long_push_blocks(df: pd.DataFrame, top_n: int, figsize: tuple[float, float] = (20, 2.5), **kwargs):
     # Sort data by magnitude of push interval in descending order
     df_sorted = df.sort_values(by='consecutive push intervals', ascending=False)
 
     def _plot(i, subj, **kwargs):
         fig, axes = plt.subplots(1, top_n, figsize=figsize)
-        df_subject = filter_df(df_sorted, {'subject': subj}, attempt_index=False)
+        df_subject = filter_df(df_sorted, {'subject': subj})
 
         # Plot each block containing the `top_n` pushes
         for i, (idx, g) in enumerate(get_blocks(df_subject, sort=False)):
@@ -157,19 +158,19 @@ def plot_top_outliers(df: pd.DataFrame, top_n: int, figsize: tuple[float, float]
     subject_plotter(df.index.unique('subject'), _plot, **kwargs)
 
 
-def plot_reward_outcomes_outlier_vs_control(df: pd.DataFrame, percentiles: dict, n_samples: int = 5000, window: float = 30, outlier_label: str = 'top pushes', control_label: str = 'middle pushes'):
+def plot_reward_outcomes_long_vs_medium_pushes(df: pd.DataFrame, percentiles: dict, n_samples: int = 5000, window: float = 30, long_label: str = 'long push intervals', medium_label: str = 'medium push intervals', seed: int = SEED, **kwargs):
     df_rate_content = {'subject': [], 'push intervals': [], '% rewarded': [], 'previous wait time (s)': [],
                        'previous reward outcome': [], 'type': []}
-    subjects = df.index.unique('subject')
+    rng = np.random.default_rng(seed)
     def _helper(subject, percentile: float = None):
-        df_subject = filter_df(df, {'subject': subject}, attempt_index=False)
+        df_subject = filter_df(df, {'subject': subject})
         if percentile:
             df_subject = df_subject[df_subject['push percentiles'] >= percentile]
         else:
             df_subject = df_subject[(df_subject['push percentiles'] >= 0.25) & (df_subject['push percentiles'] <= 0.75)]
 
-        for idx, row in df_subject.sample(n_samples, replace=True).iterrows():
-
+        for row in df_subject.sample(n_samples, replace=True, random_state=rng).itertuples():
+            idx = row.Index
             # Get push immediately before current push
             push_num = idx[INDEX.index('push #')]
             new_idx = df.index.get_loc(idx) - 1
@@ -184,7 +185,7 @@ def plot_reward_outcomes_outlier_vs_control(df: pd.DataFrame, percentiles: dict,
             df_block = df.loc[idx[:MIN_INDEX - 1]]
             df_window = df_block.loc[(df_block['push times'] <= new_row['push times']) & (
                     df_block['push times'] >= new_row['push times'] - window)]
-
+            row = df.loc[idx]
             # Populate data arrays
             if len(df_window) > 0:
                 df_rate_content['subject'].append(subject)
@@ -192,33 +193,90 @@ def plot_reward_outcomes_outlier_vs_control(df: pd.DataFrame, percentiles: dict,
                 df_rate_content['% rewarded'].append(
                     df_window['reward outcomes'].sum() / len(df_window['reward outcomes']))
                 df_rate_content['previous wait time (s)'].append(new_row['wait times'])
-                df_rate_content['previous reward outcome'].append(new_row['reward outcomes'])
-                df_rate_content['type'].append(outlier_label) if percentile else df_rate_content['type'].append(control_label)
+                df_rate_content['previous reward outcome'].append(new_row['rewarded?'])
+                df_rate_content['type'].append(long_label) if percentile else df_rate_content['type'].append(medium_label)
 
     # For each subject, find the top x% pushes and middle 50% pushes and calculate the reward fraction of the past `window` seconds prior to each push's onset
-    for subject in subjects:
+    for subject in df.index.unique('subject'):
         _helper(subject, percentile = percentiles[subject])
         _helper(subject)
 
-    fig, axes = plt.subplots(2, 1, figsize=(20, 10))
+    fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', dict(figsize=(20, 10)))
+    fig, axes = plt.subplots(2, 1, **fig_kwargs)
     df_rate = pd.DataFrame(df_rate_content).set_index('subject').dropna()
     df_rate = df_rate[df_rate['previous wait time (s)'] <= 30]
-    enhanced_violinplot(df_rate, x='subject', y='% rewarded', hue='type', hue_order=[control_label, outlier_label],
-                        ax=axes[0], inner=None)
-    axes[0].set_title(f"% rewarded (Outliers vs Control)")
+    enhanced_violinplot(df_rate, x='subject', y='% rewarded', hue='type', hue_order=[medium_label, long_label],
+                        ax=axes[0], inner=None, cut=0)
+    axes[0].set_title(f"% Rewarded (Long vs Medium Push Intervals)")
     sns.move_legend(axes[0], "upper left", bbox_to_anchor=(1, 1))
 
-    df_rate['reward outcome x type'] = df_rate['previous reward outcome'].astype(str) + '_' + df_rate['type']
-    enhanced_violinplot(df_rate, x='subject', y='previous wait time (s)', hue='reward outcome x type', ax=axes[1],
+    df_rate['outcomes'] = df_rate['previous reward outcome'].map({'Yes': 'Rewarded', 'No': 'Unrewarded'}) + ', ' + df_rate['type']
+    enhanced_violinplot(df_rate, x='subject', y='previous wait time (s)', hue='outcomes', ax=axes[1],
                         palette=['#89ff87', '#28ab26', '#84ebf7', '#1cb7c9'],
-                        hue_order=['False_' + control_label, 'False_' + outlier_label, 'True_' + control_label,
-                                   'True_' + outlier_label], density_norm='width', inner=None)
-    axes[1].set_title(f"Previous wait time and outcome (Outliers vs Control)")
+                        hue_order=['Unrewarded, ' + medium_label, 'Unrewarded, ' + long_label, 'Rewarded, ' + medium_label,
+                                   'Rewarded, ' + long_label], inner=None, cut=0)
+    axes[1].set_title(f"Previous wait time and outcome (Long vs Medium Push Intervals)")
     sns.move_legend(axes[1], "upper left", bbox_to_anchor=(1, 1))
     fig.tight_layout()
 
 
-def plot_session_onsets_outlier_vs_control(df: pd.DataFrame, percentiles: dict, outlier_label: str = 'top pushes', control_label: str = 'middle pushes'):
+def plot_preceding_pushes_long_vs_medium_pushes(df: pd.DataFrame, percentiles: dict, n_samples: int = 5000, n_preceding: int = 5, long_label: str = 'long push intervals', medium_label: str = 'medium push intervals', seed: int = SEED, **kwargs):
+    """
+    Plot the n pushes preceding long and medium push intervals to analyze their co-occurrence patterns.
+    
+    Args:
+        df: DataFrame containing push data
+        percentiles: Dictionary mapping subjects to their percentile thresholds for long pushes
+        n_preceding: Number of preceding pushes to analyze (default: 5)
+    """
+    # Function to get preceding pushes
+    def get_preceding_pushes(push_idx, n):
+        preceding = []
+        current_idx = df.index.get_loc(push_idx)
+        for i in range(n):
+            if current_idx - i - 1 >= 0:
+                preceding.append(df.iloc[current_idx - i - 1])
+        return preceding
+
+    df_rate_content = {'subject': [], 'previous push intervals': [], 'type': []}
+    rng = np.random.default_rng(seed)
+    def _helper(subject, percentile: float = None):
+        df_subject = filter_df(df, {'subject': subject})
+        if percentile:
+            df_subject = df_subject[df_subject['push percentiles'] >= percentile]
+        else:
+            df_subject = df_subject[(df_subject['push percentiles'] >= 0.25) & (df_subject['push percentiles'] <= 0.75)]
+
+        for row in df_subject.sample(n_samples, replace=True, random_state=rng).itertuples():
+            idx = row.Index
+            # Get push immediately before current push
+            push_num = idx[INDEX.index('push #')]
+            new_idx = df.index.get_loc(idx) - 1
+            if push_num == 1:
+                continue
+
+            preceding = get_preceding_pushes(idx, n_preceding)
+            for p in preceding:
+                df_rate_content['subject'].append(subject)
+                df_rate_content['previous push intervals'].append(p['consecutive push intervals'])
+                df_rate_content['type'].append(long_label) if percentile else df_rate_content['type'].append(medium_label)
+
+    # For each subject, find the top x% pushes and middle 50% pushes and calculate the reward fraction of the past `window` seconds prior to each push's onset
+    for subject in df.index.unique('subject'):
+        _helper(subject, percentile = percentiles[subject])
+        _helper(subject)
+
+    fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs')
+    fig, axes = plt.subplots(**fig_kwargs)
+    df_rate = pd.DataFrame(df_rate_content).set_index('subject').dropna()
+    enhanced_violinplot(df_rate, x='subject', y='previous push intervals', hue='type', hue_order=[medium_label, long_label],
+                        ax=axes, inner=None, cut=0, log_scale=True)
+    axes.set_title(f"Duration of past {n_preceding} push intervals (Long vs Medium Push Intervals)")
+    sns.move_legend(axes, "upper left", bbox_to_anchor=(1, 1))
+    fig.tight_layout()
+
+
+def plot_session_onsets_long_vs_medium_pushes(df: pd.DataFrame, percentiles: dict, long_label: str = 'long push intervals', medium_label: str = 'medium push intervals'):
     subjects = df.index.unique('subject')
 
     # Get time of each push in the session, not just block
@@ -235,15 +293,15 @@ def plot_session_onsets_outlier_vs_control(df: pd.DataFrame, percentiles: dict, 
     df_temp_content = []
     for i, subject in enumerate(subjects):
         percentile = percentiles[subject]
-        df_subject = filter_df(df_temp, {'subject': subject}, attempt_index=False)
+        df_subject = filter_df(df_temp, {'subject': subject})
         df_subject = df_subject[(df_subject['push percentiles'] >= percentile) | (
                     (df_subject['push percentiles'] >= 0.25) & (df_subject['push percentiles'] <= 0.75))]
-        df_subject.loc[df_subject['push percentiles'] >= percentile, 'type'] = outlier_label
+        df_subject.loc[df_subject['push percentiles'] >= percentile, 'type'] = long_label
         df_subject.loc[
-            (df_subject['push percentiles'] >= 0.25) & (df_subject['push percentiles'] <= 0.75), 'type'] = control_label
+            (df_subject['push percentiles'] >= 0.25) & (df_subject['push percentiles'] <= 0.75), 'type'] = medium_label
         df_temp_content.append(df_subject)
     df_temp = pd.concat(df_temp_content)
-    ax = enhanced_violinplot(df_temp, x='subject', y='onset (s)', hue='type', hue_order=[control_label, outlier_label],
+    ax = enhanced_violinplot(df_temp, x='subject', y='onset (s)', hue='type', hue_order=[medium_label, long_label],
                              cut=0, inner=None)
     ax.set_title('Onset of push in session')
 
@@ -269,7 +327,7 @@ def plot_vertical_position_in_block(df: pd.DataFrame, conds: dict, data_dir: str
     ax.set_ylabel("vertical position (mm)")
     ax.set_title("Vertical position in block")
 
-def plot_vertical_position_outlier_vs_control(df: pd.DataFrame, data_dir: str):
+def plot_vertical_position_long_vs_medium_pushes(df: pd.DataFrame, data_dir: str, percentiles: dict = None, **kwargs):
     continuous_data, _ = get_continuous_from_df_to_dict(df, data_dir)
     dfs_cont = []
 
@@ -280,7 +338,7 @@ def plot_vertical_position_outlier_vs_control(df: pd.DataFrame, data_dir: str):
     df = pd.concat(dfs_cont)
 
     def _plot(i, subject):
-        df_subject = filter_df(df, {'subject': subject}, attempt_index=False)
+        df_subject = filter_df(df, {'subject': subject})
         df_vertical = {'push intervals': [], 'average vertical position': [], 'push percentiles': []}
         # Find average vertical position over each push interval
         for idx, row in df_subject.iterrows():
@@ -300,13 +358,66 @@ def plot_vertical_position_outlier_vs_control(df: pd.DataFrame, data_dir: str):
             except:
                 continue
 
-        fig, ax = plt.subplots()
-        sns.histplot(df_vertical, x='push percentiles', y='average vertical position', ax = ax)
+        fig, ax = plt.subplots(**kwargs)
+        sns.scatterplot(df_vertical, x='push percentiles', y='average vertical position', ax = ax)
+        ax.axvline(x=percentiles[subject], linestyle='--', color='black', label = 'long push intervals')
+        ax.legend()
         ax.set_title(f"{subject}'s average vertical position occupied during push interval")
 
     # Plot each subject's vertical position distribution
     subject_plotter(df.index.unique('subject'), _plot)
 
+#TODO: visualize xy-position in block in 2d and super-impose block activity
+#TODO: rework aggregating xy statistics-- is it velocity or position?
+def plot_xy_velocity_long_vs_medium_pushes(df: pd.DataFrame, data_dir: str, percentiles: dict = None, n_samples: int = 5000, long_label: str = 'long push intervals', medium_label: str = 'medium push intervals', **kwargs):
+    continuous_data, _ = get_continuous_from_df_to_dict(df, data_dir)
+    dfs_cont = []
+    rng = np.random.default_rng(SEED)
+    # Only keep blocks that have real position data
+    for block, data in continuous_data.items():
+        if np.any(data['position'] != np.nan):
+            dfs_cont.append(df.xs(block, level=('subject', 'session', 'block'), drop_level=False))
+    df = pd.concat(dfs_cont)
+
+    def _plot(i, subject):
+        df_subject = filter_df(df, {'subject': subject})
+        xy_pos = {'x': [], 'y': [], 'type': []}
+
+        # Find x-y positions for medium pushes
+        for idx, row in df_subject.sample(frac=1, random_state=rng).iterrows():
+            if row['push percentiles'] >= 0.25 and row['push percentiles'] <= 0.75:
+                conds = dict(subject=subject, session=idx[INDEX.index('session')], block=idx[INDEX.index('block')])
+                time = continuous_data[tuple(conds.values())]['time']
+                xy = continuous_data[tuple(conds.values())]['position'][:, :2]
+                mask = ~np.isnan(xy).any(axis=1)
+                xy_pos['x'] += list(xy[mask][:, 0])
+                xy_pos['y'] += list(xy[mask][:, 1])
+                xy_pos['type'] += [medium_label] * len(xy[mask])
+                if len(xy_pos['x']) >= n_samples:
+                    break
+
+        # Find x-y positions for medium pushes
+        for idx, row in df_subject.sample(frac=1, random_state=rng).iterrows():
+            if row['push percentiles'] >= percentiles[subject]:
+                conds = dict(subject=subject, session=idx[INDEX.index('session')], block=idx[INDEX.index('block')])
+                time = continuous_data[tuple(conds.values())]['time']
+                xy = continuous_data[tuple(conds.values())]['position'][:, :2]
+                mask = ~np.isnan(xy).any(axis=1)
+                xy_pos['x'] += list(xy[mask][:, 0])
+                xy_pos['y'] += list(xy[mask][:, 1])
+                xy_pos['type']+= [long_label] * len(xy[mask])
+                if len(xy_pos['x']) >= 2 * n_samples:
+                    break
+        fig, axes = plt.subplots(1, 2,**kwargs)
+        xy_pos = pd.DataFrame(xy_pos)
+        
+        sns.histplot(xy_pos[xy_pos['type'] == medium_label], x='x', y='y', ax = axes[0])
+        sns.histplot(xy_pos[xy_pos['type'] == long_label], x='x', y='y', ax = axes[1])
+        axes[0].set_title(f"{subject}'s xy positions occupied\n during medium push interval")
+        axes[1].set_title(f"{subject}'s xy positions occupied\n during long push interval")
+        fig.tight_layout()
+    # Plot each subject's vertical position distribution
+    subject_plotter(df.index.unique('subject'), _plot)
 
 def plot_hmm_probabilities_in_block(df: pd.DataFrame, filepath: str, block_idx: int = 30):
 
@@ -394,7 +505,7 @@ def plot_block_events(df: pd.DataFrame, conds: dict = None, x: str = 'push times
 
     # Add reward outcomes with shaded (rewarded) and empty (not rewarded) markers
     colors = np.array([palette[i] for i in df_block['box'].values])
-    mask = df_block['reward outcomes'] == True
+    mask = df_block['reward outcomes'].values
     ax.scatter(x_vals[mask], y_vals[mask], c=colors[mask], marker='^', s = 80, zorder = 2)
     ax.scatter(x_vals[~mask], y_vals[~mask], edgecolors=colors[~mask], marker='v', s = 80, zorder = 2, facecolors ="none")
     ax.spines['left'].set_visible(False)
@@ -686,8 +797,11 @@ def plot_runlengths(df: pd.DataFrame, palette: dict = PALETTE, stim_reliabilitie
         fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'ncols': len(kappas), 'sharey': True, 'sharex': True})
         fig, ax = fig_init(None, **fig_kwargs)
         for i, kappa in enumerate(kappas):
-            bp(sns.histplot)(labeled_lengths_all.reset_index(), x='length', conds={'stimulus reliability': kappa}, hue = 'box', palette = PALETTE,
+            try:
+                bp(sns.histplot)(labeled_lengths_all.reset_index(), x='length', conds={'stimulus reliability': kappa}, hue = 'box', palette = PALETTE,
                             discrete=True,  common_norm=True, multiple='stack', legend = i == len(kappas) - 1, ax=ax[i], **kwargs)
+            except:
+                continue
 
             # Overlay random dice probabilities from geometric distribution
             if null_model:
@@ -836,7 +950,7 @@ def plot_stay_probabilities(df: pd.DataFrame, stim_reliabilities: dict = KAPPA_L
     subject_plotter(df.index.unique('subject'), _plot)
 
 
-def plot_reward_rates_in_block(df: pd.DataFrame, stim_reliabilities: dict = KAPPA_LEVELS, palette: dict = PALETTE, by_box: bool = False, **kwargs):
+def plot_reward_rates_across_blocks(df: pd.DataFrame, stim_reliabilities: dict = KAPPA_LEVELS, palette: dict = PALETTE, by_box: bool = False, **kwargs):
     """
 
     Args:
@@ -873,6 +987,7 @@ def plot_reward_rates_in_block(df: pd.DataFrame, stim_reliabilities: dict = KAPP
         fig_kwargs['ncols'] = len(kappas)
         fig, ax = fig_init(None, **fig_kwargs)
         for i, kappa in enumerate(kappas):
+            schedules = filter_df(df, {'stimulus reliability': 'high', 'subject': 'viktor'})[['box', 'schedule']].value_counts().index.tolist()
             if by_box:
                 bp(sns.lineplot)(rr_subj, conds = {'stimulus reliability': kappa}, x = 'time', y='reward rate', hue='box', palette=palette, ax = ax[i], legend = i == len(kappas) - 1, **kwargs)
             else:
@@ -882,12 +997,15 @@ def plot_reward_rates_in_block(df: pd.DataFrame, stim_reliabilities: dict = KAPP
     subject_plotter(df.index.unique('subject'), _plot)
 
 
-def plot_quantity_in_block(df: pd.DataFrame, y: str = None, stim_reliabilities: list = KAPPA_LEVELS, palette: dict = PALETTE, **kwargs):
+def plot_quantity_in_block(df: pd.DataFrame, y: str = None, stim_reliabilities: list = KAPPA_LEVELS, palette: dict = PALETTE, auxiliary_plot: Callable = None, **kwargs):
+
+    # Bin time
     x_bins = 'time'
     df.copy()
     bin_kwargs = kwargs_handler(kwargs, 'bin_kwargs', dict(bin_width = 60))
     df[x_bins] = bin_data(df, 'push times', **bin_kwargs)
 
+    # Plot quantity of interest over time in the block
     fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'sharey': True, 'sharex': True})
     def _plot(i, subj):
         df_subj = filter_df(df, {'subject': subj})
@@ -897,7 +1015,8 @@ def plot_quantity_in_block(df: pd.DataFrame, y: str = None, stim_reliabilities: 
         for i, kappa in enumerate(kappas):
             bp(sns.lineplot)(df_subj, conds={'stimulus reliability': kappa}, x='time', y=y, hue='box',
                             palette=palette, ax=ax[i], legend = i == len(kappas) - 1, **kwargs)
-
+            if auxiliary_plot:
+                auxiliary_plot(df, conds={'stimulus reliability': kappa, 'subject': subj}, palette = palette, ax = ax[i], **kwargs)
         fig.suptitle(f"{y} for {subj}")
         fig.tight_layout()
     subject_plotter(df.index.unique('subject'), _plot)
@@ -1394,3 +1513,4 @@ def plot_continuous2d_df(df: pd.DataFrame, continuous_data: dict, x: str, dims: 
         axis.set_ticks([])
 
     return ax, p
+

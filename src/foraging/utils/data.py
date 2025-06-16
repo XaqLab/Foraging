@@ -301,6 +301,7 @@ def make_df(path: str) -> pd.DataFrame:
     df["normalized pushes"] = df["wait times"] / df["schedule"]
     df["consecutive push intervals"] = df["push times"].diff()
 
+    df["rewarded?"] = df["reward outcomes"].map({True: 'Yes', False: 'No'})
     df["push #"] = (
         df.groupby(["subject", "session", "block"])["push times"].rank().astype(int)
     )
