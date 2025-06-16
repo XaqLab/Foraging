@@ -369,7 +369,7 @@ def across_blocks(func: Callable, df: pd.DataFrame, figure_dir: str, filename_pr
                 _figure_saver(fig, ax, figure_path)
     _inner()
 
-def subject_plotter(subjects, plot_func, *args, **kwargs):
+def subject_plotter(subjects, plot_func, subj_kwargs: dict = None, *args, **kwargs):
     """
     Generates plots for each subject
 
@@ -378,6 +378,7 @@ def subject_plotter(subjects, plot_func, *args, **kwargs):
         plot_func: plotting function
         *args: arguments to `plot_func`
         **kwargs: keyword arguments to `plot_func`
+            - if a dictionary containing subject names as keys, then the value of each key is a dictionary of keyword arguments to `plot_func`
 
     Returns:
         list of any returned output from `plot_func`
@@ -385,7 +386,10 @@ def subject_plotter(subjects, plot_func, *args, **kwargs):
 
     returns = []
     for i, subj in enumerate(subjects):
-        ret = plot_func(i, subj, *args, **kwargs)
+        if subj_kwargs is not None and subj in subj_kwargs:
+            ret = plot_func(i, subj, *args, **(subj_kwargs[subj] | kwargs))
+        else:
+            ret = plot_func(i, subj, *args, **kwargs)
         returns.append(ret)
     return returns
 

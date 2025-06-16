@@ -674,18 +674,19 @@ def plot_wait_times(df: pd.DataFrame, stim_reliabilities: dict = KAPPA_LEVELS, p
 
     """
     fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs')
-    def _plot(i, subj):
+    def _plot(i, subj, **kwargs):
         fig, ax = fig_init(None, **fig_kwargs)
         df_subj = filter_df(df, {'subject': subj})
+        swarm_kwargs = kwargs_handler(kwargs, 'swarm_kwargs', dict(size=0.5, log_scale=True, dodge=True))
         bp(sns.swarmplot)(df_subj, x='stimulus reliability', order = stim_reliabilities[subj].keys(),
-                        y='wait times', hue='box', palette=palette_dark, legend=False, log_scale=True, size=0.5,
-                        dodge=True, ax=ax)
+                        y='wait times', hue='box', palette=palette_dark, legend=False, ax=ax, **swarm_kwargs)
         bp(enhanced_violinplot)(df_subj, x='stimulus reliability', order = stim_reliabilities[subj].keys(), y='wait times', hue='box', palette=palette,
                                 y_unit='s', cut=0, inner=None,
                                 log_scale=True, common_norm=True, ax=ax, **kwargs)
         fig.suptitle(f'Wait times for {subj}')
         fig.tight_layout()
-    subject_plotter(df.index.unique('subject'), _plot)
+    subj_kwargs = kwargs_handler(kwargs, 'subj_kwargs')
+    subject_plotter(df.index.unique('subject'), _plot, subj_kwargs, **kwargs)
 
 
 def plot_stay_switch_pushes(df: pd.DataFrame, palette: dict = PALETTE, palette_dark: dict = PALETTE_DARK, null_model: bool = False, **kwargs) -> plt.Axes:
@@ -708,12 +709,13 @@ def plot_stay_switch_pushes(df: pd.DataFrame, palette: dict = PALETTE, palette_d
     box_labels = palette.keys()
     fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', dict(nrows = n_boxes, ncols = n_boxes, figsize=(12, 10), sharex=True, sharey=True))
 
-    def _plot(i, subj):
+    def _plot(i, subj, **kwargs):
         fig, axes = fig_init(None, **fig_kwargs)
+        df_subj = filter_df(df, {'subject': subj})
         for i, source in enumerate(box_labels):
             for j, dest in enumerate(box_labels):
                 ax = axes[i, j]
-                subset = df[(df['prev box'] == source) & (df['box'] == dest)]
+                subset = df_subj[(df_subj['prev box'] == source) & (df_subj['box'] == dest)]
                 color_fill = palette[dest]
                 color_fill_dark = palette_dark[dest]
                 color_outline = palette[source]
@@ -725,12 +727,13 @@ def plot_stay_switch_pushes(df: pd.DataFrame, palette: dict = PALETTE, palette_d
                         sns.kdeplot(data=subset, x="consecutive push intervals", fill=False, ax=ax, color=color_outline,
                                     linewidth=2)
                     if null_model:
-                        fit_dist = fit(expon, subset['consecutive push intervals'])
-                        print(f"Fitting geometric distribution to ({source} -> {dest}) push intervals", fit_dist.params)
-                        res = kstest(subset['consecutive push intervals'], expon.cdf, fit_dist.params)
+                        delta = subset['consecutive push intervals'].min()
+                        fit_res = fit(expon, subset['consecutive push intervals'] - delta)
+                        print(f"Fitting geometric distribution to ({source} -> {dest}) push intervals with offset {delta}", fit_res.params)
+                        res = kstest(subset['consecutive push intervals'] - delta, expon.cdf, fit_res.params)
                         print(f"KS-test of ({source} -> {dest}) push intervals", res.pvalue)
-                        x = sorted(subset['consecutive push intervals'].unique())
-                        ax.plot(x, expon.pdf(x, fit_dist.params[0]), color = 'black', linestyle = '-')
+                        x = np.sort(subset['consecutive push intervals'].unique())
+                        ax.plot(x, expon.pdf(x - delta, fit_res.params[0]), color = 'black', linestyle = '-')
 
                 ax.set_xlabel("")
                 if i == 0:
@@ -748,7 +751,8 @@ def plot_stay_switch_pushes(df: pd.DataFrame, palette: dict = PALETTE, palette_d
         fig.text(0.5, 0.95, 'TO', ha='center')
         fig.text(0.0, 0.5, 'FROM', va='center', rotation='vertical')
         fig.tight_layout()
-    subject_plotter(df.index.unique('subject'), _plot)
+    subj_kwargs = kwargs_handler(kwargs, 'subj_kwargs')
+    subject_plotter(df.index.unique('subject'), _plot, subj_kwargs, **kwargs)
 
 
 def plot_runlengths(df: pd.DataFrame, palette: dict = PALETTE, stim_reliabilities: dict = KAPPA_LEVELS, null_model: bool = False, disp_js: bool = False, **kwargs) -> plt.Axes:
@@ -770,7 +774,7 @@ def plot_runlengths(df: pd.DataFrame, palette: dict = PALETTE, stim_reliabilitie
 
     """
 
-    def _plot(i, subj):   
+    def _plot(i, subj, **kwargs):   
         # Identify consecutive pushes and when they switch
         df_subj = filter_df(df, {'subject': subj})
         x = df_subj.index.get_level_values('push #')
@@ -830,7 +834,8 @@ def plot_runlengths(df: pd.DataFrame, palette: dict = PALETTE, stim_reliabilitie
                 ax[i].legend(handles = handles + [Line2D([0], [0], color='black', linestyle='-', label='random dice')], labels = labels + ['random dice'] )
         fig.suptitle(f'Runlengths for {subj}')
         fig.tight_layout()
-    subject_plotter(df.index.unique('subject'), _plot)
+    subj_kwargs = kwargs_handler(kwargs, 'subj_kwargs')
+    subject_plotter(df.index.unique('subject'), _plot, subj_kwargs, **kwargs)
 
 def plot_push_intervals_vs_reward_intervals(df: pd.DataFrame, palette: dict = PALETTE, stim_reliabilities: dict = KAPPA_LEVELS, unity = True, annotate_reg: bool = False, **kwargs) -> plt.Axes:
     """
@@ -851,7 +856,7 @@ def plot_push_intervals_vs_reward_intervals(df: pd.DataFrame, palette: dict = PA
     # Remove first push from each box, since reward time is messed up for first pushes
     # df = df.drop(df[df['push # by box'] == 1].index)
     fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'sharey': True, 'sharex': True})
-    def _plot(i, subj):
+    def _plot(i, subj, **kwargs):
         kappas = stim_reliabilities[subj].keys()
         fig_kwargs['ncols'] = len(kappas)
         fig, axes = fig_init(None, **fig_kwargs)
@@ -881,7 +886,8 @@ def plot_push_intervals_vs_reward_intervals(df: pd.DataFrame, palette: dict = PA
 
         fig.suptitle(f"Push intervals vs reward intervals for {subj}")
         fig.tight_layout()
-    subject_plotter(df.index.unique('subject'), _plot)
+    subj_kwargs = kwargs_handler(kwargs, 'subj_kwargs')
+    subject_plotter(df.index.unique('subject'), _plot, subj_kwargs, **kwargs)
 
 def plot_next_push_surprise(df: pd.DataFrame, stim_reliabilities: dict = KAPPA_LEVELS, palette: dict = PALETTE, palette_dark: dict = PALETTE_DARK, **kwargs):
     """Plot the change in wait time after each push.
