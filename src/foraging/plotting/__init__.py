@@ -26,4 +26,4 @@ plt.style.use(current_dir.parent / os.getenv('PLOTCONFIG_PATH'))
 PALETTE = dict(zip(BOX_LABELS, BOX_COLORS))
 PALETTE_DARK = dict(zip(BOX_LABELS, BOX_COLORS_DARK))
 
-from ._base import fig_init, titler, unitler, get_bar_positions, bp, subject_plotter, enhanced_violinplot, plot_variable_subplots, format_yticks, per_block, across_blocks
+from ._base import fig_init, titler, unitler, legend_handler, bp, subject_plotter, enhanced_violinplot, plot_variable_subplots, format_yticks, per_block, across_blocks

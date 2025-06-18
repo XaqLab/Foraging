@@ -82,6 +82,23 @@ class AbstractRecordKeeper(AbstractRecord):
     def delete(self, *args, **kwargs) -> Any:
         pass
 
+# class HistoryManager:
+#     def __init__(self):
+#         self.history = []
+
+#     def add(self, record):
+#         self.history.append(record)
+
+#     def get(self, index: int):
+#         return self.history[index]
+
+#     def get_all(self):
+#         return self.history
+
+#     def clear(self):
+#         self.history = []
+
+
 ### IMPLEMENTATIONS
 class ArrayBelief(AbstractBelief):
 
@@ -135,7 +152,7 @@ class ArrayBelief(AbstractBelief):
     def likelihood(self, *args, **kwargs) -> Any:
         pass
 
-class GammaScheduleBelief(ArrayBelief):
+class GammaBoxBelief(ArrayBelief):
 
     def __init__(self, shape: int = 1, schedules: np.ndarray = None, prior: ArrayBelief = None):
         if prior:
@@ -600,6 +617,16 @@ class MyPrior(Distribution):
     def support(self, *args, **kwargs) -> Any:
         return self.supp
 
+
+# Refactor update logic into a separate function
+class BayesianUpdater:
+    @staticmethod
+    def update_posterior(obs_model, normalizer, support, probabilities, obs, **kwargs):
+        posterior_probs = obs_model.probability(obs, support, *kwargs.pop('obs_args', tuple()), **kwargs.pop('obs_kwargs', {})) * probabilities
+        return normalizer.normalize(posterior_probs, *kwargs.pop('norm_args', tuple()), **kwargs.pop('norm_kwargs', {}))
+
+
+# Update MyPosterior class to use HistoryManager and BayesianUpdater
 class MyPosterior(Posterior):
     """
     A generic implementation of a posterior that performs Bayesian updates on latent variable.
@@ -654,9 +681,9 @@ class MyPosterior(Posterior):
         self.norm = normalizer
         self.probs = prior
         self.supp = support
-        self.record = record
+        self.history_manager = HistoryManager() if record else None
         if record:
-            self.history = [self.probs]
+            self.history_manager.add(self.probs)
 
     def prior(self) -> Distribution:
         """
@@ -694,15 +721,15 @@ class MyPosterior(Posterior):
         Returns:
             The probability of the latent variable taking on the indexed value.
         """
-        if self.record and record > -1:
-            return self.history[record][index]
+        if self.history_manager and record > -1:
+            return self.history_manager.get(record)[index]
         return self.probs[index]
 
     def probabilities(self, *args, record: int | str = -1, **kwargs) -> ArrayLike:
-        if self.record and record == 'all':
-            return self.history
-        elif self.record and record > -1:
-            return self.history[record]
+        if self.history_manager and record == 'all':
+            return self.history_manager.get_all()
+        elif self.history_manager and record > -1:
+            return self.history_manager.get(record)
         return self.probs
 
     def update(self, obs: Any, **kwargs) -> ArrayLike:
@@ -721,17 +748,9 @@ class MyPosterior(Posterior):
         Returns:
             An array containing the updated posterior probabilities.
         """
-        obs_model = self.observation_model()
-        normalizer = self.normalizer()
-        support = self.support()
-        posterior_probs = obs_model.probability(obs, support, *kwargs.pop('obs_args', tuple()), **kwargs.pop('obs_kwargs', {})) * self.probabilities(**kwargs.pop('latent_kwargs', {}))
-
-        # Normalize the new posterior
-        self.probs = normalizer.normalize(posterior_probs, *kwargs.pop('norm_args', tuple()), **kwargs.pop('norm_kwargs',
-                                                                                                         {}))
-        # If keep history, then add current posterior to buffer
-        if self.record:
-            self.history.append(self.probs)
+        self.probs = BayesianUpdater.update_posterior(self.obs_model, self.norm, self.supp, self.probs, obs, **kwargs)
+        if self.history_manager:
+            self.history_manager.add(self.probs)
         return self.probs
 
     def joint(self, **kwargs) -> ArrayLike:
@@ -789,11 +808,10 @@ class MyPosterior(Posterior):
         This method is used to reinitialize the posterior with the prior probabilities.
         """
         self.probs = self.prior()
-        if self.record:
+        if self.history_manager:
             if empty_history:
-                self.history = [self.probs]
-            else:
-                self.history.append(self.probs)
+                self.history_manager.clear()
+            self.history_manager.add(self.probs)
 
     def support(self, *args, **kwargs):
         """

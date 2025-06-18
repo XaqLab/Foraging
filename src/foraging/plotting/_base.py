@@ -115,6 +115,7 @@ def bp(func: Callable):
     """
 
     @wraps(func)
+    @legend_handler
     def wrapper(df: pd.DataFrame = None, x: str = None, hue: str = None, palette: list = None,conds: dict = None, single_block: bool = False, title: str = '', title_prefix: str = '', legend: Any = 'auto', x_unit: str = None, y_unit: str = None, min_obs: int = None, attempt_index: bool = True, ax: plt.Axes = None, **kwargs) -> Any:
         """
         Convenience decorator that customizes figure in formulaic fashion
@@ -188,7 +189,7 @@ def bp(func: Callable):
         fig, ax = fig_init(ax, **kwargs_handler(kwargs, 'fig_kwargs'))
 
         # Pop any last keyword args not needed for seaborn here before running function
-        legend_kwargs = kwargs_handler(kwargs, 'legend_kwargs', dict(loc="upper left", bbox_to_anchor = (1,1), title = hue))
+        legend_kwargs = kwargs_handler(kwargs, 'legend_kwargs', dict(title = hue))
         title_kwargs = kwargs_handler(kwargs, 'title_kwargs')
         xlabel_kwargs = kwargs_handler(kwargs, 'xlabel_kwargs')
         ylabel_kwargs = kwargs_handler(kwargs, 'ylabel_kwargs')
@@ -241,6 +242,30 @@ def bp(func: Callable):
             return ax
         return ret # Assume there is usually an ax in here
     return wrapper
+
+def legend_handler(_func = None, loc = 'upper left', bbox = (1,1)):
+    """
+    A decorator to set the legend location to 'upper left' and bbox_to_anchor to (1, 1).
+
+    Args:
+        func: The plotting function to wrap.
+
+    Returns:
+        The wrapped function with the legend location set.
+    """
+    def _inner(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            ax = func(*args, **kwargs)
+            for _ax in flatten(ax):
+                if _ax.get_legend() is not None:
+                    sns.move_legend(_ax, loc, bbox_to_anchor=bbox)
+            return ax
+        return wrapper
+
+    if _func:
+        return _inner(_func)
+    return _inner
 
 def _figure_handler(**kwargs):
     """
@@ -369,27 +394,26 @@ def across_blocks(func: Callable, df: pd.DataFrame, figure_dir: str, filename_pr
                 _figure_saver(fig, ax, figure_path)
     _inner()
 
-def subject_plotter(subjects, plot_func, subj_kwargs: dict = None, *args, **kwargs):
+def subject_plotter(subjects, plot_func, **kwargs):
     """
     Generates plots for each subject
 
     Args:
         subjects: iterable of subjects
         plot_func: plotting function
-        *args: arguments to `plot_func`
         **kwargs: keyword arguments to `plot_func`
             - if a dictionary containing subject names as keys, then the value of each key is a dictionary of keyword arguments to `plot_func`
 
     Returns:
         list of any returned output from `plot_func`
     """
-
+    subj_kwargs = kwargs_handler(kwargs, 'subj_kwargs')
     returns = []
     for i, subj in enumerate(subjects):
-        if subj_kwargs is not None and subj in subj_kwargs:
-            ret = plot_func(i, subj, *args, **(subj_kwargs[subj] | kwargs))
+        if subj in subj_kwargs:
+            ret = plot_func(i, subj, **(subj_kwargs[subj] | kwargs))
         else:
-            ret = plot_func(i, subj, *args, **kwargs)
+            ret = plot_func(i, subj, **kwargs)
         returns.append(ret)
     return returns
 
