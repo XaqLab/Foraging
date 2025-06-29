@@ -13,11 +13,13 @@ from scipy.spatial.distance import jensenshannon
 from scipy.stats import kstest, expon, fit
 from scipy.optimize import minimize_scalar
 from scipy.stats import gamma
+from sklearn.linear_model import LinearRegression
+import statsmodels.api as sm
 
 from foraging.config.constants import BOX_COLORS, BOX_POSITIONS, KAPPA_LEVELS, SEED
 from foraging.plotting import PALETTE, PALETTE_DARK, fig_init, titler, unitler, bp, enhanced_violinplot, subject_plotter, legend_handler
 from foraging.utils import INDEX, MIN_INDEX, kwargs_handler
-from foraging.utils.data import get_blocks, filter_df, bin_data, get_continuous_from_df_to_dict
+from foraging.utils.data import get_blocks, filter_df, bin_data, process_blocks, process_block_safely, get_continuous_from_df_to_dict
 from foraging.plotting._base import regplot, get_bar_heights, palette_handler
 
 import pickle
@@ -124,6 +126,17 @@ def plot_experiment_overview(df: pd.DataFrame, conds: dict = None, title: str = 
     return ax
 
 def plot_push_percentiles(df: pd.DataFrame, percentiles: dict = None, **kwargs):
+    """
+    Plot the percentiles of consecutive push intervals for each subject. It marks specific percentiles if provided.
+
+    Args:
+        df: A DataFrame containing the data to be plotted.
+        percentiles: A dictionary mapping subjects to their specific percentile thresholds.
+        **kwargs: Additional keyword arguments passed to the plotting function.
+
+    Returns:
+        None
+    """
     def _plot(i, subj, **kwargs):
         # Plot each push's percentiles
         ax = bp(sns.scatterplot)(df, x='consecutive push intervals', y='push percentiles', conds={'subject': subj}, title_prefix="Percentiles of consecutive push intervals", x_unit='s', legend = False, **kwargs)
@@ -142,6 +155,19 @@ def plot_push_percentiles(df: pd.DataFrame, percentiles: dict = None, **kwargs):
 
 
 def plot_long_push_blocks(df: pd.DataFrame, top_n: int, figsize: tuple[float, float] = (20, 2.5), **kwargs):
+    """
+    Plot the blocks containing the top N longest push intervals for each subject.
+    This function sorts the data by the magnitude of push intervals in descending order and plots the blocks containing the top N longest push intervals for each subject.
+
+    Args:
+        df: A DataFrame containing the data to be plotted.
+        top_n: The number of top longest push intervals to plot.
+        figsize: A tuple specifying the size of the figure.
+        **kwargs: Additional keyword arguments passed to the plotting function.
+
+    Returns:
+        None
+    """
     # Sort data by magnitude of push interval in descending order
     df_sorted = df.sort_values(by='consecutive push intervals', ascending=False)
 
@@ -160,8 +186,28 @@ def plot_long_push_blocks(df: pd.DataFrame, top_n: int, figsize: tuple[float, fl
         fig.tight_layout()
     subject_plotter(df.index.unique('subject'), _plot, **kwargs)
 
+
 @legend_handler
 def plot_reward_outcomes_long_vs_medium_pushes(df: pd.DataFrame, percentiles: dict, n_samples: int = 5000, window: float = 30, long_label: str = 'long push intervals', medium_label: str = 'medium push intervals', seed: int = SEED, **kwargs):
+    """
+    Plot reward outcomes for long and medium push intervals.
+    This function analyzes the reward outcomes for long and medium push intervals by calculating the reward fraction within a specified time window prior to each push's onset.
+
+    Args:
+        df: A DataFrame containing push data.
+        percentiles: A dictionary mapping subjects to their percentile thresholds for long pushes.
+        n_samples: The number of samples to draw for analysis.
+        window: The time window in seconds to consider for reward calculation.
+        long_label: The label for long push intervals.
+        medium_label: The label for medium push intervals.
+        seed: The seed for random number generation.
+        **kwargs: Additional keyword arguments passed to the plotting function.
+          - fig_kwargs: Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
+
+    Returns:
+        The axes containing the plots.
+    """
+
     df_rate_content = {'subject': [], 'push intervals': [], '% rewarded': [], 'previous wait time (s)': [],
                        'previous reward outcome': [], 'type': []}
     rng = np.random.default_rng(seed)
@@ -225,13 +271,25 @@ def plot_reward_outcomes_long_vs_medium_pushes(df: pd.DataFrame, percentiles: di
 @legend_handler
 def plot_preceding_pushes_long_vs_medium_pushes(df: pd.DataFrame, percentiles: dict, n_samples: int = 5000, n_preceding: int = 5, long_label: str = 'long push intervals', medium_label: str = 'medium push intervals', seed: int = SEED, **kwargs):
     """
-    Plot the n pushes preceding long and medium push intervals to analyze their co-occurrence patterns.
-    
+    Plot the preceding pushes for long and medium push intervals to analyze co-occurrence patterns.
+
+    This function analyzes the n pushes preceding long and medium push intervals for each subject to understand their co-occurrence patterns. It uses a helper function to gather data for each subject and plots the results using violin plots.
+
     Args:
-        df: DataFrame containing push data
-        percentiles: Dictionary mapping subjects to their percentile thresholds for long pushes
-        n_preceding: Number of preceding pushes to analyze (default: 5)
+        df: A DataFrame containing push data.
+        percentiles: A dictionary mapping subjects to their percentile thresholds for long pushes.
+        n_samples: The number of samples to draw for analysis.
+        n_preceding: The number of preceding pushes to analyze.
+        long_label: The label for long push intervals.
+        medium_label: The label for medium push intervals.
+        seed: The seed for random number generation.
+        **kwargs: Additional keyword arguments passed to the plotting function.
+          - fig_kwargs: Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
+
+    Returns:
+        The axes containing the plot.
     """
+
     # Function to get preceding pushes
     def get_preceding_pushes(push_idx, n):
         preceding = []
@@ -278,8 +336,21 @@ def plot_preceding_pushes_long_vs_medium_pushes(df: pd.DataFrame, percentiles: d
     fig.tight_layout()
     return axes
 
-@legend_handler
+
 def plot_session_onsets_long_vs_medium_pushes(df: pd.DataFrame, percentiles: dict, long_label: str = 'long push intervals', medium_label: str = 'medium push intervals'):
+    """
+    Plot the onset times of long and medium push intervals within sessions.
+    This function calculates the onset times of push intervals within sessions and compares the top and middle percentile pushes for each subject.
+
+    Args:
+        df: A DataFrame containing push data.
+        percentiles: A dictionary mapping subjects to their percentile thresholds for long pushes.
+        long_label: The label for long push intervals.
+        medium_label: The label for medium push intervals.
+
+    Returns:
+        The axes containing the plot.
+    """
     subjects = df.index.unique('subject')
 
     # Get time of each push in the session, not just block
@@ -312,6 +383,18 @@ def plot_session_onsets_long_vs_medium_pushes(df: pd.DataFrame, percentiles: dic
 
 
 def plot_vertical_position_in_block(df: pd.DataFrame, conds: dict, data_dir: str):
+    """
+    Plot the vertical position of subjects within a block over time.
+    This function retrieves vertical position data for a specified block and plots the vertical position over time, highlighting the position at the time of each push.
+
+    Args:
+        df: A DataFrame containing block data.
+        conds: A dictionary specifying conditions to filter the DataFrame.
+        data_dir: The directory containing continuous data files.
+
+    Returns:
+        None
+    """
     # Get vertical data for block specified by `conds`
     df_block = filter_df(df, conds).copy()
     continuous_data, errors = get_continuous_from_df_to_dict(df_block, data_dir)
@@ -333,8 +416,22 @@ def plot_vertical_position_in_block(df: pd.DataFrame, conds: dict, data_dir: str
     ax.set_title("Vertical position in block")
 
 
+def plot_vertical_position_vs_push_percentiles(df: pd.DataFrame, data_dir: str, percentiles: dict = None, **kwargs):
+    """
+    Plot the average vertical position of subjects during push intervals against push percentiles.
+    This function calculates the average vertical position during each push interval and plots it against the push percentiles for each subject.
 
-def plot_vertical_position_long_vs_medium_pushes(df: pd.DataFrame, data_dir: str, percentiles: dict = None, **kwargs):
+    Args:
+        df: A DataFrame containing push data.
+        data_dir: The directory containing continuous data files.
+        percentiles: A dictionary mapping subjects to their percentile thresholds for long pushes.
+        **kwargs: Additional keyword arguments passed to the plotting function.
+          - fig_kwargs: Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
+          - legend_kwargs: Dictionary of keyword arguments for customizing the legend (passed to `ax.legend`).
+
+    Returns:
+        None
+    """
     continuous_data, _ = get_continuous_from_df_to_dict(df, data_dir)
     dfs_cont = []
 
@@ -430,7 +527,18 @@ def plot_xy_velocity_long_vs_medium_pushes(df: pd.DataFrame, data_dir: str, perc
 
 @legend_handler(bbox = (1.1, 1))
 def plot_hmm_probabilities_in_block(df: pd.DataFrame, filepath: str, block_idx: int = 3):
+    """
+    Plot HMM probabilities over a specific block.
+    This function loads Hidden Markov Model (HMM) probabilities from a file and overlays them on top of a specific block's data, visualizing the probabilities of different HMM policies.
 
+    Args:
+        df: A DataFrame containing block data.
+        filepath: The path to the file containing saved HMM probabilities.
+        block_idx: The index of the block to overlay the HMM probabilities on.
+
+    Returns:
+        The axes with the plotted HMM probabilities.
+    """
 
     # Load HMM probabilities
     with open(filepath, 'rb') as f:
@@ -511,39 +619,23 @@ def plot_block_events(df: pd.DataFrame, conds: dict = None, x: str = 'push times
     conds['kappa'] = kappa[0]
     conds['stim type'] = stim_type[0]
     conds['shape'] = shape[0]
+    box_labels = box_labels if box_labels else schedules
 
-    # Create switch segments (x, y) pairs for LineCollection
-    x_vals = df_block[x].values
-    y_vals = df_block[y].values
-    colors = np.array(['black'] * (len(y_vals) - 1))
-    # styles = ['dashed' if x else 'solid' for x in df_block['stay/switch'].values[1:]]
-    segments = [[(x_vals[i], y_vals[i]), (x_vals[i + 1], y_vals[i + 1])] for i in range(len(x_vals) - 1)]
-
-    # Create the LineCollection
-    line_kwargs = kwargs_handler(kwargs, 'line_kwargs', dict(linestyles='--', linewidth = 1, zorder = 0))
-    lc = LineCollection(segments, colors = colors, **line_kwargs)
-
-    # Set labels
-    ax.add_collection(lc)
-    ax.autoscale()
-    title = titler(title = title, title_prefix = title_prefix, conds = conds)
+    title = titler(title=title, title_prefix=title_prefix, conds=conds)
     ax.set_title(title)
-    ax.set_ylabel(unitler(y, y_unit))
-    ax.set_xlabel(unitler(x, x_unit))
+    ax.set_ylabel('Fisher information')
+    ax.set_xlabel(unitler(x, 's'))
 
     # Add reward outcomes with shaded (rewarded) and empty (not rewarded) markers
-    colors = np.array([palette[i] for i in df_block['box'].values])
-    mask = df_block['reward outcomes'].values
+    colors = np.array([box_colors[i] for i in df_block['box rank'].values])
+    mask = df_block['reward outcomes'] == True
     ax.scatter(x_vals[mask], y_vals[mask], c=colors[mask], marker='^', s = 80, zorder = 2)
     ax.scatter(x_vals[~mask], y_vals[~mask], edgecolors=colors[~mask], marker='v', s = 80, zorder = 2, facecolors ="none")
-    ax.spines['left'].set_visible(False)
-    ax.spines['bottom'].set_visible(False)
 
     # Create legend manually with proxy artists
     if legend:
-        legend_kwargs = kwargs_handler(kwargs, 'legend_kwargs')
-        palette = palette_handler(palette, df_block['box'].unique())
-        legend_elements = ([Line2D([0], [0], color=palette[j], linestyle='-', label=schedules[i]) for i, j in enumerate(palette.keys())]
+        legend_kwargs = kwargs.pop('legend_kwargs', {'loc': 'upper right'})
+        legend_elements = ([Line2D([0], [0], color=box_colors[j], linestyle='-', label=box_labels[i]) for i, j in enumerate(sorted(df_block['box rank'].unique()))]
                            + [Line2D([0], [0], color='black', linestyle='', marker='^', label='rewarded'),
                               Line2D([0], [0], color='black', linestyle='', marker='v', markerfacecolor = 'none', label='no reward')])
         ax.legend(handles=legend_elements, **legend_kwargs)
@@ -655,6 +747,19 @@ def plot_experiment_parameters(df: pd.DataFrame, conds: dict, title: str = "Expe
 
 
 def plot_wait_times_by_sessions(df: pd.DataFrame, label_rotation: float = 35, **kwargs):
+    """
+    Plot wait times across sessions for monkey subjects.
+    This function visualizes the distribution of wait times across different sessions for specified monkey subjects, using swarm plots to show push intervals and adding weekday labels for context.
+
+    Args:
+        df: A DataFrame containing session data.
+        label_rotation: The angle to rotate x-tick labels by.
+        **kwargs: Additional keyword arguments passed to the plotting function.
+          - fig_kwargs: Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
+
+    Returns:
+        None
+    """
 
     # Examine monkeys separately from humans
     monkey_subjects = ['dylan', 'marco', 'viktor']
@@ -688,20 +793,25 @@ def plot_wait_times_by_sessions(df: pd.DataFrame, label_rotation: float = 35, **
         fig.tight_layout()
     subject_plotter(monkey_subjects, _plot, **kwargs)
 
-def plot_wait_times(df: pd.DataFrame, stim_reliabilities: dict = KAPPA_LEVELS, palette: dict = PALETTE, palette_dark: dict = PALETTE_DARK, **kwargs) -> plt.Axes:
+
+def plot_wait_times(df: pd.DataFrame, stim_reliabilities: dict = KAPPA_LEVELS, palette: dict = PALETTE, palette_dark: dict = PALETTE_DARK, **kwargs):
     """
+    Plot wait times across stimulus reliabilities for each subject.
+    This function visualizes the distribution of wait times across different stimulus reliabilities for each subject.
 
     Args:
-        df:
-        stim_reliabilities:
-        palette:
-        palette_dark:
-        stim_reliabilities:
-        **kwargs:
+        df: A DataFrame containing wait time data.
+        stim_reliabilities: A dictionary mapping subjects to their stimulus reliability levels.
+        palette: A dictionary mapping box schedules to colors.
+        palette_dark: A dictionary mapping box schedules to darkened colors.
+        **kwargs: Additional keyword arguments passed to the plotting function.
+          - fig_kwargs: Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
+          - swarm_kwargs: Dictionary to specify properties for the swarm plot.
 
     Returns:
-
+        None
     """
+
     fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs')
     def _plot(i, subj, **kwargs):
         fig, ax = fig_init(None, **fig_kwargs)
@@ -717,7 +827,7 @@ def plot_wait_times(df: pd.DataFrame, stim_reliabilities: dict = KAPPA_LEVELS, p
     subject_plotter(df.index.unique('subject'), _plot, **kwargs)
 
 
-def plot_stay_switch_pushes(df: pd.DataFrame, palette: dict = PALETTE, palette_dark: dict = PALETTE_DARK, null_model: bool = False, **kwargs) -> plt.Axes:
+def plot_stay_switch_pushes(df: pd.DataFrame, palette: dict = PALETTE, palette_dark: dict = PALETTE_DARK, null_model: bool = False, **kwargs):
     """
     Plot the stay and switch push intervals.
 
@@ -730,7 +840,7 @@ def plot_stay_switch_pushes(df: pd.DataFrame, palette: dict = PALETTE, palette_d
             - 'fig_kwargs': Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
 
     Returns:
-        The axes.
+        None
     """
 
     n_boxes = len(palette)
@@ -782,23 +892,22 @@ def plot_stay_switch_pushes(df: pd.DataFrame, palette: dict = PALETTE, palette_d
     subject_plotter(df.index.unique('subject'), _plot, **kwargs)
 
 
-def plot_runlengths(df: pd.DataFrame, palette: dict = PALETTE, stim_reliabilities: dict = KAPPA_LEVELS, null_model: bool = False, disp_js: bool = False, **kwargs) -> plt.Axes:
+def plot_runlengths(df: pd.DataFrame, palette: dict = PALETTE, stim_reliabilities: dict = KAPPA_LEVELS, null_model: bool = False, disp_js: bool = False, **kwargs):
     """
-    Plot the
+    Plot the runlengths of consecutive pushes and their distribution across different boxes.
+    This function calculates the runlengths of consecutive pushes and visualizes their distribution across different boxes, optionally comparing them to a null model based on visitation frequencies.
 
     Args:
-        df:
-        palette:
-        stim_reliabilities:
-        title:
-        null_model:
-        disp_js:
-        ax:
+        df: A DataFrame containing push data.
+        palette: A dictionary mapping box schedules to colors.
+        stim_reliabilities: A dictionary mapping subjects to their stimulus reliability levels.
+        null_model: If True, overlay random dice probabilities from a geometric distribution.
+        disp_js: If True, display Jensen-Shannon distance between empirical and null distributions.
         **kwargs: Additional keyword arguments.
-            - 'fig_kwargs': Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
+          - fig_kwargs: Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
 
     Returns:
-
+        None
     """
 
     @legend_handler
@@ -865,20 +974,23 @@ def plot_runlengths(df: pd.DataFrame, palette: dict = PALETTE, stim_reliabilitie
         return ax
     subject_plotter(df.index.unique('subject'), _plot, **kwargs)
 
-def plot_push_intervals_vs_reward_intervals(df: pd.DataFrame, palette: dict = PALETTE, stim_reliabilities: dict = KAPPA_LEVELS, unity = True, annotate_reg: bool = False, **kwargs) -> plt.Axes:
+
+def plot_push_intervals_vs_reward_intervals(df: pd.DataFrame, palette: dict = PALETTE, stim_reliabilities: dict = KAPPA_LEVELS, unity = True, annotate_reg: bool = False, **kwargs):
     """
-    Plot linear regression of push intervals against reward intervals in a block
+    Plot linear regression of push intervals against reward intervals in a block.
+    This function performs a linear regression analysis of push intervals against reward intervals for each subject, visualizing the relationship with scatter plots and regression lines.
 
     Args:
-        df: DataFrame of experiment data for a given block.
-        palette:
-        stim_reliabilities:
-        title: Title of figure. If specified, overrides `title_prefix`.
-        unity: If True, then display data in square and color region by reward outcome.
-        **kwargs: keyword arguments for seaborn
+        df: A DataFrame of experiment data for a given block.
+        palette: A dictionary mapping box schedules to colors.
+        stim_reliabilities: A dictionary mapping subjects to their stimulus reliability levels.
+        unity: If True, display data in square and color region by reward outcome.
+        annotate_reg: If True, annotate the regression slope on the plot.
+        **kwargs: Additional keyword arguments for seaborn.
+          - fig_kwargs: Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
 
     Returns:
-        axes
+        None
     """
 
     # Remove first push from each box, since reward time is messed up for first pushes
@@ -918,6 +1030,7 @@ def plot_push_intervals_vs_reward_intervals(df: pd.DataFrame, palette: dict = PA
         return axes
     subject_plotter(df.index.unique('subject'), _plot, **kwargs)
 
+
 def plot_next_push_surprise(df: pd.DataFrame, stim_reliabilities: dict = KAPPA_LEVELS, palette: dict = PALETTE, palette_dark: dict = PALETTE_DARK, **kwargs):
     """Plot the change in wait time after each push.
 
@@ -930,6 +1043,8 @@ def plot_next_push_surprise(df: pd.DataFrame, stim_reliabilities: dict = KAPPA_L
     """
 
     df = df.copy()
+
+    # Calculate the change in wait time
     push_deltas = df.groupby(['subject', 'session', 'block', 'box'])
     df['consecutive wait'] = push_deltas['push # by box'].diff().fillna(1)
     df = df.loc[df['consecutive wait'] == 1]
@@ -938,6 +1053,8 @@ def plot_next_push_surprise(df: pd.DataFrame, stim_reliabilities: dict = KAPPA_L
         True: 'yes',
         False: 'no'
     })
+
+    # Track whether the subject stayed or switched after each push
     df['stay/switch'] = df['stay/switch'].shift(-1)
 
     fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'nrows': 2, 'sharey': True, 'sharex': True})
@@ -961,8 +1078,26 @@ def plot_next_push_surprise(df: pd.DataFrame, stim_reliabilities: dict = KAPPA_L
         return axes
     subject_plotter(df.index.unique('subject'), _plot, **kwargs)
 
+
 def plot_stay_probabilities(df: pd.DataFrame, stim_reliabilities: dict = KAPPA_LEVELS,  bin_width: float = 10, **kwargs):
+    """
+    Plot the probability of staying at the same box after a push, based on wait times.
+    This function calculates and visualizes the probability of a subject staying at the same box after a push, using wait times binned by a specified width.
+
+    Args:
+        df: A DataFrame containing push data.
+        stim_reliabilities: A dictionary mapping subjects to their stimulus reliability levels.
+        bin_width: The width of the bins for wait times.
+        **kwargs: Additional keyword arguments.
+          - fig_kwargs: Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
+
+    Returns:
+        None
+    """
+
     df = df.copy()
+
+    # Track whether the push was rewarded and whether the subject stayed or switched after each push
     df['rewarded'] = df['reward outcomes'].map({
         True: 'yes',
         False: 'no'
@@ -989,21 +1124,25 @@ def plot_stay_probabilities(df: pd.DataFrame, stim_reliabilities: dict = KAPPA_L
     subject_plotter(df.index.unique('subject'), _plot, **kwargs)
 
 
-def plot_reward_rates_across_blocks(df: pd.DataFrame, stim_reliabilities: dict = KAPPA_LEVELS, palette: dict = PALETTE, by_box: bool = False, **kwargs):
+def plot_reward_rates_across_blocks(df: pd.DataFrame, stim_reliabilities: dict = KAPPA_LEVELS, palette: dict = PALETTE, window: int = 10, by_box: bool = False, **kwargs):
     """
+    Plot the reward rates across different blocks, optionally by box.
+    This function calculates and visualizes the reward rates across different blocks, smoothing the data over a specified window and optionally separating the data by box.
 
     Args:
-        df:
-        stim_reliabilities:
-        palette:
-        by_box:
-        title:
-        ax:
-        **kwargs:
+        df: A DataFrame containing push data.
+        stim_reliabilities: A dictionary mapping subjects to their stimulus reliability levels.
+        palette: A dictionary mapping box schedules to colors.
+        window: The window size for smoothing the reward rate.
+        by_box: If True, separate the reward rates by box.
+        **kwargs: Additional keyword arguments.
+          - bin_kwargs: Dictionary to specify binning properties for time (passed to `bin_data`).
+          - fig_kwargs: Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
 
     Returns:
-
+        None
     """
+
     # Bin time
     x_bins = 'time'
     df = df.copy()
@@ -1011,14 +1150,19 @@ def plot_reward_rates_across_blocks(df: pd.DataFrame, stim_reliabilities: dict =
     df[x_bins] = bin_data(df, 'push times', **bin_kwargs)
 
     # Aggregate rewards by box or across boxes
-    if by_box:
-        rr = df.groupby(['subject', 'session', 'stimulus reliability', 'block', 'time', 'box'], observed = True)['reward outcomes'].sum()
-    else:
-        rr = df.groupby(['subject', 'session', 'stimulus reliability', 'block', 'time'], observed = True)['reward outcomes'].sum()
-
+    groupers = ['stimulus reliability', 'time', 'box'] if by_box else ['stimulus reliability', 'time']
+    df_grouped = get_blocks(df, groupers)
+    rr = df_grouped['reward outcomes'].sum()
     rr = rr.to_frame().reset_index()
+
+    # Calculate reward rate only for bins with data
     rr['reward rate'] = rr['reward outcomes'] / rr['time'].apply(lambda x: x.length)
+
+    # Smooth the curve
+    groupers = ['box'] if by_box else []
+    rr['reward rate'] = get_blocks(rr, groupers)['reward rate'].transform(lambda x: x.rolling(window=window, min_periods=1).mean())
     rr['time'] = rr['time'].apply(lambda x: float(x.left))
+
     fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'sharey': True, 'sharex': True})
     @legend_handler
     def _plot(i, subj, **kwargs):
@@ -1027,35 +1171,59 @@ def plot_reward_rates_across_blocks(df: pd.DataFrame, stim_reliabilities: dict =
         fig_kwargs['ncols'] = len(kappas)
         fig, ax = fig_init(None, **fig_kwargs)
         for i, kappa in enumerate(kappas):
-            schedules = filter_df(df, {'stimulus reliability': 'high', 'subject': 'viktor'})[['box', 'schedule']].value_counts().index.tolist()
             if by_box:
-                bp(sns.lineplot)(rr_subj, conds = {'stimulus reliability': kappa}, x = 'time', y='reward rate', hue='box', palette=palette, ax = ax[i], legend = i == len(kappas) - 1, **kwargs)
+                bp(sns.lineplot)(rr_subj, conds = {'stimulus reliability': kappa}, x = 'time', y='reward rate', hue='box', x_unit = 's', palette=palette, ax = ax[i], legend = i == len(kappas) - 1, **kwargs)
             else:
-                bp(sns.lineplot)(rr_subj, conds = {'stimulus reliability': kappa}, x = 'time', y='reward rate', ax = ax[i], legend = i == len(kappas) - 1, **kwargs)
+                bp(sns.lineplot)(rr_subj, conds = {'stimulus reliability': kappa}, x = 'time', y='reward rate', x_unit = 's', ax = ax[i], legend = i == len(kappas) - 1, **kwargs)
         fig.suptitle(f"Reward rate for {subj}")
         fig.tight_layout()
         return ax
     subject_plotter(df.index.unique('subject'), _plot, **kwargs)
 
 
-def plot_quantity_in_block(df: pd.DataFrame, y: str = None, stim_reliabilities: list = KAPPA_LEVELS, palette: dict = PALETTE, auxiliary_plot: Callable = None, **kwargs):
+def plot_quantity_across_blocks(df: pd.DataFrame, y: str = None, stim_reliabilities: list = KAPPA_LEVELS, palette: dict = PALETTE, window: int = 10, auxiliary_plot: Callable = None, **kwargs):
+    """
+    Plot a specified quantity across different blocks, with optional auxiliary plots.
+    This function calculates and visualizes a specified quantity across different blocks, smoothing the data over a specified window and optionally including auxiliary plots for additional insights.
+
+    Args:
+        df: A DataFrame containing push data.
+        y: The name of the quantity to plot.
+        stim_reliabilities: A list of stimulus reliability levels for each subject.
+        palette: A dictionary mapping box schedules to colors.
+        window: The window size for smoothing the quantity.
+        auxiliary_plot: A callable for generating auxiliary plots.
+        **kwargs: Additional keyword arguments.
+          - bin_kwargs: Dictionary to specify binning properties for time (passed to `bin_data`).
+          - fig_kwargs: Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
+
+    Returns:
+        None
+    """
 
     # Bin time
     x_bins = 'time'
     df.copy()
     bin_kwargs = kwargs_handler(kwargs, 'bin_kwargs', dict(bin_width = 60))
     df[x_bins] = bin_data(df, 'push times', **bin_kwargs)
+    groupers = ['stimulus reliability', 'time', 'box']
+    df_grouped = get_blocks(df, groupers)
+    df_average = df_grouped[y].mean().to_frame().reset_index()
+
+    # Smooth the curve
+    if window:
+        df_average[y] = get_blocks(df_average, groupers = ['box'])[y].transform(lambda x: x.rolling(window=window, min_periods=1).mean())
 
     # Plot quantity of interest over time in the block
     fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'sharey': True, 'sharex': True})
     @legend_handler    
     def _plot(i, subj, **kwargs):
-        df_subj = filter_df(df, {'subject': subj})
+        df_subj = filter_df(df_average, {'subject': subj})
         kappas = stim_reliabilities[subj].keys()
         fig_kwargs['ncols'] = len(kappas)
         fig, ax = fig_init(None, **fig_kwargs)
         for i, kappa in enumerate(kappas):
-            bp(sns.lineplot)(df_subj, conds={'stimulus reliability': kappa}, x='time', y=y, hue='box',
+            bp(sns.lineplot)(df_subj, conds={'stimulus reliability': kappa}, x='time', y=y, hue='box', x_unit = 's',
                             palette=palette, ax=ax[i], legend = i == len(kappas) - 1, **kwargs)
             if auxiliary_plot:
                 auxiliary_plot(df, conds={'stimulus reliability': kappa, 'subject': subj}, palette = palette, ax = ax[i], **kwargs)
@@ -1065,19 +1233,37 @@ def plot_quantity_in_block(df: pd.DataFrame, y: str = None, stim_reliabilities: 
     subject_plotter(df.index.unique('subject'), _plot, **kwargs)
 
 
-def plot_matching_law(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS, palette: dict = PALETTE, **kwargs):
+def plot_accuracy_across_blocks(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS, palette: dict = PALETTE, window: int = 10, **kwargs):
+    """
+    Plot the accuracy of push intervals across different blocks.
+    This function calculates and visualizes the accuracy of push intervals across different blocks, smoothing the data over a specified window to highlight trends.
+
+    Args:
+        df: A DataFrame containing push data.
+        stim_reliabilities: A list of stimulus reliability levels for each subject.
+        palette: A dictionary mapping box schedules to colors.
+        window: The window size for smoothing the accuracy data.
+        **kwargs: Additional keyword arguments.
+          - bin_kwargs: Dictionary to specify binning properties for time (passed to `bin_data`).
+          - fig_kwargs: Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
+
+    Returns:
+        None
+    """
+
     x_bins = 'time'
     df = df.copy()
-    bin_kwargs = kwargs_handler(kwargs, 'bin_kwargs', dict(bin_width = 60, strategy = 'full'))
+    bin_kwargs = kwargs_handler(kwargs, 'bin_kwargs', dict(bin_width = 60))
     df[x_bins] = bin_data(df, 'push times', **bin_kwargs)
-    grouped = df.groupby(['subject', 'session', 'stimulus reliability', 'block', 'time', 'box'], observed=True)
-    rr = grouped['reward outcomes'].sum()
-    rr = rr.to_frame().reset_index()
-    time_bins = rr['time'].apply(lambda x: x.length)
-    rr['reward rate'] = rr['reward outcomes']
-    rr['push rate'] = (grouped.size().reset_index()[0]) #.reset_index()[0]
-    rr['ratio'] = rr['reward rate'] / rr['push rate'] / time_bins
-    rr['time'] = rr['time'].apply(lambda x: float(x.left))
+    grouped = get_blocks(df, ['stimulus reliability', 'time', 'box']) 
+    rr = grouped['reward outcomes'].sum().to_frame().reset_index()
+    rr['push rate'] = grouped.size().reset_index()[0]
+    rr['ratio'] = rr['reward outcomes'] / rr['push rate']
+
+    # Smooth the curve
+    if window:
+        rr['ratio'] = get_blocks(rr, groupers = ['box'])['ratio'].transform(lambda x: x.rolling(window=window, min_periods=1).mean())
+
 
     fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'sharey': True, 'sharex': True})
     @legend_handler
@@ -1087,13 +1273,103 @@ def plot_matching_law(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS,
         fig, ax = fig_init(None, **fig_kwargs)
         rr_subj = filter_df(rr, {'subject': subj})
         for i, kappa in enumerate(kappas):
-            bp(sns.lineplot)(rr_subj, conds = {'stimulus reliability': kappa}, x = 'time', y='ratio', hue='box', palette=palette, ax = ax[i], legend = i == len(kappas) - 1, **kwargs)
+            bp(sns.lineplot)(rr_subj, conds = {'stimulus reliability': kappa}, x = 'time', y='ratio', hue='box', x_unit = 's', palette=palette, ax = ax[i], legend = i == len(kappas) - 1, **kwargs)
             if i == 0:
-                ax[i].set_ylabel('efficiency')
-        fig.suptitle(f"Matching law for {subj}")
+                ax[i].set_ylabel(r'$\frac{\text{# rewards}}{\text{# pushes}}$')
+        fig.suptitle(f"Accuracy for {subj}")
         fig.tight_layout()
         return ax
     subject_plotter(df.index.unique('subject'), _plot, **kwargs)
+
+
+def plot_matching_law(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS, min_obs: int = 10, **kwargs):
+    """
+    Plot the matching law coefficients over time for different stimulus reliabilities.
+    This function calculates and visualizes the slopes and intercepts of the matching law for each subject over time, filtering out time bins with fewer observations than a specified minimum.
+
+    Args:
+        df: A DataFrame containing push data.
+        stim_reliabilities: A list of stimulus reliability levels for each subject.
+        min_obs: The minimum number of observations required in a time bin to include it in the analysis.
+        **kwargs: Additional keyword arguments.
+          - fig_kwargs: Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
+
+    Returns:
+        None
+    """
+
+    x_bins = 'time'
+    df = df.copy()
+    bin_kwargs = dict(bin_width = 120)
+    df[x_bins] = bin_data(df, 'push times', **bin_kwargs)
+    grouped = get_blocks(df, ['stimulus reliability', 'time', 'box'])
+    rr = grouped['reward outcomes'].sum().to_frame() #.reset_index()
+    rr['pushes'] = grouped.size() #.reset_index()[0]
+
+    # Normalize by total pushes and rewards in the time bin
+    total_pushes = get_blocks(rr, ['stimulus reliability', 'time'])['pushes'].sum()
+    total_rewards = get_blocks(rr, ['stimulus reliability', 'time'])['reward outcomes'].sum()
+    rr = pd.merge(rr, total_pushes, on = ['subject', 'session', 'block', 'stimulus reliability', 'time'], suffixes = ['', '_total'])
+    rr = pd.merge(rr, total_rewards, on = ['subject', 'session', 'block', 'stimulus reliability', 'time'], suffixes = ['', '_total'])
+    rr['relative_pushes'] = rr['pushes'] / rr['pushes_total']
+    rr['relative_rewards'] = rr['reward outcomes'] / rr['reward outcomes_total']
+
+    # Drop rows with NaN or infinite values
+    rr = rr.replace([np.inf, -np.inf], np.nan).dropna()
+
+    # For each block, fit matching law
+    @process_block_safely
+    def _inner(df: pd.DataFrame, index: tuple):
+        df_block = df.loc[index]
+        time_bins = sorted(df_block.index.unique('time'))
+        slopes, intercepts, observed_time_bins = [], [], []
+        for time_bin in time_bins:
+            df_time = filter_df(df_block, {'time': time_bin})
+            if len(df_time) < 2:
+                continue
+            X = sm.add_constant(df_time['relative_rewards'])
+            y = df_time['relative_pushes']
+            model = sm.OLS(y, X).fit()
+            try:
+                slopes.append(model.params[1])
+                intercepts.append(model.params[0])
+                observed_time_bins.append(time_bin)
+            except:
+                continue
+        return pd.DataFrame({'time': observed_time_bins, 'slope': slopes, 'intercept': intercepts})
+    result = process_blocks(rr, _inner)
+
+    # Merge all matching law fits into one DataFrame
+    merged_df_list = []
+    for (subject, session, block), _df in result[0].items():
+        # Add columns for subject, session, and block
+        _df['subject'] = subject
+        _df['session'] = session
+        _df['block'] = block
+        _df['stimulus reliability'] = df.loc[(subject, session, block)].index.unique('stimulus reliability')[0]
+        
+        # Append the DataFrame to the list
+        merged_df_list.append(_df)
+
+    # Concatenate all DataFrames in the list
+    merged_df = pd.concat(merged_df_list, ignore_index=True)
+    fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'sharey': True, 'sharex': True, 'nrows': 2, 'ncols': 1})
+
+
+    @legend_handler
+    def _plot(i, subj, **kwargs):
+        df_subj = filter_df(merged_df, {'subject': subj})
+        fig, ax = fig_init(None, **fig_kwargs)
+        if min_obs:
+            df_subj = df_subj.groupby(['time', 'stimulus reliability'], observed = True, as_index = False).filter(lambda g: len(g) >= min_obs)
+        sns.lineplot(df_subj, x = 'time', y = 'slope', hue = 'stimulus reliability', hue_order = list(stim_reliabilities[subj].keys()), ax = ax[0], **kwargs)
+        sns.lineplot(df_subj, x = 'time', y = 'intercept', hue = 'stimulus reliability', hue_order = list(stim_reliabilities[subj].keys()), ax = ax[1], **kwargs)
+        
+        fig.suptitle(f"Matching law for {subj}")
+        fig.tight_layout()
+        return ax
+    
+    subject_plotter(merged_df['subject'].unique(), _plot, **kwargs)
 
 
 def plot_theoretical_fisher_info(t, schedules = [7, 14, 21], alpha = 10, figsize = (10, 5)):

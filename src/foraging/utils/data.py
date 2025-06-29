@@ -385,6 +385,23 @@ def filter_df(
     return df
 
 
+def get_blocks(df: pd.DataFrame, groupers: list = None, observed: bool = True, **kwargs) -> DataFrameGroupBy:
+    """
+    Group DataFrame by subject, session, and block.
+
+    Args:
+        df: DataFrame containing experiment data.
+        groupers: List of additional columns to group by.
+        **kwargs: Keyword arguments to `DataFrame.groupby`.
+
+    Returns:
+        Grouped DataFrame object.
+    """
+    if groupers is None:
+        groupers = []
+    return df.groupby(["subject", "session", "block"] + groupers, observed = observed, **kwargs)
+
+
 def process_block_safely(func: Callable) -> Callable:
     """
     Decorator to safely process each block, catching exceptions and logging errors.
@@ -405,21 +422,6 @@ def process_block_safely(func: Callable) -> Callable:
             return None
 
     return wrapper
-
-
-def get_blocks(df: pd.DataFrame, **kwargs) -> DataFrameGroupBy:
-    """
-    Group DataFrame by subject, session, and block.
-
-    Args:
-        df: DataFrame containing experiment data.
-        **kwargs: Keyword arguments to `DataFrame.groupby`.
-
-    Returns:
-        Grouped DataFrame object.
-    """
-
-    return df.groupby(["subject", "session", "block"], observed = True, **kwargs)
 
 
 def process_blocks(
@@ -943,10 +945,10 @@ def bin_data(
     """
 
     # Perform initial binning based on n_bins or custom bin edges
-    if bin_width and bins is None:
-        bins = np.arange(start=df[x].min(), stop=df[x].max() + bin_width, step=bin_width)
     if bins is None:
         bins = 20
+        if bin_width:
+            bins = np.arange(start=df[x].min(), stop=df[x].max() + bin_width, step=bin_width)
     _bins = pd.cut(df[x], bins=bins, include_lowest=True)
     dtype = df[x].dtype  # Get the dtype of the column to maintain consistency in bin edges
 
