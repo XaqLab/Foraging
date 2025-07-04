@@ -11,9 +11,6 @@ from matplotlib.collections import LineCollection
 from matplotlib.lines import Line2D
 from scipy.spatial.distance import jensenshannon
 from scipy.stats import kstest, expon, fit
-from scipy.optimize import minimize_scalar
-from scipy.stats import gamma
-from sklearn.linear_model import LinearRegression
 import statsmodels.api as sm
 
 from foraging.config.constants import BOX_COLORS, BOX_POSITIONS, KAPPA_LEVELS, SEED
@@ -441,7 +438,9 @@ def plot_vertical_position_vs_push_percentiles(df: pd.DataFrame, data_dir: str, 
             dfs_cont.append(df.xs(block, level=('subject', 'session', 'block'), drop_level=False))
     df = pd.concat(dfs_cont)
 
-    @legend_handler
+    fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs')
+    legend_kwargs = kwargs_handler(kwargs, 'legend_kwargs')
+    @legend_handler(bbox = (1.05, 1))
     def _plot(i, subject, **kwargs):
         df_subject = filter_df(df, {'subject': subject})
         df_vertical = {'push intervals': [], 'average vertical position': [], 'push percentiles': []}
@@ -462,8 +461,6 @@ def plot_vertical_position_vs_push_percentiles(df: pd.DataFrame, data_dir: str, 
                     df_vertical['push percentiles'].append(row['push percentiles'])
             except:
                 continue
-        fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs')
-        legend_kwargs = kwargs_handler(kwargs, 'legend_kwargs')
         fig, ax = plt.subplots(**fig_kwargs)
         sns.scatterplot(df_vertical, x='push percentiles', y='average vertical position', ax = ax)
         ax.axvline(x=percentiles[subject], linestyle='--', color='black', label = 'long push intervals')
@@ -479,6 +476,7 @@ def plot_xy_velocity_long_vs_medium_pushes(df: pd.DataFrame, data_dir: str, perc
     continuous_data, _ = get_continuous_from_df_to_dict(df, data_dir)
     dfs_cont = []
     rng = np.random.default_rng(SEED)
+
     # Only keep blocks that have real position data
     for block, data in continuous_data.items():
         if np.any(data['position'] != np.nan):
@@ -574,7 +572,7 @@ def plot_hmm_probabilities_in_block(df: pd.DataFrame, filepath: str, block_idx: 
     return ax2
 
 
-# @legend_handler
+@legend_handler
 def plot_block_events(df: pd.DataFrame, conds: dict = None, x: str = 'push times', y: str = 'box position', x_unit: str = 's', y_unit: str = None, title: str = '', title_prefix: str = 'Block activity',
                       palette: dict = PALETTE, legend: bool = True, ax: plt.Axes = None, **kwargs) -> plt.Axes:
     """
@@ -619,23 +617,38 @@ def plot_block_events(df: pd.DataFrame, conds: dict = None, x: str = 'push times
     conds['kappa'] = kappa[0]
     conds['stim type'] = stim_type[0]
     conds['shape'] = shape[0]
-    box_labels = box_labels if box_labels else schedules
+# Create switch segments (x, y) pairs for LineCollection
+    x_vals = df_block[x].values
+    y_vals = df_block[y].values
+    colors = np.array(['black'] * (len(y_vals) - 1))
+    # styles = ['dashed' if x else 'solid' for x in df_block['stay/switch'].values[1:]]
+    segments = [[(x_vals[i], y_vals[i]), (x_vals[i + 1], y_vals[i + 1])] for i in range(len(x_vals) - 1)]
 
-    title = titler(title=title, title_prefix=title_prefix, conds=conds)
+    # Create the LineCollection
+    line_kwargs = kwargs_handler(kwargs, 'line_kwargs', dict(linestyles='--', linewidth = 1, zorder = 0))
+    lc = LineCollection(segments, colors = colors, **line_kwargs)
+
+    # Set labels
+    ax.add_collection(lc)
+    ax.autoscale()
+    title = titler(title = title, title_prefix = title_prefix, conds = conds)
     ax.set_title(title)
-    ax.set_ylabel('Fisher information')
-    ax.set_xlabel(unitler(x, 's'))
+    ax.set_ylabel(unitler(y, y_unit))
+    ax.set_xlabel(unitler(x, x_unit))
 
     # Add reward outcomes with shaded (rewarded) and empty (not rewarded) markers
-    colors = np.array([box_colors[i] for i in df_block['box rank'].values])
-    mask = df_block['reward outcomes'] == True
+    colors = np.array([palette[i] for i in df_block['box'].values])
+    mask = df_block['reward outcomes'].values
     ax.scatter(x_vals[mask], y_vals[mask], c=colors[mask], marker='^', s = 80, zorder = 2)
     ax.scatter(x_vals[~mask], y_vals[~mask], edgecolors=colors[~mask], marker='v', s = 80, zorder = 2, facecolors ="none")
+    ax.spines['left'].set_visible(False)
+    ax.spines['bottom'].set_visible(False)
 
     # Create legend manually with proxy artists
     if legend:
-        legend_kwargs = kwargs.pop('legend_kwargs', {'loc': 'upper right'})
-        legend_elements = ([Line2D([0], [0], color=box_colors[j], linestyle='-', label=box_labels[i]) for i, j in enumerate(sorted(df_block['box rank'].unique()))]
+        legend_kwargs = kwargs_handler(kwargs, 'legend_kwargs', {'loc': 'upper left', 'bbox_to_anchor': (1.05, 1)})
+        palette = palette_handler(palette, df_block['box'].unique())
+        legend_elements = ([Line2D([0], [0], color=palette[j], linestyle='-', label=schedules[i]) for i, j in enumerate(palette.keys())]
                            + [Line2D([0], [0], color='black', linestyle='', marker='^', label='rewarded'),
                               Line2D([0], [0], color='black', linestyle='', marker='v', markerfacecolor = 'none', label='no reward')])
         ax.legend(handles=legend_elements, **legend_kwargs)
@@ -814,7 +827,7 @@ def plot_wait_times(df: pd.DataFrame, stim_reliabilities: dict = KAPPA_LEVELS, p
 
     fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs')
     def _plot(i, subj, **kwargs):
-        fig, ax = fig_init(None, **fig_kwargs)
+        fig, ax = fig_init(**fig_kwargs)
         df_subj = filter_df(df, {'subject': subj})
         swarm_kwargs = kwargs_handler(kwargs, 'swarm_kwargs', dict(size=0.5, log_scale=True, dodge=True))
         bp(sns.swarmplot)(df_subj, x='stimulus reliability', order = stim_reliabilities[subj].keys(),
@@ -848,7 +861,7 @@ def plot_stay_switch_pushes(df: pd.DataFrame, palette: dict = PALETTE, palette_d
     fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', dict(nrows = n_boxes, ncols = n_boxes, figsize=(12, 10), sharex=True, sharey=True))
 
     def _plot(i, subj, **kwargs):
-        fig, axes = fig_init(None, **fig_kwargs)
+        fig, axes = fig_init(**fig_kwargs)
         df_subj = filter_df(df, {'subject': subj})
         for i, source in enumerate(box_labels):
             for j, dest in enumerate(box_labels):
@@ -936,7 +949,7 @@ def plot_runlengths(df: pd.DataFrame, palette: dict = PALETTE, stim_reliabilitie
         visit_freqs = df_subj.groupby(['stimulus reliability'])['box'].value_counts(normalize=True).to_frame()
         kappas = stim_reliabilities[subj].keys()
         fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'ncols': len(kappas), 'sharey': True, 'sharex': True})
-        fig, ax = fig_init(None, **fig_kwargs)
+        fig, ax = fig_init(**fig_kwargs)
         for i, kappa in enumerate(kappas):
             try:
                 bp(sns.histplot)(labeled_lengths_all.reset_index(), x='length', conds={'stimulus reliability': kappa}, hue = 'box', palette = PALETTE,
@@ -1000,7 +1013,7 @@ def plot_push_intervals_vs_reward_intervals(df: pd.DataFrame, palette: dict = PA
     def _plot(i, subj, **kwargs):
         kappas = stim_reliabilities[subj].keys()
         fig_kwargs['ncols'] = len(kappas)
-        fig, axes = fig_init(None, **fig_kwargs)
+        fig, axes = fig_init(**fig_kwargs)
         fit_results = []
         max_x = 0
         df_subj = filter_df(df, {'subject': subj})
@@ -1063,7 +1076,7 @@ def plot_next_push_surprise(df: pd.DataFrame, stim_reliabilities: dict = KAPPA_L
         df_subj = filter_df(df, {'subject': subj})
         kappas = stim_reliabilities[subj].keys()
         fig_kwargs['ncols'] = len(kappas)
-        fig, axes = fig_init(None, **fig_kwargs)
+        fig, axes = fig_init(**fig_kwargs)
         cnt = 0
         for i, ro in enumerate(df_subj['rewarded'].unique()):
             for j, kappa in enumerate(kappas):
@@ -1114,7 +1127,7 @@ def plot_stay_probabilities(df: pd.DataFrame, stim_reliabilities: dict = KAPPA_L
         df_subj = filter_df(df, {'subject': subj})
         kappas = stim_reliabilities[subj].keys()
         fig_kwargs['ncols'] = len(kappas)
-        fig, ax = fig_init(None, **fig_kwargs)
+        fig, ax = fig_init(**fig_kwargs)
         for i, kappa in enumerate(kappas):
             bp(sns.lineplot)(df_subj, conds = {'stimulus reliability': kappa}, x='time', y='P(stay)', x_unit = 's', hue='rewarded', hue_order=['no', 'yes'],
                                 errorbar='se', ax = ax[i], **kwargs)
@@ -1169,7 +1182,7 @@ def plot_reward_rates_across_blocks(df: pd.DataFrame, stim_reliabilities: dict =
         rr_subj = filter_df(rr, {'subject': subj})
         kappas = stim_reliabilities[subj].keys()
         fig_kwargs['ncols'] = len(kappas)
-        fig, ax = fig_init(None, **fig_kwargs)
+        fig, ax = fig_init(**fig_kwargs)
         for i, kappa in enumerate(kappas):
             if by_box:
                 bp(sns.lineplot)(rr_subj, conds = {'stimulus reliability': kappa}, x = 'time', y='reward rate', hue='box', x_unit = 's', palette=palette, ax = ax[i], legend = i == len(kappas) - 1, **kwargs)
@@ -1221,7 +1234,7 @@ def plot_quantity_across_blocks(df: pd.DataFrame, y: str = None, stim_reliabilit
         df_subj = filter_df(df_average, {'subject': subj})
         kappas = stim_reliabilities[subj].keys()
         fig_kwargs['ncols'] = len(kappas)
-        fig, ax = fig_init(None, **fig_kwargs)
+        fig, ax = fig_init(**fig_kwargs)
         for i, kappa in enumerate(kappas):
             bp(sns.lineplot)(df_subj, conds={'stimulus reliability': kappa}, x='time', y=y, hue='box', x_unit = 's',
                             palette=palette, ax=ax[i], legend = i == len(kappas) - 1, **kwargs)
@@ -1270,7 +1283,7 @@ def plot_accuracy_across_blocks(df: pd.DataFrame, stim_reliabilities: list = KAP
     def _plot(i, subj, **kwargs):
         kappas = stim_reliabilities[subj].keys()
         fig_kwargs['ncols'] = len(kappas)
-        fig, ax = fig_init(None, **fig_kwargs)
+        fig, ax = fig_init(**fig_kwargs)
         rr_subj = filter_df(rr, {'subject': subj})
         for i, kappa in enumerate(kappas):
             bp(sns.lineplot)(rr_subj, conds = {'stimulus reliability': kappa}, x = 'time', y='ratio', hue='box', x_unit = 's', palette=palette, ax = ax[i], legend = i == len(kappas) - 1, **kwargs)
@@ -1284,29 +1297,30 @@ def plot_accuracy_across_blocks(df: pd.DataFrame, stim_reliabilities: list = KAP
 
 def plot_matching_law(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS, min_obs: int = 10, **kwargs):
     """
-    Plot the matching law coefficients over time for different stimulus reliabilities.
-    This function calculates and visualizes the slopes and intercepts of the matching law for each subject over time, filtering out time bins with fewer observations than a specified minimum.
+    Calculate and visualize the slopes and intercepts of the matching law for each subject over time.
 
     Args:
         df: A DataFrame containing push data.
         stim_reliabilities: A list of stimulus reliability levels for each subject.
         min_obs: The minimum number of observations required in a time bin to include it in the analysis.
         **kwargs: Additional keyword arguments.
-          - fig_kwargs: Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
+            - bin_kwargs: Dictionary to specify binning properties for time (passed to `bin_data`).
+            - fig_kwargs: Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
 
     Returns:
         None
     """
 
+    # Bin pushes by time, group by box, count rewards and pushes
     x_bins = 'time'
     df = df.copy()
-    bin_kwargs = dict(bin_width = 120)
+    bin_kwargs = kwargs_handler(kwargs, 'bin_kwargs', dict(bin_width = 120))
     df[x_bins] = bin_data(df, 'push times', **bin_kwargs)
     grouped = get_blocks(df, ['stimulus reliability', 'time', 'box'])
     rr = grouped['reward outcomes'].sum().to_frame() #.reset_index()
     rr['pushes'] = grouped.size() #.reset_index()[0]
 
-    # Normalize by total pushes and rewards in the time bin
+    # Convert to relative rates in each time bin
     total_pushes = get_blocks(rr, ['stimulus reliability', 'time'])['pushes'].sum()
     total_rewards = get_blocks(rr, ['stimulus reliability', 'time'])['reward outcomes'].sum()
     rr = pd.merge(rr, total_pushes, on = ['subject', 'session', 'block', 'stimulus reliability', 'time'], suffixes = ['', '_total'])
@@ -1354,12 +1368,10 @@ def plot_matching_law(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS,
     # Concatenate all DataFrames in the list
     merged_df = pd.concat(merged_df_list, ignore_index=True)
     fig_kwargs = kwargs_handler(kwargs, 'fig_kwargs', {'sharey': True, 'sharex': True, 'nrows': 2, 'ncols': 1})
-
-
     @legend_handler
     def _plot(i, subj, **kwargs):
         df_subj = filter_df(merged_df, {'subject': subj})
-        fig, ax = fig_init(None, **fig_kwargs)
+        fig, ax = fig_init(**fig_kwargs)
         if min_obs:
             df_subj = df_subj.groupby(['time', 'stimulus reliability'], observed = True, as_index = False).filter(lambda g: len(g) >= min_obs)
         sns.lineplot(df_subj, x = 'time', y = 'slope', hue = 'stimulus reliability', hue_order = list(stim_reliabilities[subj].keys()), ax = ax[0], **kwargs)
@@ -1372,37 +1384,6 @@ def plot_matching_law(df: pd.DataFrame, stim_reliabilities: list = KAPPA_LEVELS,
     subject_plotter(merged_df['subject'].unique(), _plot, **kwargs)
 
 
-def plot_theoretical_fisher_info(t, schedules = [7, 14, 21], alpha = 10, figsize = (10, 5)):
-    def _fisher_info(t, schedule, alpha):
-        scale = schedule / alpha
-        cdf = gamma.cdf(t, a = alpha, scale = scale)
-        return (t/schedule)**2*gamma.pdf(t, a = alpha, scale = scale)**2/(cdf*(1-cdf))
-
-    schedules = [7, 14, 21]
-    alpha = 10
-    optimal_fisher_t = {}
-    optimal_fisher_info = {}
-    for schedule in schedules:
-        print(f'Finding optimal t for schedule {schedule}')
-        res = minimize_scalar(lambda x: -_fisher_info(x, schedule, alpha))
-        # res = minimize_scalar(lambda x: -gamma.pdf(x, a = alpha, scale = schedule / alpha))
-
-        # Result
-        x_max = res.x
-        f_max = _fisher_info(x_max, schedule, alpha)
-
-        print(f"Argmax: {x_max:.4f}, Max value: {f_max:.4f}")
-        optimal_fisher_info[schedule] = f_max
-        optimal_fisher_t[schedule] = x_max
-
-    fig, ax = plt.subplots(figsize = figsize)
-    fishers = []
-    for schedule in schedules:
-        fishers.append(_fisher_info(t, schedule, alpha))
-    [ax.plot(t, fishers[j], label = schedules[j], color = BOX_COLORS[j]) for j in range(len(schedules))]
-    ax.set_ylabel("fisher information")
-    ax.set_xlabel("push time (s)")
-    ax.vlines(x = optimal_fisher_t.values(), ymin = 0, ymax = 0.15, color = BOX_COLORS, linestyle = '--', label = r'$t^*=\underset{t}{\mathrm{argmax}}J_{\lambda}(t)$')# ax.legend()
 
 
 

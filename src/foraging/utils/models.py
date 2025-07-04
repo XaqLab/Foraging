@@ -2,7 +2,8 @@ import itertools
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from itertools import product, islice
-from typing import Optional, Any
+from typing import Optional, Any, Type
+from copy import deepcopy
 
 import numpy as np
 import scipy.stats
@@ -13,12 +14,10 @@ from foraging.utils import INDEX, MIN_INDEX
 ## ABSTRACT CLASSES
 class AbstractBelief(ABC):
 
-    @property
     @abstractmethod
     def prior(self, *args, **kwargs) -> Any:
         pass
 
-    @property
     @abstractmethod
     def support(self, *args, **kwargs):
         pass
@@ -35,14 +34,16 @@ class AbstractBelief(ABC):
     def query(self, *args, **kwargs):
         pass
 
+    @abstractmethod
+    def features(self, *args, **kwargs):
+        pass
+
 class AbstractID(ABC):
 
-    @property
     @abstractmethod
     def fields(self, *args, **kwargs) -> Any:
         pass
 
-    @property
     @abstractmethod
     def values(self, *args, **kwargs) -> Any:
         pass
@@ -50,19 +51,16 @@ class AbstractID(ABC):
 
 class AbstractRecord(ABC):
 
-    @property
     @abstractmethod
     def id(self, *args, **kwargs) -> AbstractID:
         pass
 
-    @property
     @abstractmethod
     def content(self, *args, **kwargs) -> Any:
         pass
 
 class AbstractRecordKeeper(AbstractRecord):
 
-    @property
     @abstractmethod
     def records(self, *args, **kwargs) -> Any:
         pass
@@ -81,7 +79,7 @@ class AbstractRecordKeeper(AbstractRecord):
     @abstractmethod
     def delete(self, *args, **kwargs) -> Any:
         pass
-
+    
 # class HistoryManager:
 #     def __init__(self):
 #         self.history = []
@@ -107,7 +105,7 @@ class ArrayBelief(AbstractBelief):
         if probabilities is None:
             probabilities = np.ones(len(support)) / len(support)
         self._prior = probabilities
-        self._probabilities = probabilities
+        self._features = probabilities
 
     @property
     def support(self) -> np.ndarray:
@@ -118,12 +116,12 @@ class ArrayBelief(AbstractBelief):
         self._support = support
 
     @property
-    def probabilities(self) -> np.ndarray:
-        return self._probabilities
-
-    @probabilities.setter
-    def probabilities(self, probabilities: np.ndarray):
-        self._probabilities = probabilities
+    def features(self) -> np.ndarray:
+        return self._features
+    
+    @features.setter
+    def features(self, features: np.ndarray):
+        self._features = features
         self.normalize()
 
     @property
@@ -134,15 +132,15 @@ class ArrayBelief(AbstractBelief):
     def prior(self, prior: np.ndarray) -> Any:
         self._prior = prior
 
-    def normalize(self, inplace: bool = True, probabilities: np.ndarray = None):
+    def normalize(self, inplace: bool = True):
         if inplace:
-            self._probabilities /= self._probabilities.sum()
-            return self._probabilities
+            self._features /= self._features.sum()
+            return self._features
         else:
-            return self._probabilities / self._probabilities.sum()
+            return self._features / self._features.sum()
 
     def query(self, i: int, **kwargs):
-        return self.probabilities[i]
+        return self.features[i]
 
     @abstractmethod
     def update(self, *args, **kwargs) -> Any:
@@ -156,7 +154,7 @@ class GammaBoxBelief(ArrayBelief):
 
     def __init__(self, shape: int = 1, schedules: np.ndarray = None, prior: ArrayBelief = None):
         if prior:
-            super().__init__(prior.support, prior.probabilities)
+            super().__init__(prior.support, prior.features)
         else:
             super().__init__(schedules)
         self.shape = shape
@@ -175,20 +173,64 @@ class GammaBoxBelief(ArrayBelief):
         return p_t
 
     def update(self, obs: tuple[bool, float], **kwargs):
-        self.probabilities = self.likelihood(obs, self.support) * self.probabilities # this automatically normalizes due to setter property!!
+        self.features = self.likelihood(obs, self.support) * self.features # this automatically normalizes due to setter property!!
 
+
+class IndependentBoxesBelief(AbstractBelief):
+    def __init__(self, n_boxes: int, belief_cls: Type[AbstractBelief], *args, **kwargs):
+        self.n_boxes = n_boxes
+        self.belief_cls = belief_cls
+        self.beliefs = [belief_cls(*args, **kwargs) for _ in range(n_boxes)]
+    
+    def update(self, box: int, *args, **kwargs):
+        self.beliefs[box].update(*args, **kwargs)
+    
+    def query(self, i: int, *args, **kwargs):
+        return self.beliefs[i].query(*args, **kwargs)
+    
+    def normalize(self, *args, **kwargs):
+        for belief in self.beliefs:
+            belief.normalize(*args, **kwargs)
+    
+    @property
+    def prior(self):
+        return [self.beliefs[i].prior for i in range(self.n_boxes)]
+    
+    @prior.setter
+    def prior(self, prior: AbstractBelief):
+        for belief in self.beliefs:
+            belief.prior = prior
+    
+    @property
+    def support(self):
+        return [self.beliefs[i].support for i in range(self.n_boxes)]
+
+    @support.setter
+    def support(self, support: ArrayLike):
+        for belief in self.beliefs:
+            belief.support = support
+    
+    @property
+    def features(self):
+        return [self.beliefs[i].features for i in range(self.n_boxes)]
+    
+
+    @features.setter
+    def features(self, features: ArrayLike):
+        for i, belief in enumerate(self.beliefs):
+            belief.features = features[i]
 
 class RealID(AbstractID):
-    def __init__(self, values: tuple):
+    def __init__(self, values: tuple, fields: tuple[str]):
         self._values = values
-        self._fields = []
+        self._fields = fields
 
     @property
-    def fields(self) -> list[str]:
+    def fields(self) -> tuple[str]:
         return self._fields
 
     @fields.setter
-    def fields(self, fields: list[str]):
+    def fields(self, fields: tuple[str]):
         self._fields = fields
 
     @property
@@ -199,21 +241,24 @@ class RealID(AbstractID):
     def values(self, values: tuple):
         self._values = values
 
+    def __eq__(self, other: AbstractID) -> bool:
+        return self.values == other.values and all(x == y for x, y in zip(self.fields, other.fields))
+
+    def __hash__(self) -> int:
+        return hash((self.values, self.fields))
 
 class MockID(RealID):
     def __init__(self, values: int):
-        super().__init__((values,))
-        self._fields = ['id']
+        super().__init__((values,), ('id',))
 
 
 class EventID(RealID):
 
     def __init__(self, values: tuple, minimal: bool = False):
-        super().__init__(values)
         if minimal:
-            self._fields = INDEX[:MIN_INDEX]
+            super().__init__(values, INDEX[:MIN_INDEX])
         else:
-            self._fields = INDEX
+            super().__init__(values, INDEX)
 
 
 class Record(AbstractRecord):
@@ -238,6 +283,7 @@ class Record(AbstractRecord):
     def content(self, record: Any):
         self._record = record
 
+
 class RecordKeeper(AbstractRecordKeeper):
 
     def __init__(self, init_id: AbstractID = None, init_record: Any = None):
@@ -246,8 +292,9 @@ class RecordKeeper(AbstractRecordKeeper):
             record = Record(init_id, init_record)
             self._records[init_id] = record
 
-
     def id(self, i: int) -> AbstractID:
+        if i < 0:
+            i = len(self) + i
         return list(islice(self.records.values(), i, i + 1))[0].id
 
 
@@ -255,11 +302,9 @@ class RecordKeeper(AbstractRecordKeeper):
         id = self.id(i) if id is None else id
         return self._records[id]
 
-
     @property
     def records(self) -> dict[AbstractID, Record]:
         return self._records
-
 
     @records.setter
     def records(self, records: dict[AbstractID, Record]):
@@ -279,6 +324,10 @@ class RecordKeeper(AbstractRecordKeeper):
     def delete(self, id: AbstractID) -> Any:
         return self.records.pop(id, None).content
 
+    def __len__(self):
+        return len(self.records)
+
+
 
 class BeliefModule(RecordKeeper, AbstractBelief):
 
@@ -289,11 +338,9 @@ class BeliefModule(RecordKeeper, AbstractBelief):
     def prior(self) -> AbstractBelief:
         return self.content(i = 0).content
 
-
     @prior.setter
     def prior(self, prior: AbstractBelief):
         self.update_record(self.content(i = 0).id, prior)
-
 
     @property
     def support(self):
@@ -305,9 +352,26 @@ class BeliefModule(RecordKeeper, AbstractBelief):
         for _, record in self.records.items():
             record.content.support = support
 
-    def update(self, *args, **kwargs):
-        # todo: implement this
-        pass
+    @property
+    def features(self):
+        return [self.records[id].content.features for id in self.records.keys()]
+
+    @features.setter
+    def features(self, features: dict[AbstractID, ArrayLike]):
+        for id, record in self.records.items():
+            record.content.features = features[id]
+
+    def update(self, new_id: AbstractID, *args, **kwargs):
+
+        # Step 1: Create a deep copy of the last record
+        last_record = self.content(i = -1)
+        new_record = deepcopy(last_record)
+
+        # Step 2: Invoke the update method on the contents of this copy
+        new_record.content.update(*args, **kwargs)
+
+        # Step 3: Use the user-supplied AbstractID to augment the internal RecordKeeper structure
+        self.add(new_id, new_record.content)
 
     def normalize(self, *args, **kwargs):
         # Normalize all beliefs

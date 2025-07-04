@@ -90,7 +90,7 @@ def open_pickle_file(path: str) -> Any:
     # Return all contents
     return ds
 
-def make_df(path: str) -> pd.DataFrame:
+def make_df(path: str, box_labels: list[str] = BOX_LABELS, box_positions: list[str] = BOX_POSITIONS) -> pd.DataFrame:
     """
     Given experiment matfiles and metadata, construct a DataFrame.
 
@@ -108,8 +108,10 @@ def make_df(path: str) -> pd.DataFrame:
         "session": [],
         "_session": [], # the original session number in sequential order inside the matlab struct
         "week day": [],
+        "n boxes": [],
         "block": [],
         "schedule": [],
+        "box rank": [],
         "shape": [],
         "stimulus type": [],
         "kappa": [],
@@ -121,8 +123,8 @@ def make_df(path: str) -> pd.DataFrame:
         "reward intervals": [],
     }
     day_to_week = {0: "M", 1: "T", 2: "W", 3: "R", 4: "F", 5: "S", 6: "U"}
-    box_labels = dict(zip(range(len(BOX_LABELS)), BOX_LABELS))
-    box_pos_labels = dict(zip(range(len(BOX_POSITIONS)), BOX_POSITIONS))
+    box_labels = dict(zip(range(len(box_labels)), box_labels))
+    box_pos_labels = dict(zip(range(len(box_positions)), box_positions))
     for subject in subjects:
 
         # Load MATLAB file
@@ -180,6 +182,7 @@ def make_df(path: str) -> pd.DataFrame:
                             float(x)
                             for x in block_meta["scheduleMean"].split(",")
                         ]
+                        box_ranks = np.argsort(np.argsort(schedules))
 
                         kappa = block_meta["stimulusNoise"]
                         shape = block_meta["GammaShape"]
@@ -221,8 +224,14 @@ def make_df(path: str) -> pd.DataFrame:
                             staging_dict["block"].extend(
                                 [block_idx + 1 for _ in range(n_events)]
                             )
+                            staging_dict["n boxes"].extend(
+                                [len(schedules) for _ in range(n_events)]
+                            )
                             staging_dict["schedule"].extend(
                                 [schedules[i] for _ in range(n_events)]
+                            )
+                            staging_dict["box rank"].extend(
+                                [box_ranks[i] for _ in range(n_events)]
                             )
                             staging_dict["kappa"].extend(
                                 [kappa for _ in range(n_events)]
@@ -289,12 +298,12 @@ def make_df(path: str) -> pd.DataFrame:
     )
 
     # Add some more columns based on block-dependent statistics
-    df["box rank"] = (
-        df.groupby(["subject", "session", "block"])["schedule"].rank(
-            method="dense"
-        )
-        - 1
-    ).astype(int) # ranks boxes fast --> medium --> slow
+    # df["box rank"] = (
+    #     df.groupby(["subject", "session", "block"])["schedule"].rank(
+    #         method="dense"
+    #     )
+    #     - 1
+    # ).astype(int) # ranks boxes fast --> medium --> slow
     df['box'] = df['box rank'].map(box_labels)
     df['box position label'] = df['box position'].map(box_pos_labels)
     df['prev box'] = get_blocks(df)['box'].shift(1)
@@ -330,7 +339,7 @@ def make_df(path: str) -> pd.DataFrame:
             df.loc[df_filter.index, 'stimulus reliability'] = label
 
     # Set index, refer to INDEX definition in utils
-    df.set_index(INDEX, inplace=True)
+    df.set_index(list(INDEX), inplace=True)
     df.sort_index(inplace=True)
     return df
 
@@ -430,13 +439,13 @@ def process_blocks(
     *args,
     use_tqdm: bool = False,
     **kwargs,
-) -> (dict, set):
+) -> tuple[dict, set]:
     """
     Apply a function to each block in DataFrame and aggregate results in a dictionary, where each key is a block index from the DataFrame.
 
     Args:
         df: DataFrame containing hierarchical data.
-        compute_function: Function to apply to each block.
+        compute_function: Function to apply to each block. Takes in df, index, *args, **kwargs.
         use_tqdm: Whether to display a progress bar. Defaults to False.
         *args: Additional arguments for `compute_function`.
         **kwargs: Additional keyword arguments for `compute_function`.

@@ -25,5 +25,6 @@ plt.style.use(current_dir.parent / os.getenv('PLOTCONFIG_PATH'))
 # Constants
 PALETTE = dict(zip(BOX_LABELS, BOX_COLORS))
 PALETTE_DARK = dict(zip(BOX_LABELS, BOX_COLORS_DARK))
+HEATMAP_PALETTE = dict(zip(BOX_LABELS, ['Blues_r', 'Oranges_r', 'Reds_r']))
 
 from ._base import fig_init, titler, unitler, legend_handler, bp, subject_plotter, enhanced_violinplot, plot_variable_subplots, format_yticks, per_block, across_blocks

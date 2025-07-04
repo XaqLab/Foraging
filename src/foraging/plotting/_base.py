@@ -146,6 +146,7 @@ def bp(func: Callable):
         Returns:
             ax, or optional return arguments from wrapped function usually in the form of ax + extra
         """
+        kwargs = deepcopy(kwargs)
 
         # Filter df
         if conds is None:

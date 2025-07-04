@@ -1,5 +1,5 @@
 import logging
-from typing import Any
+from typing import Any, Type
 
 import numpy as np
 import pandas as pd
@@ -8,7 +8,7 @@ from scipy.stats import uniform
 from sklearn.linear_model import LogisticRegression
 from sklearn.utils.class_weight import compute_sample_weight
 
-from foraging.utils.models import IndependentBoxesPosterior, GammaObservation, MyNormalizer, BetaBoxes, Posterior
+from foraging.utils.models import AbstractBelief, BeliefModule, EventID, GammaBoxBelief, IndependentBoxesBelief, BetaBoxes, Posterior   
 from foraging.utils.stats import mcfadden_pseudo_rsquared, permutation_test_logistic
 from foraging.utils import discrete_time
 from foraging.utils.data import process_block_safely
@@ -16,73 +16,56 @@ from foraging.utils.data import process_block_safely
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
+#TODO: write class that can compute posteriors over dataframe and 
 # TODO: return df index for each event so that we have alignment information
+# class ComputeScheduleBeliefs:
+#     def __init__(self, posterior_class: Type[AbstractBelief], *args, **kwargs):
+#         self.posterior_class = posterior_class
+#         self.args = args
+#         self.kwargs = kwargs
+#         self.beliefs_by_blocks = {}
+
+#     def compute(self):
+
+# @process_block_safely
 def compute_posteriors(
         df: pd.DataFrame,
         index: tuple,
-        schedule_candidates: ArrayLike,
-        record: bool = True,
-        shape: int = None
-) -> IndependentBoxesPosterior:
+        posterior_class: Type[AbstractBelief],
+        *args,
+        **kwargs
+) -> BeliefModule:
     """
     Computes the posterior belief over reward schedules for each box, updating after each push.
 
     Args:
-        df (pd.DataFrame): Dataframe containing session data.
-        index (tuple): Multi-index selector for retrieving block-specific data.
-        schedule_candidates (ArrayLike): Array of possible reward rates forming the support of the beliefs.
-        record (bool, optional): Whether to store posterior history. Defaults to True.
+        df: DataFrame containing session data.
+        index: Multi-index selector for retrieving block-specific data.
+        posterior_class: Class of the posterior belief.
+        schedule_candidates: Array of possible reward rates forming the support of the beliefs.
+        shape: Shape parameter for the gamma distribution.
 
     Returns:
-        models.IndependentBoxesPosterior: The computed posterior belief over reward schedules.
+        BeliefModule: the computed beliefs about reward schedules.
     """
 
     # Extract data corresponding to the given index
     block_data = df.loc[index]
 
-    # Get unique schedules (sorted in descending order)
-    n_boxes = block_data['schedule'].nunique()
+    # Iterate over each box in order from fastest to slowest
+    n_obs = len(block_data)
+    push_times = block_data['push times'].values
+    push_intervals = block_data['wait times'].values
+    reward_outcomes = block_data['reward outcomes'].values
+    box_ranks = block_data['box rank'].values
+    n_boxes = block_data['n boxes'].values[0]
 
-    # Assume agent knows the exact number of states, if shape is not provided
-    if shape is None:
-        shape = block_data.index.unique('shape')[0]
-
-    # Construct prior using a uniform distribution over schedule candidates
-    prior = uniform.pdf(
-        schedule_candidates,
-        loc=schedule_candidates.min(),
-        scale=schedule_candidates.max() - schedule_candidates.min()
-    )
-
-    # Normalize the prior
-    normalizer = MyNormalizer()
-    prior = normalizer.normalize(prior)
-
-    # Initialize observation model
-    obs_model = GammaObservation(shape)
-
-    # Construct posterior belief model
-    posterior = IndependentBoxesPosterior(
-        n_boxes, obs_model, prior, schedule_candidates, normalizer, record=record
-    )
-
-    # Iterate over each box in order from slowest to fastest
-    for i in range(n_boxes):
-        box_mask = block_data['box rank'] == i
-
-        push_times = block_data.loc[box_mask, 'push times'].values
-        push_intervals = block_data.loc[box_mask, 'wait times'].values
-        reward_outcomes = block_data.loc[box_mask, 'reward outcomes'].values
-
-        # Number of non-NaN observations
-        n_obs = np.count_nonzero(~np.isnan(push_times))
-
-        # Update posterior using each valid observation
-        for t in range(n_obs):
-            if not np.isnan(push_intervals[t]):
-                posterior.update((reward_outcomes[t], push_intervals[t]), i)
-
+    # Construct posterior
+    posterior = BeliefModule(EventID(index + (0,)), posterior_class(n_boxes, *args, **kwargs))
+    for i in range(n_obs):
+        posterior.update(EventID(index + (push_times[i],)), box_ranks[i], (reward_outcomes[i], push_intervals[i]))            
     return posterior
+
 
 def compute_beta_posteriors(
         df: pd.DataFrame,
