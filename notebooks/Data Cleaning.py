@@ -31,8 +31,6 @@ import seaborn as sns
 from matplotlib import pyplot as plt
 
 from foraging.plotting import bp
-
-# %%capture --no-display
 from foraging.plotting.behavior import (
     plot_block_onsets_vs_push_percentiles,
     plot_experiment_overview,
@@ -45,8 +43,6 @@ from foraging.plotting.behavior import (
     plot_vertical_position_in_block,
     plot_vertical_position_vs_push_percentiles,
 )
-
-# %%capture --no-display
 from foraging.utils.data import display_df, exclusion_criteria, make_df
 
 pd.options.mode.copy_on_write = True
@@ -78,7 +74,6 @@ SEED = 42
 # Here is a DataFrame showing a subset of the data. Refer to the docstring of `make_df` for more information about the contents of the DataFrame.
 
 # %%
-
 df = make_df(EXPERIMENT_DIR)
 display_df(df, ["box", "push times", "reward outcomes"])
 
@@ -108,7 +103,6 @@ plt.title("# pushes per block")
 # Here is a bird's eye view of one subject's behavioral data over the course of the entire experiment. Each row is a session of consecutive blocks. Each block's pushes are displayed as a raster plot over the duration of that block, and the pushes at each box position are stacked on top of each other (top to bottom is 3, 2, 1). Finally, pushes are colored by box schedule, so we can see how the schedules are assigned to each box over consecutive blocks.
 
 # %%
-
 conds = dict(subject="viktor")
 plot_experiment_overview(
     df,
@@ -167,12 +161,9 @@ bp(sns.violinplot)(
 # We see a mix of bimodality and unimodality among the subjects. Next, we will sort each push interval by the percentile at which it occurs in each subject's data.
 
 # %%
-
 df["push percentiles"] = df.groupby("subject", as_index=False)[
     "consecutive push intervals"
 ].rank(pct=True)
-subjects = df.index.unique("subject")
-percentiles = dict(zip(subjects, [0.925, 0.999999, 0.95, 0.999]))
 plot_push_percentiles(df)
 
 # %% [markdown]
@@ -185,7 +176,6 @@ plot_push_percentiles(df)
 #
 
 # %%
-
 plot_long_push_blocks(df, 3)
 
 # %% [markdown]
@@ -199,7 +189,6 @@ plot_long_push_blocks(df, 3)
 #
 
 # %%
-# Plot distribution of push intervals on log-scale
 fig, ax = plt.subplots()
 df_init = df.xs(1, level="push #")
 bp(sns.violinplot)(
@@ -224,14 +213,12 @@ bp(sns.violinplot)(
 # Now we will compare the relationship between reward and push intervals. For each subject, we sample 5000 pushes and count how many rewards were obtained in a 30 second window preceding each push.
 
 # %%
-
 plot_recent_rewards_vs_push_percentiles(df)
 
 # %% [markdown]
 # It appears that for Viktor and the humans, there is a weak increase in the number of rewards preceding each push as the push interval increases. However, for Dylan and Marco, there is a sharp decline in the number of rewards for the top 20%-30% of push intervals. Could this be related to an increased failure rate or lack of pushes? This is what we look at next.
 
 # %%
-
 plot_recent_rewards_vs_push_percentiles(df, invert_reward=True)
 
 # %% [markdown]
@@ -243,7 +230,6 @@ plot_recent_rewards_vs_push_percentiles(df, invert_reward=True)
 # Here, we show the duration of the past 5 push intervals before a long push or medium push to see whether there is a temporal correlation present.
 
 # %%
-
 plot_previous_push_interval_vs_push_percentiles(df)
 
 
@@ -251,14 +237,12 @@ plot_previous_push_interval_vs_push_percentiles(df)
 # There is a remarkably strongly linear relationship between the duration of the current and previous push interval across all subjects, a relationship that weakens with longer push intervals. This supports that push intervals of similar duration occur close together in time.
 
 # %%
-
 plot_session_onsets_vs_push_percentiles(df)
 
 # %% [markdown]
 # For Dylan and Marco, there is an increasing trend in the session onset times. For Viktor, this trend appears in the top 20% of push intervals. We can also investigate whether long push intervals tend to emerge later in each block as well.
 
 # %%
-
 plot_block_onsets_vs_push_percentiles(df)
 
 # %% [markdown]
@@ -269,7 +253,6 @@ plot_block_onsets_vs_push_percentiles(df)
 # Below is an example block containing a few long push intervals, and the vertical position occupied during push intervals is superimposed on top of the block.
 
 # %%
-
 conds = {"subject": "marco", "session": 20211213, "block": 7}
 plot_vertical_position_in_block(df, conds, EXPERIMENT_DIR)
 
@@ -278,7 +261,7 @@ plot_vertical_position_in_block(df, conds, EXPERIMENT_DIR)
 # We will look at the ground positions during long push intervals later. For now, we will aggregate vertical position over multiple blocks, taking the average vertical position occupied during push intervals.
 
 # %%
-
+# %%capture --no-display
 plot_vertical_position_vs_push_percentiles(df, EXPERIMENT_DIR)
 
 # %% [markdown]
@@ -291,7 +274,6 @@ plot_vertical_position_vs_push_percentiles(df, EXPERIMENT_DIR)
 #
 
 # %%
-
 plot_hmm_probabilities_in_block(
     df, os.path.join(EXPERIMENT_DIR, "HMM.solution_[K2].pkl"), block_idx=3
 )
@@ -315,7 +297,8 @@ plot_hmm_probabilities_in_block(
 #
 # This can be greatly expanded upon and refined through automated methods that we are currently developing. For now, this is a baseline criteria that serves as a starting point for more advanced analysis.
 
-
+# %%
+# %%capture --no-display
 df_filtered = exclusion_criteria(df, EXPERIMENT_DIR)
 
 # %%

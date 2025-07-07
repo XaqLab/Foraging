@@ -35,14 +35,6 @@ from matplotlib import rcParams
 
 from foraging.config.constants import BOX_COLORS, BOX_LABELS, KAPPA_CATEGORIES, SEED
 from foraging.plotting import PALETTE, PALETTE_DARK, bp, enhanced_violinplot
-
-# %%capture --no-display
-# %%capture --no-display
-# %%capture --no-display
-# %%capture --no-display
-# %%capture --no-display
-# %%capture --no-display
-# %%capture --no-display
 from foraging.plotting.behavior import (
     plot_accuracy_across_blocks,
     plot_experiment_overview,
@@ -67,6 +59,7 @@ mlogger.setLevel(logging.WARNING)
 # Constants
 RNG = np.random.default_rng(SEED)
 DATA_DIR = "../data"
+EXPERIMENT_DIR = os.path.join(DATA_DIR, "experiments")
 FIGURES_DIR = "../figures"
 
 # %% [markdown]
@@ -77,9 +70,8 @@ FIGURES_DIR = "../figures"
 # Here is a DataFrame showing a subset of the data, after applying the exclusion criteria detailed in `Data Cleaning`. Refer to the docstring of `make_df` and `exclusion_criteria` for more information about the contents of the DataFrame.
 
 # %%
-
 df = make_df(os.path.join(DATA_DIR, "experiments"))
-df = exclusion_criteria(df)
+df = exclusion_criteria(df, EXPERIMENT_DIR)
 display_df(df, ["box", "push times", "reward outcomes"])
 
 # %% [markdown]

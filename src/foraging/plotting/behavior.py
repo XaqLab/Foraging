@@ -27,12 +27,7 @@ from foraging.plotting import (
     titler,
     unitler,
 )
-from foraging.plotting._base import (
-    get_bar_heights,
-    palette_handler,
-    regplot,
-    stacked_barplot,
-)
+from foraging.plotting._base import get_bar_heights, palette_handler, regplot
 from foraging.utils import INDEX, MIN_INDEX, kwargs_handler
 from foraging.utils.data import (
     bin_data,
@@ -271,6 +266,177 @@ def plot_long_push_blocks(
     subject_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
+def plot_pushes(
+    df: pd.DataFrame,
+    conds: dict = None,
+    title: str = "",
+    title_prefix: str = "Pushes for ",
+    palette: dict = PALETTE,
+    box_labels: list = BOX_POSITIONS,
+    legend: bool = True,
+    ax: plt.Axes = None,
+    **kwargs,
+) -> plt.Axes:
+    """
+    Plot the pushes in the block by the box they occur at.
+
+    Args:
+        df: DataFrame.
+        conds: Dictionary to filter df.
+        title: Title of figure. If specified, overrides `title_prefix`.
+        title_prefix: Prefix of title that is used to construct the contents of the title together with conds. See `titler` for more details. Ignored if `title` is specified.
+        palette: Dictionary mapping box schedules to colors. Can also be a list of just colors.
+        box_labels: Labels on y-axis for each box.
+        legend: If True, display legend. Specify keyword arguments in `legend_kwargs`.
+        ax: Axes to plot on. If None, a new figure and axes are created using plt.subplots. Specify keyword arguments in `fig_kwargs`.
+        **kwargs: Additional keyword arguments passed to `plot_block_events`.
+
+    Returns:
+        The axes.
+    """
+
+    ax = plot_block_events(
+        df,
+        conds=conds,
+        title=title,
+        title_prefix=title_prefix,
+        palette=palette,
+        legend=legend,
+        ax=ax,
+        **kwargs,
+    )
+
+    # Custom plotting logic
+    df_block = filter_df(df, conds).reset_index()
+    ax.set_xlim([0, df_block["push times"].max() + 1])
+    box_labels = [box_labels[i] for i in sorted(df_block["box position"].unique())]
+    ax.set_yticks(range(len(box_labels)), box_labels, rotation=90, va="center")
+    ax.set_ylabel("")
+    return ax
+
+
+@legend_handler
+def plot_block_events(
+    df: pd.DataFrame,
+    conds: dict = None,
+    x: str = "push times",
+    y: str = "box position",
+    x_unit: str = "s",
+    y_unit: str = None,
+    title: str = "",
+    title_prefix: str = "Block activity",
+    palette: dict = PALETTE,
+    legend: bool = True,
+    ax: plt.Axes = None,
+    **kwargs,
+) -> plt.Axes:
+    """
+    Plot the push-related variable in the block.
+
+    Args:
+        df: DataFrame.
+        conds: Dictionary to filter df.
+        x: Name of x variable in DataFrame. Defaults to `push times`.
+        y: Name of y variable in DataFrame. Defaults to `box rank`.
+        x_unit: Unit to assign to x. Defaults to `s` for seconds. Ignored if None.
+        y_unit: Unit to assign to y. Defaults to None. Ignored if None.
+        title: Title of figure. If specified, overrides `title_prefix`.
+        title_prefix: Prefix of title that is used to construct the contents of the title together with conds. See `titler` for more details. Ignored if `title` is specified.
+        palette: Dictionary mapping box schedules to colors. Can also be a list of just colors.
+        legend: If True, display legend. Specify keyword arguments in `legend_kwargs`.
+        ax: Axes to plot on. If None, a new figure and axes are created using plt.subplots. Specify keyword arguments in `fig_kwargs`.
+        **kwargs: Additional keyword arguments.
+            - 'fig_kwargs': Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
+            - 'line_kwargs': Dictionary to specify line properties (passed to 'LineCollection').
+            - 'legend_kwargs': Dictionary of keyword arguments for customizing the legend (passed to `ax.legend`).
+
+    Returns:
+        The axes.
+    """
+
+    # Create ax if none provided
+    fig_kwargs = kwargs_handler(kwargs, "fig_kwargs")
+    fig, ax = fig_init(ax, **fig_kwargs)
+
+    # Get block data and metadata
+    df_block = filter_df(df, conds)
+    schedules = sorted(df_block["schedule"].unique())
+    kappa = df_block.index.unique("kappa")
+    stim_type = df_block.index.unique("stimulus type")
+    shape = df_block.index.unique("shape")
+
+    if conds is None:
+        conds = {}
+    else:
+        conds = deepcopy(conds)
+    conds["kappa"] = kappa[0]
+    conds["stim type"] = stim_type[0]
+    conds["shape"] = shape[0]
+    # Create switch segments (x, y) pairs for LineCollection
+    x_vals = df_block[x].values
+    y_vals = df_block[y].values
+    colors = np.array(["black"] * (len(y_vals) - 1))
+    # styles = ['dashed' if x else 'solid' for x in df_block['stay/switch'].values[1:]]
+    segments = [
+        [(x_vals[i], y_vals[i]), (x_vals[i + 1], y_vals[i + 1])]
+        for i in range(len(x_vals) - 1)
+    ]
+
+    # Create the LineCollection
+    line_kwargs = kwargs_handler(
+        kwargs, "line_kwargs", dict(linestyles="--", linewidth=1, zorder=0)
+    )
+    lc = LineCollection(segments, colors=colors, **line_kwargs)
+
+    # Set labels
+    ax.add_collection(lc)
+    ax.autoscale()
+    title = titler(title=title, title_prefix=title_prefix, conds=conds)
+    ax.set_title(title)
+    ax.set_ylabel(unitler(y, y_unit))
+    ax.set_xlabel(unitler(x, x_unit))
+
+    # Add reward outcomes with shaded (rewarded) and empty (not rewarded) markers
+    colors = np.array([palette[i] for i in df_block["box"].values])
+    mask = df_block["reward outcomes"].values
+    ax.scatter(x_vals[mask], y_vals[mask], c=colors[mask], marker="^", s=80, zorder=2)
+    ax.scatter(
+        x_vals[~mask],
+        y_vals[~mask],
+        edgecolors=colors[~mask],
+        marker="v",
+        s=80,
+        zorder=2,
+        facecolors="none",
+    )
+    ax.spines["left"].set_visible(False)
+    ax.spines["bottom"].set_visible(False)
+
+    # Create legend manually with proxy artists
+    if legend:
+        legend_kwargs = kwargs_handler(
+            kwargs, "legend_kwargs", {"loc": "upper left", "bbox_to_anchor": (1.05, 1)}
+        )
+        palette = palette_handler(palette, df_block["box"].unique())
+        legend_elements = [
+            Line2D([0], [0], color=palette[j], linestyle="-", label=schedules[i])
+            for i, j in enumerate(palette.keys())
+        ] + [
+            Line2D([0], [0], color="black", linestyle="", marker="^", label="rewarded"),
+            Line2D(
+                [0],
+                [0],
+                color="black",
+                linestyle="",
+                marker="v",
+                markerfacecolor="none",
+                label="no reward",
+            ),
+        ]
+        ax.legend(handles=legend_elements, **legend_kwargs)
+    return ax
+
+
 @legend_handler
 def plot_recent_rewards_vs_push_percentiles(
     df: pd.DataFrame,
@@ -297,7 +463,7 @@ def plot_recent_rewards_vs_push_percentiles(
     """
 
     reward_label = "# rewards" if not invert_reward else "# failures"
-    df_rate_content = {"subject": [], reward_label: [], "percentiles": []}
+    df_rate_content = {"subject": [], reward_label: [], "push percentiles": []}
     rng = np.random.default_rng(seed)
 
     def _helper(subject: str):
@@ -333,7 +499,7 @@ def plot_recent_rewards_vs_push_percentiles(
                     df_rate_content[reward_label].append(
                         df_window["reward outcomes"].sum()
                     )
-                df_rate_content["percentiles"].append(new_row["push percentiles"])
+                df_rate_content["push percentiles"].append(new_row["push percentiles"])
 
     # For each subject, sample pushes calculate the reward fraction of the past `window` seconds prior to each push
     for subject in df.index.unique("subject"):
@@ -349,14 +515,24 @@ def plot_recent_rewards_vs_push_percentiles(
         f"# of rewards " if not invert_reward else "# of failures "
     ) + f"{window} s before push"
     sns.scatterplot(
-        df_rate, x="percentiles", y=reward_label, hue="subject", ax=axes[0], **kwargs
+        df_rate,
+        x="push percentiles",
+        y=reward_label,
+        hue="subject",
+        ax=axes[0],
+        **kwargs,
     )
     axes[0].set_title(title)
 
-    df_rate["percentiles"] = bin_data(df_rate, "percentiles", 10)
+    df_rate["push percentiles"] = bin_data(df_rate, "push percentiles", 10)
     # stacked_barplot(df=df_rate, x='percentiles', y=reward_label, hue='subject', ax=axes[1], **kwargs)
     sns.lineplot(
-        df_rate, x="percentiles", y=reward_label, hue="subject", ax=axes[1], **kwargs
+        df_rate,
+        x="push percentiles",
+        y=reward_label,
+        hue="subject",
+        ax=axes[1],
+        **kwargs,
     )
     axes[1].set_title(title)
     fig.tight_layout()
@@ -385,7 +561,6 @@ def plot_previous_push_interval_vs_push_percentiles(
         "subject": [],
         "previous push intervals (s)": [],
         "push intervals (s)": [],
-        "percentiles": [],
     }
     rng = np.random.default_rng(seed)
 
@@ -411,7 +586,6 @@ def plot_previous_push_interval_vs_push_percentiles(
             df_rate_content["previous push intervals (s)"].append(
                 new_row["consecutive push intervals"]
             )
-            df_rate_content["percentiles"].append(new_row["push percentiles"])
             df_rate_content["push intervals (s)"].append(
                 row["consecutive push intervals"]
             )
@@ -779,177 +953,6 @@ def plot_hmm_probabilities_in_block(
     legend.remove()
     ax2.legend(existing_handles, existing_labels)
     return ax2
-
-
-@legend_handler
-def plot_block_events(
-    df: pd.DataFrame,
-    conds: dict = None,
-    x: str = "push times",
-    y: str = "box position",
-    x_unit: str = "s",
-    y_unit: str = None,
-    title: str = "",
-    title_prefix: str = "Block activity",
-    palette: dict = PALETTE,
-    legend: bool = True,
-    ax: plt.Axes = None,
-    **kwargs,
-) -> plt.Axes:
-    """
-    Plot the push-related variable in the block.
-
-    Args:
-        df: DataFrame.
-        conds: Dictionary to filter df.
-        x: Name of x variable in DataFrame. Defaults to `push times`.
-        y: Name of y variable in DataFrame. Defaults to `box rank`.
-        x_unit: Unit to assign to x. Defaults to `s` for seconds. Ignored if None.
-        y_unit: Unit to assign to y. Defaults to None. Ignored if None.
-        title: Title of figure. If specified, overrides `title_prefix`.
-        title_prefix: Prefix of title that is used to construct the contents of the title together with conds. See `titler` for more details. Ignored if `title` is specified.
-        palette: Dictionary mapping box schedules to colors. Can also be a list of just colors.
-        legend: If True, display legend. Specify keyword arguments in `legend_kwargs`.
-        ax: Axes to plot on. If None, a new figure and axes are created using plt.subplots. Specify keyword arguments in `fig_kwargs`.
-        **kwargs: Additional keyword arguments.
-            - 'fig_kwargs': Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
-            - 'line_kwargs': Dictionary to specify line properties (passed to 'LineCollection').
-            - 'legend_kwargs': Dictionary of keyword arguments for customizing the legend (passed to `ax.legend`).
-
-    Returns:
-        The axes.
-    """
-
-    # Create ax if none provided
-    fig_kwargs = kwargs_handler(kwargs, "fig_kwargs")
-    fig, ax = fig_init(ax, **fig_kwargs)
-
-    # Get block data and metadata
-    df_block = filter_df(df, conds)
-    schedules = sorted(df_block["schedule"].unique())
-    kappa = df_block.index.unique("kappa")
-    stim_type = df_block.index.unique("stimulus type")
-    shape = df_block.index.unique("shape")
-
-    if conds is None:
-        conds = {}
-    else:
-        conds = deepcopy(conds)
-    conds["kappa"] = kappa[0]
-    conds["stim type"] = stim_type[0]
-    conds["shape"] = shape[0]
-    # Create switch segments (x, y) pairs for LineCollection
-    x_vals = df_block[x].values
-    y_vals = df_block[y].values
-    colors = np.array(["black"] * (len(y_vals) - 1))
-    # styles = ['dashed' if x else 'solid' for x in df_block['stay/switch'].values[1:]]
-    segments = [
-        [(x_vals[i], y_vals[i]), (x_vals[i + 1], y_vals[i + 1])]
-        for i in range(len(x_vals) - 1)
-    ]
-
-    # Create the LineCollection
-    line_kwargs = kwargs_handler(
-        kwargs, "line_kwargs", dict(linestyles="--", linewidth=1, zorder=0)
-    )
-    lc = LineCollection(segments, colors=colors, **line_kwargs)
-
-    # Set labels
-    ax.add_collection(lc)
-    ax.autoscale()
-    title = titler(title=title, title_prefix=title_prefix, conds=conds)
-    ax.set_title(title)
-    ax.set_ylabel(unitler(y, y_unit))
-    ax.set_xlabel(unitler(x, x_unit))
-
-    # Add reward outcomes with shaded (rewarded) and empty (not rewarded) markers
-    colors = np.array([palette[i] for i in df_block["box"].values])
-    mask = df_block["reward outcomes"].values
-    ax.scatter(x_vals[mask], y_vals[mask], c=colors[mask], marker="^", s=80, zorder=2)
-    ax.scatter(
-        x_vals[~mask],
-        y_vals[~mask],
-        edgecolors=colors[~mask],
-        marker="v",
-        s=80,
-        zorder=2,
-        facecolors="none",
-    )
-    ax.spines["left"].set_visible(False)
-    ax.spines["bottom"].set_visible(False)
-
-    # Create legend manually with proxy artists
-    if legend:
-        legend_kwargs = kwargs_handler(
-            kwargs, "legend_kwargs", {"loc": "upper left", "bbox_to_anchor": (1.05, 1)}
-        )
-        palette = palette_handler(palette, df_block["box"].unique())
-        legend_elements = [
-            Line2D([0], [0], color=palette[j], linestyle="-", label=schedules[i])
-            for i, j in enumerate(palette.keys())
-        ] + [
-            Line2D([0], [0], color="black", linestyle="", marker="^", label="rewarded"),
-            Line2D(
-                [0],
-                [0],
-                color="black",
-                linestyle="",
-                marker="v",
-                markerfacecolor="none",
-                label="no reward",
-            ),
-        ]
-        ax.legend(handles=legend_elements, **legend_kwargs)
-    return ax
-
-
-def plot_pushes(
-    df: pd.DataFrame,
-    conds: dict = None,
-    title: str = "",
-    title_prefix: str = "Pushes for ",
-    palette: dict = PALETTE,
-    box_labels: list = BOX_POSITIONS,
-    legend: bool = True,
-    ax: plt.Axes = None,
-    **kwargs,
-) -> plt.Axes:
-    """
-    Plot the pushes in the block by the box they occur at.
-
-    Args:
-        df: DataFrame.
-        conds: Dictionary to filter df.
-        title: Title of figure. If specified, overrides `title_prefix`.
-        title_prefix: Prefix of title that is used to construct the contents of the title together with conds. See `titler` for more details. Ignored if `title` is specified.
-        palette: Dictionary mapping box schedules to colors. Can also be a list of just colors.
-        box_labels: Labels on y-axis for each box.
-        legend: If True, display legend. Specify keyword arguments in `legend_kwargs`.
-        ax: Axes to plot on. If None, a new figure and axes are created using plt.subplots. Specify keyword arguments in `fig_kwargs`.
-        **kwargs: Additional keyword arguments passed to `plot_block_events`.
-
-    Returns:
-        The axes.
-    """
-
-    ax = plot_block_events(
-        df,
-        conds=conds,
-        title=title,
-        title_prefix=title_prefix,
-        palette=palette,
-        legend=legend,
-        ax=ax,
-        **kwargs,
-    )
-
-    # Custom plotting logic
-    df_block = filter_df(df, conds).reset_index()
-    ax.set_xlim([0, df_block["push times"].max() + 1])
-    box_labels = [box_labels[i] for i in sorted(df_block["box position"].unique())]
-    ax.set_yticks(range(len(box_labels)), box_labels, rotation=90, va="center")
-    ax.set_ylabel("")
-    return ax
 
 
 def plot_experiment_parameters(
