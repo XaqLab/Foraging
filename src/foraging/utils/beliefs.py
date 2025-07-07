@@ -8,15 +8,23 @@ from scipy.stats import uniform
 from sklearn.linear_model import LogisticRegression
 from sklearn.utils.class_weight import compute_sample_weight
 
-from foraging.utils.models import AbstractBelief, BeliefModule, EventID, GammaBoxBelief, IndependentBoxesBelief, BetaBoxes, Posterior   
-from foraging.utils.stats import mcfadden_pseudo_rsquared, permutation_test_logistic
 from foraging.utils import discrete_time
 from foraging.utils.data import process_block_safely
+from foraging.utils.models import (
+    AbstractBelief,
+    BeliefModule,
+    BetaBoxes,
+    EventID,
+    GammaBoxBelief,
+    IndependentBoxesBelief,
+    Posterior,
+)
+from foraging.utils.stats import mcfadden_pseudo_rsquared, permutation_test_logistic
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-#TODO: write class that can compute posteriors over dataframe and 
+# TODO: write class that can compute posteriors over dataframe and
 # TODO: return df index for each event so that we have alignment information
 # class ComputeScheduleBeliefs:
 #     def __init__(self, posterior_class: Type[AbstractBelief], *args, **kwargs):
@@ -27,13 +35,14 @@ logger.setLevel(logging.DEBUG)
 
 #     def compute(self):
 
+
 # @process_block_safely
 def compute_posteriors(
-        df: pd.DataFrame,
-        index: tuple,
-        posterior_class: Type[AbstractBelief],
-        *args,
-        **kwargs
+    df: pd.DataFrame,
+    index: tuple,
+    posterior_class: Type[AbstractBelief],
+    *args,
+    **kwargs,
 ) -> BeliefModule:
     """
     Computes the posterior belief over reward schedules for each box, updating after each push.
@@ -54,42 +63,46 @@ def compute_posteriors(
 
     # Iterate over each box in order from fastest to slowest
     n_obs = len(block_data)
-    push_times = block_data['push times'].values
-    push_intervals = block_data['wait times'].values
-    reward_outcomes = block_data['reward outcomes'].values
-    box_ranks = block_data['box rank'].values
-    n_boxes = block_data['n boxes'].values[0]
+    push_times = block_data["push times"].values
+    push_intervals = block_data["wait times"].values
+    reward_outcomes = block_data["reward outcomes"].values
+    box_ranks = block_data["box rank"].values
+    n_boxes = block_data["n boxes"].values[0]
 
     # Construct posterior
-    posterior = BeliefModule(EventID(index + (0,)), posterior_class(n_boxes, *args, **kwargs))
+    posterior = BeliefModule(
+        EventID(index + (0,)), posterior_class(n_boxes, *args, **kwargs)
+    )
     for i in range(n_obs):
-        posterior.update(EventID(index + (push_times[i],)), box_ranks[i], (reward_outcomes[i], push_intervals[i]))            
+        posterior.update(
+            EventID(index + (push_times[i],)),
+            box_ranks[i],
+            (reward_outcomes[i], push_intervals[i]),
+        )
     return posterior
 
 
 def compute_beta_posteriors(
-        df: pd.DataFrame,
-        index: tuple,
-        record: bool = True,
+    df: pd.DataFrame,
+    index: tuple,
+    record: bool = True,
 ) -> BetaBoxes:
     # Extract data corresponding to the given index
     block_data = df.loc[index]
 
     # Get unique schedules (sorted in descending order)
-    n_boxes = block_data['schedule'].nunique()
+    n_boxes = block_data["schedule"].nunique()
 
     # Construct posterior belief model
-    posterior = BetaBoxes(
-        n_boxes, 1, 1, record=record
-    )
+    posterior = BetaBoxes(n_boxes, 1, 1, record=record)
 
     # Iterate over each box in order from slowest to fastest
     for i in range(n_boxes):
-        box_mask = block_data['box rank'] == i
+        box_mask = block_data["box rank"] == i
 
-        push_times = block_data.loc[box_mask, 'push times'].values
-        push_intervals = block_data.loc[box_mask, 'same-box push intervals'].values
-        reward_outcomes = block_data.loc[box_mask, 'reward outcomes'].values
+        push_times = block_data.loc[box_mask, "push times"].values
+        push_intervals = block_data.loc[box_mask, "same-box push intervals"].values
+        reward_outcomes = block_data.loc[box_mask, "reward outcomes"].values
 
         # Number of non-NaN observations
         n_obs = np.count_nonzero(~np.isnan(push_times))
@@ -104,11 +117,11 @@ def compute_beta_posteriors(
 
 @process_block_safely
 def compute_latent_beliefs_over_time(
-        df: pd.DataFrame,
-        index: tuple,
-        posterior: Posterior,
-        dt: float = 0.5,
-        padding_time: float = 0.5
+    df: pd.DataFrame,
+    index: tuple,
+    posterior: Posterior,
+    dt: float = 0.5,
+    padding_time: float = 0.5,
 ) -> np.ndarray[float]:
     """
     Compute the latent belief over time regarding the reward schedule for each box.
@@ -125,27 +138,28 @@ def compute_latent_beliefs_over_time(
     """
 
     block_data = df.loc[index]
-    end_t = block_data['push times'].max() + padding_time
+    end_t = block_data["push times"].max() + padding_time
     n_boxes = posterior.n_boxes
     n_timesteps = int(end_t / dt)
 
     schedule_belief_time = np.zeros((n_boxes, n_timesteps, len(posterior.support())))
 
     for i in range(n_boxes):
-        box_idx = block_data['box rank'] == i
-        push_times = block_data.loc[box_idx, 'push times'].to_numpy()
+        box_idx = block_data["box rank"] == i
+        push_times = block_data.loc[box_idx, "push times"].to_numpy()
         push_times = push_times[~np.isnan(push_times)]
 
         # Convert posterior to discrete-time representation
-        schedule_belief_time[i] = discrete_time(posterior.boxes[i].history, push_times, dt, end_t)
+        schedule_belief_time[i] = discrete_time(
+            posterior.boxes[i].history, push_times, dt, end_t
+        )
 
     return schedule_belief_time
 
+
 @process_block_safely
 def compute_reward_beliefs(
-        df: pd.DataFrame,
-        index: tuple,
-        posterior: Posterior
+    df: pd.DataFrame, index: tuple, posterior: Posterior
 ) -> np.ndarray:
     """
     Compute the belief of reward availability for each box as an event-based representation.
@@ -164,12 +178,14 @@ def compute_reward_beliefs(
     block_data = df.loc[index]
 
     # Get unique schedules (sorted in descending order)
-    n_boxes = block_data['schedule'].nunique()
+    n_boxes = block_data["schedule"].nunique()
 
     # Compute availability marginal for each push
-    n_obs = block_data['push times'].size - np.count_nonzero(np.isnan(block_data['push times']))
+    n_obs = block_data["push times"].size - np.count_nonzero(
+        np.isnan(block_data["push times"])
+    )
     belief_avail_event = np.zeros((n_obs, n_boxes, 2))
-    push_times_and_box = block_data[['push times', 'box rank']].values[:n_obs]
+    push_times_and_box = block_data[["push times", "box rank"]].values[:n_obs]
 
     old_idx = np.zeros(n_boxes, dtype=int)  # Track last observed index per box
     old_t = np.zeros(n_boxes)  # Track last push time per box
@@ -178,12 +194,14 @@ def compute_reward_beliefs(
         if t == old_t[int(box)]:
             continue  # Skip redundant updates if push time is unchanged for the same box
 
-        belief_avail_event[i] = np.array([
-            posterior.boxes[j].marginalize(
-                obs_supp_args=[t - old_t[j]], latent_kwargs={'record': old_idx[j]}
-            )
-            for j in range(n_boxes)
-        ])
+        belief_avail_event[i] = np.array(
+            [
+                posterior.boxes[j].marginalize(
+                    obs_supp_args=[t - old_t[j]], latent_kwargs={"record": old_idx[j]}
+                )
+                for j in range(n_boxes)
+            ]
+        )
 
         old_idx[int(box)] += 1  # Update observation index for the box
         old_t[int(box)] = t  # Update last push time for the box
@@ -192,10 +210,7 @@ def compute_reward_beliefs(
 
 
 @process_block_safely
-def get_concurrent_reward_intervals(
-        df: pd.DataFrame,
-        index: tuple
-) -> np.ndarray:
+def get_concurrent_reward_intervals(df: pd.DataFrame, index: tuple) -> np.ndarray:
     """
     Compute the belief of reward availability for each box as an event-based representation.
     This extracts the belief about reward availability immediately before each push.
@@ -210,13 +225,15 @@ def get_concurrent_reward_intervals(
                     where beliefs are evaluated before each push.
     """
 
-    n_boxes = df['box rank'].nunique()
+    n_boxes = df["box rank"].nunique()
     block_data = df.loc[index]
 
     # Compute availability marginal for each push
-    n_obs = block_data['push times'].size - np.count_nonzero(np.isnan(block_data['push times']))
+    n_obs = block_data["push times"].size - np.count_nonzero(
+        np.isnan(block_data["push times"])
+    )
     belief_avail_event = np.zeros((n_obs, n_boxes))
-    push_times_and_box = block_data[['reward intervals', 'box rank']].values[:n_obs]
+    push_times_and_box = block_data[["reward intervals", "box rank"]].values[:n_obs]
     old_t = np.zeros(n_boxes)  # Track last push time per box
 
     for i, (t, box) in enumerate(push_times_and_box):
@@ -225,10 +242,8 @@ def get_concurrent_reward_intervals(
 
     return belief_avail_event
 
-def get_push_reward_interval_diff(
-        df: pd.DataFrame,
-        index: tuple
-) -> np.ndarray:
+
+def get_push_reward_interval_diff(df: pd.DataFrame, index: tuple) -> np.ndarray:
     """
     Compute the belief of reward availability for each box as an event-based representation.
     This extracts the belief about reward availability immediately before each push.
@@ -243,13 +258,17 @@ def get_push_reward_interval_diff(
                     where beliefs are evaluated before each push.
     """
 
-    n_boxes = df['box rank'].nunique()
+    n_boxes = df["box rank"].nunique()
     block_data = df.loc[index]
 
     # Compute availability marginal for each push
-    n_obs = block_data['push times'].size - np.count_nonzero(np.isnan(block_data['push times']))
+    n_obs = block_data["push times"].size - np.count_nonzero(
+        np.isnan(block_data["push times"])
+    )
     belief_avail_event = np.zeros((n_obs, n_boxes))
-    push_times_and_box = block_data[['reward intervals', 'same-box push intervals', 'box rank']].values[:n_obs]
+    push_times_and_box = block_data[
+        ["reward intervals", "same-box push intervals", "box rank"]
+    ].values[:n_obs]
     old_t = np.zeros(n_boxes)  # Track last push time per box
 
     for i, (t, pt, box) in enumerate(push_times_and_box):
@@ -258,13 +277,14 @@ def get_push_reward_interval_diff(
 
     return belief_avail_event
 
-#todo: standardize this to return both probabilities of reward
+
+# todo: standardize this to return both probabilities of reward
 @process_block_safely
 def compute_reward_probabilities(
-        df: pd.DataFrame,
-        index: tuple,
-        shape: int = None,
-        schedules: list = None,
+    df: pd.DataFrame,
+    index: tuple,
+    shape: int = None,
+    schedules: list = None,
 ) -> np.ndarray:
     """
     Compute the exact reward probability right before each push.
@@ -280,18 +300,22 @@ def compute_reward_probabilities(
 
     df_block = df.loc[index]
     if schedules is None:
-        schedules = np.sort(df_block['schedule'].unique())
+        schedules = np.sort(df_block["schedule"].unique())
     n_boxes = len(schedules)
     if shape is None:
-        shape = df_block.index.unique('shape')[0]  # Assume agent knows number of states perfectly
+        shape = df_block.index.unique("shape")[
+            0
+        ]  # Assume agent knows number of states perfectly
 
     # Construct likelihood/observation model
     obs_model = GammaObservation(shape)
 
     # Compute availability marginal for each push
-    n_obs = df_block['push times'].size - np.count_nonzero(np.isnan(df_block['push times']))
+    n_obs = df_block["push times"].size - np.count_nonzero(
+        np.isnan(df_block["push times"])
+    )
     belief_avail_event = np.zeros((n_obs, n_boxes))
-    push_times_and_box = df_block[['push times', 'box rank']].values[:n_obs]
+    push_times_and_box = df_block[["push times", "box rank"]].values[:n_obs]
     old_idx = np.zeros(n_boxes, dtype=int)  # Track last observed index per box
     old_t = np.zeros(n_boxes)  # Track last push time per box
 
@@ -299,22 +323,25 @@ def compute_reward_probabilities(
         if t == old_t[int(box)]:
             continue  # Skip redundant updates if push time is unchanged for the same box
 
-        belief_avail_event[i] = np.array([
-            obs_model.probability((True, t - old_t[j]), schedules[j])
-            for j in range(n_boxes)
-        ])
+        belief_avail_event[i] = np.array(
+            [
+                obs_model.probability((True, t - old_t[j]), schedules[j])
+                for j in range(n_boxes)
+            ]
+        )
 
         old_idx[int(box)] += 1  # Update observation index for the box
         old_t[int(box)] = t  # Update last push time for the box
 
     return belief_avail_event
 
+
 @process_block_safely
 def compute_surprise(
-        df: pd.DataFrame,
-        index: tuple,
-        shape: int = None,
-        schedules: list = None,
+    df: pd.DataFrame,
+    index: tuple,
+    shape: int = None,
+    schedules: list = None,
 ) -> np.ndarray[float]:
     """
     Compute the exact reward probability of each right before each push.
@@ -330,10 +357,12 @@ def compute_surprise(
 
     df_block = df.loc[index]
     if schedules is None:
-        schedules = np.sort(df_block['schedule'].unique())
+        schedules = np.sort(df_block["schedule"].unique())
     n_boxes = len(schedules)
     if shape is None:
-        shape = df_block.index.unique('shape')[0]  # Assume agent knows number of states perfectly
+        shape = df_block.index.unique("shape")[
+            0
+        ]  # Assume agent knows number of states perfectly
 
     # Construct likelihood/observation model
     obs_model = GammaObservation(shape)
@@ -341,7 +370,7 @@ def compute_surprise(
     # Compute availability marginal for each push
     n_obs = len(df_block)
     information = np.zeros(n_obs)
-    push_ints_and_box = df_block[['same-box push intervals', 'box rank']].values[:n_obs]
+    push_ints_and_box = df_block[["same-box push intervals", "box rank"]].values[:n_obs]
     old_idx = np.zeros(n_boxes, dtype=int)  # Track last observed index per box
     old_t = np.zeros(n_boxes)  # Track last push time per box
 
@@ -353,13 +382,14 @@ def compute_surprise(
         old_t[int(box)] = t  # Update last push time for the box
     return information
 
+
 @process_block_safely
 def compute_fisher(
-        df: pd.DataFrame,
-        index: tuple,
-        shape: int = None,
-        schedules: list = None,
-        rate: bool = False,
+    df: pd.DataFrame,
+    index: tuple,
+    shape: int = None,
+    schedules: list = None,
+    rate: bool = False,
 ) -> np.ndarray[float]:
     """
     Compute the exact reward probability of each right before each push.
@@ -374,9 +404,11 @@ def compute_fisher(
     """
     df_block = df.loc[index]
     if schedules is None:
-        schedules = np.sort(df_block['schedule'].unique())
+        schedules = np.sort(df_block["schedule"].unique())
     if shape is None:
-        shape = df_block.index.unique('shape')[0]  # Assume agent knows number of states perfectly
+        shape = df_block.index.unique("shape")[
+            0
+        ]  # Assume agent knows number of states perfectly
 
     # Construct likelihood/observation model
     obs_model = GammaObservation(shape)
@@ -384,7 +416,7 @@ def compute_fisher(
     # Compute availability marginal for each push
     n_obs = len(df_block)
     information = np.zeros(n_obs)
-    push_ints_and_box = df_block[['wait times', 'box rank']].values[:n_obs]
+    push_ints_and_box = df_block[["wait times", "box rank"]].values[:n_obs]
     for i, (t, box) in enumerate(push_ints_and_box):
         if rate:
             information[i] = obs_model.fisher_info_rate((True, t), schedules[int(box)])
@@ -392,23 +424,26 @@ def compute_fisher(
             information[i] = obs_model.fisher_info((True, t), schedules[int(box)])
     return information
 
+
 @process_block_safely
 def compute_mutual_information(
-        df: pd.DataFrame,
-        index: tuple,
-        shape: int = None,
-        schedules: list = None,
+    df: pd.DataFrame,
+    index: tuple,
+    shape: int = None,
+    schedules: list = None,
 ) -> np.ndarray[float]:
     """
     Compute the mutual information between the reward and the schedule.
     """
     df_block = df.loc[index]
     if schedules is None:
-        schedules = np.sort(df_block['schedule'].unique())
+        schedules = np.sort(df_block["schedule"].unique())
     n_boxes = len(schedules)
     if shape is None:
-        shape = df_block.index.unique('shape')[0]  # Assume agent knows number of states perfectly
-    
+        shape = df_block.index.unique("shape")[
+            0
+        ]  # Assume agent knows number of states perfectly
+
     def _mutual_information(t, box):
         cond_entropy = 0
 
@@ -417,14 +452,15 @@ def compute_mutual_information(
     # Construct likelihood/observation model
     obs_model = GammaObservation(shape)
 
+
 @process_block_safely
 def compute_normalized_fisher(
-        df: pd.DataFrame,
-        index: tuple,
-        optimal_fisher: dict = None,
-        shape: int = None,
-        schedules: list = None,
-        rate: bool = False,
+    df: pd.DataFrame,
+    index: tuple,
+    optimal_fisher: dict = None,
+    shape: int = None,
+    schedules: list = None,
+    rate: bool = False,
 ) -> np.ndarray[float]:
     """
     Compute the exact reward probability of each right before each push.
@@ -440,10 +476,12 @@ def compute_normalized_fisher(
 
     df_block = df.loc[index]
     if schedules is None:
-        schedules = np.sort(df_block['schedule'].unique())
+        schedules = np.sort(df_block["schedule"].unique())
     n_boxes = len(schedules)
     if shape is None:
-        shape = df_block.index.unique('shape')[0]  # Assume agent knows number of states perfectly
+        shape = df_block.index.unique("shape")[
+            0
+        ]  # Assume agent knows number of states perfectly
 
     # Construct likelihood/observation model
     obs_model = GammaObservation(shape)
@@ -451,8 +489,8 @@ def compute_normalized_fisher(
     # Compute availability marginal for each push
     n_obs = len(df_block)
     information = np.zeros(n_obs)
-    
-    push_ints_and_box = df_block[['wait times', 'box rank']].values[:n_obs]
+
+    push_ints_and_box = df_block[["wait times", "box rank"]].values[:n_obs]
     old_idx = np.zeros(n_boxes, dtype=int)  # Track last observed index per box
     old_t = np.zeros(n_boxes)  # Track last push time per box
 
@@ -471,10 +509,10 @@ def compute_normalized_fisher(
 
 @process_block_safely
 def compute_deriv(
-        df: pd.DataFrame,
-        index: tuple,
-        shape: int = None,
-        schedules: list = None,
+    df: pd.DataFrame,
+    index: tuple,
+    shape: int = None,
+    schedules: list = None,
 ) -> np.ndarray[float]:
     """
     Compute the exact reward probability of each right before each push.
@@ -490,10 +528,12 @@ def compute_deriv(
 
     df_block = df.loc[index]
     if schedules is None:
-        schedules = np.sort(df_block['schedule'].unique())
+        schedules = np.sort(df_block["schedule"].unique())
     n_boxes = len(schedules)
     if shape is None:
-        shape = df_block.index.unique('shape')[0]  # Assume agent knows number of states perfectly
+        shape = df_block.index.unique("shape")[
+            0
+        ]  # Assume agent knows number of states perfectly
 
     # Construct likelihood/observation model
     obs_model = GammaObservation(shape)
@@ -501,7 +541,7 @@ def compute_deriv(
     # Compute availability marginal for each push
     n_obs = len(df_block)
     information = np.zeros(n_obs)
-    push_ints_and_box = df_block[['same-box push intervals', 'box rank']].values[:n_obs]
+    push_ints_and_box = df_block[["same-box push intervals", "box rank"]].values[:n_obs]
     old_idx = np.zeros(n_boxes, dtype=int)  # Track last observed index per box
     old_t = np.zeros(n_boxes)  # Track last push time per box
 
@@ -513,11 +553,10 @@ def compute_deriv(
         old_t[int(box)] = t  # Update last push time for the box
     return information
 
+
 @process_block_safely
 def compute_joint_beliefs(
-        df: pd.DataFrame,
-        index: tuple,
-        posterior: Posterior
+    df: pd.DataFrame, index: tuple, posterior: Posterior
 ) -> np.ndarray:
     """
     Computes the joint belief of the reward availability and schedule of each box for each push event.
@@ -542,9 +581,11 @@ def compute_joint_beliefs(
     block_data = df.loc[index]
 
     # Compute availability marginal for each push
-    n_obs = block_data['push times'].size - np.count_nonzero(np.isnan(block_data['push times']))
+    n_obs = block_data["push times"].size - np.count_nonzero(
+        np.isnan(block_data["push times"])
+    )
     belief_joint_event = np.zeros((n_obs, n_boxes, 2, len(posterior.support())))
-    push_times_and_box = block_data[['push times', 'box rank']].values[:n_obs]
+    push_times_and_box = block_data[["push times", "box rank"]].values[:n_obs]
     old_idx = np.zeros(n_boxes, dtype=int)  # Track last observed index per box
     old_t = np.zeros(n_boxes)  # Track last push time per box
 
@@ -552,17 +593,30 @@ def compute_joint_beliefs(
         if t == old_t[int(box)]:
             continue  # Skip redundant updates if push time is unchanged for the same box
 
-        belief_joint_event[i] = np.array([
-            posterior.boxes[j].joint(obs_supp_args=[t - old_t[j]], latent_kwargs={'record': old_idx[j]})
-            for j in range(n_boxes)
-        ])
+        belief_joint_event[i] = np.array(
+            [
+                posterior.boxes[j].joint(
+                    obs_supp_args=[t - old_t[j]], latent_kwargs={"record": old_idx[j]}
+                )
+                for j in range(n_boxes)
+            ]
+        )
 
         old_idx[int(box)] += 1  # Update observation index for the box
         old_t[int(box)] = t  # Update last push time for the box
 
     return belief_joint_event
 
-def predict_pushed_box(df: pd.DataFrame, x: str | list[str], y: str = 'box rank', perm_test: bool = False, weight: bool = False, n_perms: int = 500, disp: bool = False) -> (float, float, Any, ...):
+
+def predict_pushed_box(
+    df: pd.DataFrame,
+    x: str | list[str],
+    y: str = "box rank",
+    perm_test: bool = False,
+    weight: bool = False,
+    n_perms: int = 500,
+    disp: bool = False,
+) -> (float, float, Any, ...):
     """
     Predicts the pushed box using multinomial logistic regression and evaluates the accuracy of predictions.
 
@@ -582,20 +636,27 @@ def predict_pushed_box(df: pd.DataFrame, x: str | list[str], y: str = 'box rank'
         # mdl = smf.mnlogit("y ~ X", {'y': y, 'X': X}).fit(disp = disp)
         # yhat = np.argmax(mdl.predict(), axis=1)
         # accuracy = (yhat == y).mean()
-        weights = compute_sample_weight(class_weight='balanced', y=y) if weight else None
+        weights = (
+            compute_sample_weight(class_weight="balanced", y=y) if weight else None
+        )
         mdl = LogisticRegression()
         mdl.fit(X, y, sample_weight=weights)
         accuracy = mdl.score(X, y, sample_weight=weights)
         rsq = mcfadden_pseudo_rsquared(mdl, X, y)
         if perm_test:
-            pval_accu, pval_rsq = permutation_test_logistic(X, y, accuracy, rsq, weights=weights, n_perms= n_perms)
+            pval_accu, pval_rsq = permutation_test_logistic(
+                X, y, accuracy, rsq, weights=weights, n_perms=n_perms
+            )
             return accuracy, rsq, pval_accu, pval_rsq, mdl
         return accuracy, rsq, mdl
     except Exception as e:
         logger.debug(e)
         return None
 
-def get_mean_beliefs(beliefs: ArrayLike | list, supp: ArrayLike | list) -> ArrayLike | list:
+
+def get_mean_beliefs(
+    beliefs: ArrayLike | list, supp: ArrayLike | list
+) -> ArrayLike | list:
     """
     Computes the mean beliefs over time.
 
@@ -610,7 +671,10 @@ def get_mean_beliefs(beliefs: ArrayLike | list, supp: ArrayLike | list) -> Array
         return (beliefs @ supp[:, np.newaxis]).squeeze()  # E[lambda] at each timepoint
     return [x @ supp for x in beliefs]
 
-def get_std_beliefs(beliefs: ArrayLike | list, supp: ArrayLike | list) -> np.ndarray | list:
+
+def get_std_beliefs(
+    beliefs: ArrayLike | list, supp: ArrayLike | list
+) -> np.ndarray | list:
     """
     Computes the std of beliefs over time.
 
@@ -622,5 +686,7 @@ def get_std_beliefs(beliefs: ArrayLike | list, supp: ArrayLike | list) -> np.nda
         A vector of the std of beliefs over time.
     """
     if isinstance(beliefs, np.ndarray):
-        return np.sqrt(beliefs @ (supp[:, np.newaxis] ** 2) - (beliefs @ supp[:, np.newaxis]) ** 2).squeeze()
-    return [np.sqrt(x @ (supp**2) - (x @ supp)**2) for x in beliefs]
+        return np.sqrt(
+            beliefs @ (supp[:, np.newaxis] ** 2) - (beliefs @ supp[:, np.newaxis]) ** 2
+        ).squeeze()
+    return [np.sqrt(x @ (supp**2) - (x @ supp) ** 2) for x in beliefs]

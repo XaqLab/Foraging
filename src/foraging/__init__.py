@@ -1,11 +1,12 @@
-from dotenv import load_dotenv
+import json
 import logging.config
 import os
-import json
 from pathlib import Path
+
+from dotenv import load_dotenv
 
 # Load config
 current_dir = Path(__file__).resolve().parent
-load_dotenv(current_dir / '.env')
-with open(current_dir / os.getenv('LOGCONFIG_PATH'), 'rb') as fp:
+load_dotenv(current_dir / ".env")
+with open(current_dir / os.getenv("LOGCONFIG_PATH"), "rb") as fp:
     logging.config.dictConfig(json.load(fp))

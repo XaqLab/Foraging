@@ -1,15 +1,17 @@
 import itertools
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
-from itertools import product, islice
-from typing import Optional, Any, Type
 from copy import deepcopy
+from itertools import islice, product
+from typing import Any, Optional, Type
 
 import numpy as np
 import scipy.stats
 from numpy.typing import ArrayLike
 from scipy.stats import gamma
+
 from foraging.utils import INDEX, MIN_INDEX
+
 
 ## ABSTRACT CLASSES
 class AbstractBelief(ABC):
@@ -38,6 +40,7 @@ class AbstractBelief(ABC):
     def features(self, *args, **kwargs):
         pass
 
+
 class AbstractID(ABC):
 
     @abstractmethod
@@ -59,27 +62,26 @@ class AbstractRecord(ABC):
     def content(self, *args, **kwargs) -> Any:
         pass
 
+
 class AbstractRecordKeeper(AbstractRecord):
 
     @abstractmethod
     def records(self, *args, **kwargs) -> Any:
         pass
 
-
     @abstractmethod
     def add(self, *args, **kwargs) -> Any:
         pass
-
 
     @abstractmethod
     def update_record(self, *args, **kwargs) -> Any:
         pass
 
-
     @abstractmethod
     def delete(self, *args, **kwargs) -> Any:
         pass
-    
+
+
 # class HistoryManager:
 #     def __init__(self):
 #         self.history = []
@@ -118,7 +120,7 @@ class ArrayBelief(AbstractBelief):
     @property
     def features(self) -> np.ndarray:
         return self._features
-    
+
     @features.setter
     def features(self, features: np.ndarray):
         self._features = features
@@ -150,9 +152,12 @@ class ArrayBelief(AbstractBelief):
     def likelihood(self, *args, **kwargs) -> Any:
         pass
 
+
 class GammaBoxBelief(ArrayBelief):
 
-    def __init__(self, shape: int = 1, schedules: np.ndarray = None, prior: ArrayBelief = None):
+    def __init__(
+        self, shape: int = 1, schedules: np.ndarray = None, prior: ArrayBelief = None
+    ):
         if prior:
             super().__init__(prior.support, prior.features)
         else:
@@ -165,15 +170,19 @@ class GammaBoxBelief(ArrayBelief):
         t = obs[1]
 
         # Calculate the probability of reward being available/unavailable after t time has passed under the given latents.
-        p_t = gamma.cdf(t, self.shape, scale= schedule / self.shape)
+        p_t = gamma.cdf(t, self.shape, scale=schedule / self.shape)
 
         # The last element is the probability of being in the last state, i.e., reward being available.
-        if not is_avail:  # If reward is not available, return the complementary probability.
+        if (
+            not is_avail
+        ):  # If reward is not available, return the complementary probability.
             return 1.0 - p_t
         return p_t
 
     def update(self, obs: tuple[bool, float], **kwargs):
-        self.features = self.likelihood(obs, self.support) * self.features # this automatically normalizes due to setter property!!
+        self.features = (
+            self.likelihood(obs, self.support) * self.features
+        )  # this automatically normalizes due to setter property!!
 
 
 class IndependentBoxesBelief(AbstractBelief):
@@ -181,26 +190,26 @@ class IndependentBoxesBelief(AbstractBelief):
         self.n_boxes = n_boxes
         self.belief_cls = belief_cls
         self.beliefs = [belief_cls(*args, **kwargs) for _ in range(n_boxes)]
-    
+
     def update(self, box: int, *args, **kwargs):
         self.beliefs[box].update(*args, **kwargs)
-    
+
     def query(self, i: int, *args, **kwargs):
         return self.beliefs[i].query(*args, **kwargs)
-    
+
     def normalize(self, *args, **kwargs):
         for belief in self.beliefs:
             belief.normalize(*args, **kwargs)
-    
+
     @property
     def prior(self):
         return [self.beliefs[i].prior for i in range(self.n_boxes)]
-    
+
     @prior.setter
     def prior(self, prior: AbstractBelief):
         for belief in self.beliefs:
             belief.prior = prior
-    
+
     @property
     def support(self):
         return [self.beliefs[i].support for i in range(self.n_boxes)]
@@ -209,16 +218,16 @@ class IndependentBoxesBelief(AbstractBelief):
     def support(self, support: ArrayLike):
         for belief in self.beliefs:
             belief.support = support
-    
+
     @property
     def features(self):
         return [self.beliefs[i].features for i in range(self.n_boxes)]
-    
 
     @features.setter
     def features(self, features: ArrayLike):
         for i, belief in enumerate(self.beliefs):
             belief.features = features[i]
+
 
 class RealID(AbstractID):
     def __init__(self, values: tuple, fields: tuple[str]):
@@ -242,14 +251,17 @@ class RealID(AbstractID):
         self._values = values
 
     def __eq__(self, other: AbstractID) -> bool:
-        return self.values == other.values and all(x == y for x, y in zip(self.fields, other.fields))
+        return self.values == other.values and all(
+            x == y for x, y in zip(self.fields, other.fields)
+        )
 
     def __hash__(self) -> int:
         return hash((self.values, self.fields))
 
+
 class MockID(RealID):
     def __init__(self, values: int):
-        super().__init__((values,), ('id',))
+        super().__init__((values,), ("id",))
 
 
 class EventID(RealID):
@@ -297,7 +309,6 @@ class RecordKeeper(AbstractRecordKeeper):
             i = len(self) + i
         return list(islice(self.records.values(), i, i + 1))[0].id
 
-
     def content(self, i: int = None, id: AbstractID = None) -> Any:
         id = self.id(i) if id is None else id
         return self._records[id]
@@ -310,23 +321,19 @@ class RecordKeeper(AbstractRecordKeeper):
     def records(self, records: dict[AbstractID, Record]):
         self._records = records
 
-
     def add(self, id: AbstractID, record: Any):
         self._records[id] = Record(id, record)
-
 
     def update_record(self, id: AbstractID, record: Any) -> Any:
         old_record = self.records[id].content
         self.records[id].content = record
         return old_record
 
-
     def delete(self, id: AbstractID) -> Any:
         return self.records.pop(id, None).content
 
     def __len__(self):
         return len(self.records)
-
 
 
 class BeliefModule(RecordKeeper, AbstractBelief):
@@ -336,11 +343,11 @@ class BeliefModule(RecordKeeper, AbstractBelief):
 
     @property
     def prior(self) -> AbstractBelief:
-        return self.content(i = 0).content
+        return self.content(i=0).content
 
     @prior.setter
     def prior(self, prior: AbstractBelief):
-        self.update_record(self.content(i = 0).id, prior)
+        self.update_record(self.content(i=0).id, prior)
 
     @property
     def support(self):
@@ -364,7 +371,7 @@ class BeliefModule(RecordKeeper, AbstractBelief):
     def update(self, new_id: AbstractID, *args, **kwargs):
 
         # Step 1: Create a deep copy of the last record
-        last_record = self.content(i = -1)
+        last_record = self.content(i=-1)
         new_record = deepcopy(last_record)
 
         # Step 2: Invoke the update method on the contents of this copy
@@ -420,6 +427,7 @@ class Distribution(ABC):
 
         pass
 
+
 class Observation(Distribution):
     """
     An abstract class to represent an observation in an experiment. This class defines the
@@ -461,6 +469,7 @@ class Observation(Distribution):
         """
         pass
 
+
 class Normalizer(ABC):
     """
     A class to abstractly represent the normalization of a distribution.
@@ -487,6 +496,7 @@ class Normalizer(ABC):
             The normalized probability distribution, where the sum of probabilities equals 1.
         """
         pass
+
 
 class Posterior(Distribution):
     """
@@ -569,6 +579,7 @@ class Posterior(Distribution):
         """
         pass
 
+
 class GammaObservation(Observation):
     """
     An implementation of P(observations | reward appearance rate, number of states), the likelihood model in the extended Poisson process.
@@ -594,7 +605,9 @@ class GammaObservation(Observation):
         """
         self.shape = shape
 
-    def probability(self, obs: tuple[bool, float], latent: float | ArrayLike, *args, **kwargs) -> float | ArrayLike:
+    def probability(
+        self, obs: tuple[bool, float], latent: float | ArrayLike, *args, **kwargs
+    ) -> float | ArrayLike:
         """
         Computes the probability of the observation given the reward appearance rate and the number of states.
 
@@ -610,48 +623,77 @@ class GammaObservation(Observation):
         t = obs[1]
 
         # Calculate the probability of reward being available/unavailable after t time has passed under the given latents.
-        p_t = gamma.cdf(t, self.shape, scale= latent / self.shape)
+        p_t = gamma.cdf(t, self.shape, scale=latent / self.shape)
 
         # The last element is the probability of being in the last state, i.e., reward being available.
-        if not is_avail:  # If reward is not available, return the complementary probability.
+        if (
+            not is_avail
+        ):  # If reward is not available, return the complementary probability.
             return 1.0 - p_t
         return p_t
 
     def surprise(self, obs: (bool, float), latent: float | ArrayLike, *args, **kwargs):
         return -np.log(self.probability(obs, latent, *args, **kwargs))
 
-    def fisher_info(self, obs: (bool, float), latent: float | ArrayLike, *args, **kwargs):
+    def fisher_info(
+        self, obs: (bool, float), latent: float | ArrayLike, *args, **kwargs
+    ):
         # Extract the reward availability and push interval.
         t = obs[1]
         scale = latent / self.shape
         cdf = gamma.cdf(t, a=self.shape, scale=scale)
-        return (t / latent) ** 2 * gamma.pdf(t, a=self.shape, scale=scale) ** 2 / (cdf * (1 - cdf))
+        return (
+            (t / latent) ** 2
+            * gamma.pdf(t, a=self.shape, scale=scale) ** 2
+            / (cdf * (1 - cdf))
+        )
 
-    def fisher_info_rate(self, obs: (bool, float), latent: float | ArrayLike, *args, **kwargs):
+    def fisher_info_rate(
+        self, obs: (bool, float), latent: float | ArrayLike, *args, **kwargs
+    ):
         # Extract the reward availability and push interval.
         t = obs[1]
         scale = latent / self.shape
         cdf = gamma.cdf(t, a=self.shape, scale=scale)
-        return (t / latent) ** 2 * gamma.pdf(t, a=self.shape, scale=scale) ** 2 / (cdf * (1 - cdf)) / t
+        return (
+            (t / latent) ** 2
+            * gamma.pdf(t, a=self.shape, scale=scale) ** 2
+            / (cdf * (1 - cdf))
+            / t
+        )
 
         #
         # return ((t/latent**2) * gamma.pdf(t, self.shape, scale = latent / self.shape))**2 / gamma.cdf(t, self.shape, scale = latent / self.shape)  + ((t/latent**2) * gamma.pdf(t, self.shape, scale = latent / self.shape))**2 / (1 - gamma.cdf(t, self.shape, scale = latent / self.shape))
 
-    def specific_fisher_info(self, obs: (bool, float), latent: float | ArrayLike, *args, **kwargs):
+    def specific_fisher_info(
+        self, obs: (bool, float), latent: float | ArrayLike, *args, **kwargs
+    ):
         # Extract the reward availability and push interval.
         is_avail = obs[0]
         t = obs[1]
         if is_avail:
-            return ((t/latent**2) * gamma.pdf(t, self.shape, scale = latent / self.shape) / gamma.cdf(t, self.shape, scale = latent / self.shape))**2
-        return ((t/latent**2) * gamma.pdf(t, self.shape, scale = latent / self.shape) / (1 - gamma.cdf(t, self.shape, scale = latent / self.shape)))**2
+            return (
+                (t / latent**2)
+                * gamma.pdf(t, self.shape, scale=latent / self.shape)
+                / gamma.cdf(t, self.shape, scale=latent / self.shape)
+            ) ** 2
+        return (
+            (t / latent**2)
+            * gamma.pdf(t, self.shape, scale=latent / self.shape)
+            / (1 - gamma.cdf(t, self.shape, scale=latent / self.shape))
+        ) ** 2
 
-    def deriv(self, obs: tuple[bool, float], latent: float | ArrayLike, *args, **kwargs):
+    def deriv(
+        self, obs: tuple[bool, float], latent: float | ArrayLike, *args, **kwargs
+    ):
         # Extract the reward availability and push interval.
         is_avail = obs[0]
         t = obs[1]
-        return gamma.pdf(t, self.shape, scale = latent / self.shape)
+        return gamma.pdf(t, self.shape, scale=latent / self.shape)
 
-    def probabilities(self, latent: Any, t: float | Iterable, *args, **kwargs) -> ArrayLike:
+    def probabilities(
+        self, latent: Any, t: float | Iterable, *args, **kwargs
+    ) -> ArrayLike:
         supp = self.support(t)
         probs = []
         for obs in supp:
@@ -670,14 +712,18 @@ class GammaObservation(Observation):
         t = np.atleast_1d(t)
         return itertools.product([False, True], t)
 
+
 class MyPrior(Distribution):
     def __init__(self, probs: ArrayLike, support: ArrayLike):
         self.probs = probs
         self.supp = support
+
     def probability(self, index: int, *args, **kwargs) -> Any:
         return self.probs[index]
+
     def probabilities(self, *args, **kwargs) -> Any:
         return self.probs
+
     def support(self, *args, **kwargs) -> Any:
         return self.supp
 
@@ -686,8 +732,20 @@ class MyPrior(Distribution):
 class BayesianUpdater:
     @staticmethod
     def update_posterior(obs_model, normalizer, support, probabilities, obs, **kwargs):
-        posterior_probs = obs_model.probability(obs, support, *kwargs.pop('obs_args', tuple()), **kwargs.pop('obs_kwargs', {})) * probabilities
-        return normalizer.normalize(posterior_probs, *kwargs.pop('norm_args', tuple()), **kwargs.pop('norm_kwargs', {}))
+        posterior_probs = (
+            obs_model.probability(
+                obs,
+                support,
+                *kwargs.pop("obs_args", tuple()),
+                **kwargs.pop("obs_kwargs", {}),
+            )
+            * probabilities
+        )
+        return normalizer.normalize(
+            posterior_probs,
+            *kwargs.pop("norm_args", tuple()),
+            **kwargs.pop("norm_kwargs", {}),
+        )
 
 
 # Update MyPosterior class to use HistoryManager and BayesianUpdater
@@ -725,8 +783,14 @@ class MyPosterior(Posterior):
         Returns the support of the posterior distribution.
     """
 
-    def __init__(self, obs_model: Observation, prior: ArrayLike, support: ArrayLike,
-                 normalizer: Optional[Normalizer] = None, record: bool = False):
+    def __init__(
+        self,
+        obs_model: Observation,
+        prior: ArrayLike,
+        support: ArrayLike,
+        normalizer: Optional[Normalizer] = None,
+        record: bool = False,
+    ):
         """
         Constructs a posterior from the given inputs.
 
@@ -790,7 +854,7 @@ class MyPosterior(Posterior):
         return self.probs[index]
 
     def probabilities(self, *args, record: int | str = -1, **kwargs) -> ArrayLike:
-        if self.history_manager and record == 'all':
+        if self.history_manager and record == "all":
             return self.history_manager.get_all()
         elif self.history_manager and record > -1:
             return self.history_manager.get(record)
@@ -812,7 +876,9 @@ class MyPosterior(Posterior):
         Returns:
             An array containing the updated posterior probabilities.
         """
-        self.probs = BayesianUpdater.update_posterior(self.obs_model, self.norm, self.supp, self.probs, obs, **kwargs)
+        self.probs = BayesianUpdater.update_posterior(
+            self.obs_model, self.norm, self.supp, self.probs, obs, **kwargs
+        )
         if self.history_manager:
             self.history_manager.add(self.probs)
         return self.probs
@@ -840,17 +906,30 @@ class MyPosterior(Posterior):
         obs_model = self.observation_model()
 
         # Get the support of the observation model, with optional arguments from kwargs
-        obs_support = list(obs_model.support(*kwargs.pop('obs_supp_args', tuple()), **kwargs.pop('obs_supp_kwargs', {})))
+        obs_support = list(
+            obs_model.support(
+                *kwargs.pop("obs_supp_args", tuple()),
+                **kwargs.pop("obs_supp_kwargs", {}),
+            )
+        )
         # Get the support of the latent distribution (the possible latent values)
-        latent_support = self.support(*kwargs.pop('latent_supp_args', tuple()), **kwargs.pop('latent_supp_kwargs', {}))
+        latent_support = self.support(
+            *kwargs.pop("latent_supp_args", tuple()),
+            **kwargs.pop("latent_supp_kwargs", {}),
+        )
 
         # Initialize an empty joint probability matrix
         joint = np.zeros((len(obs_support), len(latent_support)))
 
         # Iterate through all possible combinations of observations and latent values
         for i, o in enumerate(obs_support):
-            p1 = obs_model.probability(o, latent_support, *kwargs.pop('obs_args', tuple()), **kwargs.pop('obs_kwargs', {}))
-            p2 = self.probabilities(**kwargs.pop('latent_kwargs', {}))
+            p1 = obs_model.probability(
+                o,
+                latent_support,
+                *kwargs.pop("obs_args", tuple()),
+                **kwargs.pop("obs_kwargs", {}),
+            )
+            p2 = self.probabilities(**kwargs.pop("latent_kwargs", {}))
             joint[i] = p1 * p2
         return joint
 
@@ -863,7 +942,7 @@ class MyPosterior(Posterior):
         Returns:
             np.ndarray: array of observation probabilities
         """
-        return self.joint(**kwargs).sum(axis = 1).squeeze()
+        return self.joint(**kwargs).sum(axis=1).squeeze()
 
     def reset(self, empty_history: bool = False):
         """
@@ -886,16 +965,27 @@ class MyPosterior(Posterior):
         """
         return self.supp
 
+
 class IndependentBoxesPosterior(Posterior):
 
-    def __init__(self, n_boxes: int, obs_model: Observation, prior: ArrayLike, support: ArrayLike,
-                 normalizer: Optional[Normalizer] = None, **kwargs):
+    def __init__(
+        self,
+        n_boxes: int,
+        obs_model: Observation,
+        prior: ArrayLike,
+        support: ArrayLike,
+        normalizer: Optional[Normalizer] = None,
+        **kwargs,
+    ):
         self.obs_model = obs_model
         if normalizer is None:
             normalizer = MyNormalizer()
         self.norm = normalizer
         self.supp = support
-        self.boxes = [MyPosterior(obs_model, prior, support, normalizer, **kwargs) for _ in range(n_boxes)]
+        self.boxes = [
+            MyPosterior(obs_model, prior, support, normalizer, **kwargs)
+            for _ in range(n_boxes)
+        ]
         self.n_boxes = n_boxes
 
     def prior(self, *args, **kwargs) -> Distribution:
@@ -949,7 +1039,6 @@ class IndependentBoxesPosterior(Posterior):
         """
         return [box.probabilities(*args, **kwargs) for box in self.boxes]
 
-
     def probability(self, index: int, *args, **kwargs) -> list[float]:
         """
         Retrieves the probability of the latent variable at the given index for all boxes.
@@ -999,7 +1088,7 @@ class IndependentBoxesPosterior(Posterior):
         Returns:
             np.ndarray: array of observation probabilities
         """
-        return [box.joint(**kwargs).sum(axis = 1).squeeze() for box in self.boxes]
+        return [box.joint(**kwargs).sum(axis=1).squeeze() for box in self.boxes]
 
     def support(self, *args, **kwargs) -> ArrayLike:
         """
@@ -1010,10 +1099,16 @@ class IndependentBoxesPosterior(Posterior):
         """
         return self.supp
 
-#todo: this will be correctly implemented later
+
+# todo: this will be correctly implemented later
 class DependentBoxesPosterior(MyPosterior):
-    def __init__(self, obs_model: Observation, prior: ArrayLike, support: ArrayLike,
-                 normalizer: Optional[Normalizer] = None):
+    def __init__(
+        self,
+        obs_model: Observation,
+        prior: ArrayLike,
+        support: ArrayLike,
+        normalizer: Optional[Normalizer] = None,
+    ):
         super().__init__(obs_model, prior, support, normalizer)
 
     def probability(self, index: int, box: int = 0, **kwargs) -> float:
@@ -1049,15 +1144,20 @@ class DependentBoxesPosterior(MyPosterior):
 
         # Implements Pr(x|o_{1:t}) proportional to L(x|o_t) * Pr(x|o_{1:t-1})
         for i, x in enumerate(support):
-            posterior_probs[box, i] = obs_model.probability(obs, x, *kwargs.pop('obs_args', tuple()), **kwargs.pop('obs_kwargs',
-                                                                                                         {})) * self.probability(i, box)
+            posterior_probs[box, i] = obs_model.probability(
+                obs, x, *kwargs.pop("obs_args", tuple()), **kwargs.pop("obs_kwargs", {})
+            ) * self.probability(i, box)
         # todo: update all boxes to reflect knowledge of ordering --> p(schedule & this box is fastest) or p(schedule & this box is middle) or p(schedule & this box is slowest)
         # p(this box is fastest| experience) = p(this box's schedule > other boxes')
 
         # Normalize the new posterior
-        self.probs = normalizer.normalize(posterior_probs[box], *kwargs.pop('norm_args', tuple()), **kwargs.pop('norm_kwargs',
-                                                                                                         {}))
+        self.probs = normalizer.normalize(
+            posterior_probs[box],
+            *kwargs.pop("norm_args", tuple()),
+            **kwargs.pop("norm_kwargs", {}),
+        )
         return self.probs
+
 
 class MyConjugateBetaPosterior(Posterior):
     def support(self, *args, **kwargs) -> Any:
@@ -1084,16 +1184,17 @@ class MyConjugateBetaPosterior(Posterior):
     def probability(self, latent: Any, *args, record: int = -1, **kwargs) -> float:
         alpha, beta = self.alpha, self.beta
         if self.record and record > -1:
-            alpha, beta =  self.history[record]
+            alpha, beta = self.history[record]
         return scipy.stats.beta.pdf(latent, alpha, beta)
 
-    def probabilities(self, *args, record: int | str = -1, **kwargs) -> tuple[int,int] | list[tuple[int,int]]:
-        if self.record and record == 'all':
+    def probabilities(
+        self, *args, record: int | str = -1, **kwargs
+    ) -> tuple[int, int] | list[tuple[int, int]]:
+        if self.record and record == "all":
             return self.history
         elif self.record and record > -1:
             return self.history[record]
         return (self.alpha, self.beta)
-
 
     def marginalize(self, **kwargs) -> ArrayLike:
         """
@@ -1105,12 +1206,11 @@ class MyConjugateBetaPosterior(Posterior):
             np.ndarray: array of observation probabilities
         """
         alpha, beta = self.alpha, self.beta
-        record = kwargs.pop('latent_kwargs', {'record': -1})
-        if self.record and record['record'] > -1:
-            alpha, beta = self.history[record['record']]
+        record = kwargs.pop("latent_kwargs", {"record": -1})
+        if self.record and record["record"] > -1:
+            alpha, beta = self.history[record["record"]]
         mean = scipy.stats.beta.mean(alpha, beta)
         return (mean, 1 - mean)
-
 
     def update(self, obs, *args, **kwargs):
         is_avail = obs[0]
@@ -1125,7 +1225,9 @@ class MyConjugateBetaPosterior(Posterior):
 class BetaBoxes(Posterior):
 
     def __init__(self, n_boxes: int, alpha: int, beta: int, **kwargs):
-        self.boxes = [MyConjugateBetaPosterior(alpha, beta, **kwargs) for _ in range(n_boxes)]
+        self.boxes = [
+            MyConjugateBetaPosterior(alpha, beta, **kwargs) for _ in range(n_boxes)
+        ]
         self.n_boxes = n_boxes
 
     def prior(self, *args, **kwargs) -> Distribution:
@@ -1154,7 +1256,6 @@ class BetaBoxes(Posterior):
         """
         return None
 
-
     def probabilities(self, *args, **kwargs) -> list[ArrayLike]:
         """
         Return posterior probabilities from all boxes
@@ -1166,7 +1267,6 @@ class BetaBoxes(Posterior):
             list of posterior probabilities
         """
         return [box.probabilities(*args, **kwargs) for box in self.boxes]
-
 
     def probability(self, index: int, *args, **kwargs) -> list[float]:
         """
@@ -1200,9 +1300,9 @@ class BetaBoxes(Posterior):
     def support(self, *args, **kwargs) -> Any:
         pass
 
-
     def normalizer(self, *args, **kwargs) -> Normalizer:
         pass
+
 
 class MyNormalizer(Normalizer):
     """

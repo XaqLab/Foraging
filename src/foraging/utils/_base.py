@@ -1,7 +1,6 @@
 import logging
 from datetime import datetime
-from typing import Any
-from typing import Optional, Callable
+from typing import Any, Callable, Optional
 
 import numpy as np
 from numpy.typing import ArrayLike

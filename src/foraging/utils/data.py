@@ -1,28 +1,31 @@
+import fnmatch
 import logging
+import os
+import pickle
+from datetime import datetime
+from functools import wraps
+from typing import Any, Callable
 
+import h5py
+import numpy as np
+import pandas as pd
 from IPython.core.display import Markdown
-from IPython.core.display_functions import display, DisplayHandle
+from IPython.core.display_functions import DisplayHandle, display
 from pandas.core.groupby import DataFrameGroupBy
+from tqdm import tqdm
+
+from foraging.config.constants import (
+    BOX_LABELS,
+    BOX_POSITIONS,
+    KAPPA_CATEGORIES,
+    KAPPA_LEVELS,
+)
+from foraging.utils import INDEX
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-import numpy as np
-import pandas as pd
 # import polars as pl
-
-from functools import wraps
-import os
-import fnmatch
-import h5py
-import pickle
-from datetime import datetime
-from typing import Callable, Any
-
-from tqdm import tqdm
-
-from foraging.config.constants import BOX_LABELS, BOX_POSITIONS, KAPPA_CATEGORIES, KAPPA_LEVELS
-from foraging.utils import INDEX
 
 
 def get_subjects(path: str) -> list[str]:
@@ -90,7 +93,12 @@ def open_pickle_file(path: str) -> Any:
     # Return all contents
     return ds
 
-def make_df(path: str, box_labels: list[str] = BOX_LABELS, box_positions: list[str] = BOX_POSITIONS) -> pd.DataFrame:
+
+def make_df(
+    path: str,
+    box_labels: list[str] = BOX_LABELS,
+    box_positions: list[str] = BOX_POSITIONS,
+) -> pd.DataFrame:
     """
     Given experiment matfiles and metadata, construct a DataFrame.
 
@@ -106,7 +114,7 @@ def make_df(path: str, box_labels: list[str] = BOX_LABELS, box_positions: list[s
     df_dict = {
         "subject": [],
         "session": [],
-        "_session": [], # the original session number in sequential order inside the matlab struct
+        "_session": [],  # the original session number in sequential order inside the matlab struct
         "week day": [],
         "n boxes": [],
         "block": [],
@@ -115,6 +123,8 @@ def make_df(path: str, box_labels: list[str] = BOX_LABELS, box_positions: list[s
         "shape": [],
         "stimulus type": [],
         "kappa": [],
+        "eye tracking": [],
+        "position tracking": [],
         "duration": [],
         "box position": [],
         "push times": [],
@@ -148,15 +158,16 @@ def make_df(path: str, box_labels: list[str] = BOX_LABELS, box_positions: list[s
                 sess_id = (
                     f[f["session"]["id"][sess_idx, 0]][0, 0]
                     if subject == "humans"
-                    else
-                        "".join(
-                            [chr(c) for c in f[f["session"]["id"][sess_idx, 0]][:, 0]]
-                        )
+                    else "".join(
+                        [chr(c) for c in f[f["session"]["id"][sess_idx, 0]][:, 0]]
+                    )
                 )
 
                 # If session is date, get weekday
-                if subject != 'humans':
-                    week_day = day_to_week[datetime.strptime(sess_id,"%Y%m%d").weekday()]
+                if subject != "humans":
+                    week_day = day_to_week[
+                        datetime.strptime(sess_id, "%Y%m%d").weekday()
+                    ]
                 sess_id = int(sess_id)
 
                 sess_data = f[all_sess_data[sess_idx, 0]]["events"]
@@ -179,25 +190,30 @@ def make_df(path: str, box_labels: list[str] = BOX_LABELS, box_positions: list[s
                         ].iloc[0]
 
                         schedules = [
-                            float(x)
-                            for x in block_meta["scheduleMean"].split(",")
+                            float(x) for x in block_meta["scheduleMean"].split(",")
                         ]
                         box_ranks = np.argsort(np.argsort(schedules))
 
                         kappa = block_meta["stimulusNoise"]
                         shape = block_meta["GammaShape"]
                         stim_type = block_meta["stimulusCueType"]
-                        duration = f[sess_data[block_idx, 0]].get('tEndBeh')[0,0] - f[sess_data[block_idx, 0]].get('tStartBeh')[0,0] if subject != 'humans' else f[sess_data[block_idx, 0]].get('tEnd')[0,0] - f[sess_data[block_idx, 0]].get('tStart')[0,0]
+                        eye_tracking = block_meta["eyeTracking"]
+                        position_tracking = block_meta["position/head variables"]
+                        duration = (
+                            f[sess_data[block_idx, 0]].get("tEndBeh")[0, 0]
+                            - f[sess_data[block_idx, 0]].get("tStartBeh")[0, 0]
+                            if subject != "humans"
+                            else f[sess_data[block_idx, 0]].get("tEnd")[0, 0]
+                            - f[sess_data[block_idx, 0]].get("tStart")[0, 0]
+                        )
 
                         # Parse box data
-                        staging_dict = {
-                            k: [] for k in df_dict.keys()
-                        }
+                        staging_dict = {k: [] for k in df_dict.keys()}
                         for i in range(len(schedules)):
                             box = "box" + str(i + 1)
                             push_times = np.atleast_1d(
                                 f[sess_data[block_idx, 0]].get("tPush/" + box)
-                            ).ravel() # Make sure data is an array before attempting to flatten it
+                            ).ravel()  # Make sure data is an array before attempting to flatten it
 
                             reward_outcomes = (
                                 np.atleast_1d(
@@ -239,10 +255,18 @@ def make_df(path: str, box_labels: list[str] = BOX_LABELS, box_positions: list[s
                             staging_dict["shape"].extend(
                                 [shape for _ in range(n_events)]
                             )
+                            staging_dict["eye tracking"].extend(
+                                [eye_tracking for _ in range(n_events)]
+                            )
+                            staging_dict["position tracking"].extend(
+                                [position_tracking for _ in range(n_events)]
+                            )
                             staging_dict["duration"].extend(
                                 [duration for _ in range(n_events)]
                             )
-                            staging_dict["box position"].extend([i for _ in range(n_events)])
+                            staging_dict["box position"].extend(
+                                [i for _ in range(n_events)]
+                            )
                             staging_dict["stimulus type"].extend(
                                 [stim_type for _ in range(n_events)]
                             )
@@ -304,13 +328,16 @@ def make_df(path: str, box_labels: list[str] = BOX_LABELS, box_positions: list[s
     #     )
     #     - 1
     # ).astype(int) # ranks boxes fast --> medium --> slow
-    df['box'] = df['box rank'].map(box_labels)
-    df['box position label'] = df['box position'].map(box_pos_labels)
-    df['prev box'] = get_blocks(df)['box'].shift(1)
+    df["box"] = df["box rank"].map(box_labels)
+    df["box position label"] = df["box position"].map(box_pos_labels)
+    df["prev box"] = get_blocks(df)["box"].shift(1)
     df["normalized pushes"] = df["wait times"] / df["schedule"]
     df["consecutive push intervals"] = df["push times"].diff()
-
-    df["rewarded?"] = df["reward outcomes"].map({True: 'Yes', False: 'No'})
+    df["eye tracking"] = df["eye tracking"].map({"TRUE": True, "FALSE": False})
+    df["position tracking"] = df["position tracking"].map(
+        {"TRUE": True, "FALSE": False}
+    )
+    df["rewarded?"] = df["reward outcomes"].map({True: "Yes", False: "No"})
     df["push #"] = (
         df.groupby(["subject", "session", "block"])["push times"].rank().astype(int)
     )
@@ -319,15 +346,19 @@ def make_df(path: str, box_labels: list[str] = BOX_LABELS, box_positions: list[s
         .rank()
         .astype(int)
     )
-    df["stay/switch"] = df["box rank"].diff().astype(bool).map({False: 'stay', True: 'switch'})
+    df["stay/switch"] = (
+        df["box rank"].diff().astype(bool).map({False: "stay", True: "switch"})
+    )
 
     # Correct some columns
     df["shape"] = df["shape"].astype(int)
     df["subject"] = df["subject"].astype(str)
     df.loc[df["push #"] == 1, "consecutive push intervals"] = df.loc[
         df["push #"] == 1, "push times"
-    ] # Make sure the first push interval of each block is just the time of that push
-    df.loc[df["push #"] == 1, "stay/switch"] = 'stay' # Count first push of each block as 'stay' push, so that stay pushes are a subset of same-box push intervals
+    ]  # Make sure the first push interval of each block is just the time of that push
+    df.loc[df["push #"] == 1, "stay/switch"] = (
+        "stay"  # Count first push of each block as 'stay' push, so that stay pushes are a subset of same-box push intervals
+    )
 
     # Finally, drop all push intervals with value 0 as these are bad data
     df = df[df["consecutive push intervals"] > 0]
@@ -335,8 +366,8 @@ def make_df(path: str, box_labels: list[str] = BOX_LABELS, box_positions: list[s
     # Categorize stimulus reliabilities
     for subject, kappa_filter in KAPPA_LEVELS.items():
         for label, values in kappa_filter.items():
-            df_filter = filter_df(df, {'subject': subject, 'kappa': values})
-            df.loc[df_filter.index, 'stimulus reliability'] = label
+            df_filter = filter_df(df, {"subject": subject, "kappa": values})
+            df.loc[df_filter.index, "stimulus reliability"] = label
 
     # Set index, refer to INDEX definition in utils
     df.set_index(list(INDEX), inplace=True)
@@ -379,9 +410,11 @@ def filter_df(
         mask = np.full(len(df), True)
         if attempt_index:
             keys = conds.keys()
-            if set(keys) == set(df.index.names[:len(keys)]):
+            if set(keys) == set(df.index.names[: len(keys)]):
                 try:
-                    return df.loc[tuple(conds.values())] # Bear in mind this will drop levels
+                    return df.loc[
+                        tuple(conds.values())
+                    ]  # Bear in mind this will drop levels
                 except:
                     pass
         for k, v in conds.items():
@@ -394,7 +427,9 @@ def filter_df(
     return df
 
 
-def get_blocks(df: pd.DataFrame, groupers: list = None, observed: bool = True, **kwargs) -> DataFrameGroupBy:
+def get_blocks(
+    df: pd.DataFrame, groupers: list = None, observed: bool = True, **kwargs
+) -> DataFrameGroupBy:
     """
     Group DataFrame by subject, session, and block.
 
@@ -408,7 +443,9 @@ def get_blocks(df: pd.DataFrame, groupers: list = None, observed: bool = True, *
     """
     if groupers is None:
         groupers = []
-    return df.groupby(["subject", "session", "block"] + groupers, observed = observed, **kwargs)
+    return df.groupby(
+        ["subject", "session", "block"] + groupers, observed=observed, **kwargs
+    )
 
 
 def process_block_safely(func: Callable) -> Callable:
@@ -595,7 +632,7 @@ def get_continuous_from_df_to_dict(df: pd.DataFrame, data_dir: str) -> (dict, li
     """
 
     # Retrieve the list of subjects and open their respective files
-    subjects = df.index.unique('subject').values
+    subjects = df.index.unique("subject").values
     files = {subj: open_subject_file(subj, data_dir) for subj in subjects}
 
     @process_block_safely
@@ -819,7 +856,9 @@ def populate_busyness(df: pd.DataFrame) -> (dict, set):
     return process_blocks(df, _inner)
 
 
-def extend_df(df: pd.DataFrame, blocks_dict: dict, col_name: str, by_box: bool = False) -> (dict, set):
+def extend_df(
+    df: pd.DataFrame, blocks_dict: dict, col_name: str, by_box: bool = False
+) -> (dict, set):
     """
     Extend the DataFrame by adding a new column with values from the provided blocks dictionary.
     The new column is filled with values corresponding to each box rank in the DataFrame.
@@ -874,14 +913,16 @@ def extend_df(df: pd.DataFrame, blocks_dict: dict, col_name: str, by_box: bool =
                 )
         else:
             # Assume each row of block_data is matched to each event in df
-            df.loc[df_block.index, col_name] = pd.Series(block_data, index = df_block.index)
+            df.loc[df_block.index, col_name] = pd.Series(
+                block_data, index=df_block.index
+            )
         return True  # Return True after processing the block
 
     # Process each block using the helper function _inner
     return process_blocks(df, _inner)
 
 
-def exclusion_criteria(df: pd.DataFrame) -> pd.DataFrame:
+def exclusion_criteria(df: pd.DataFrame, data_dir: str) -> pd.DataFrame:
     """
     Applies exclusion criteria to filter out data based on specific conditions.
 
@@ -889,9 +930,11 @@ def exclusion_criteria(df: pd.DataFrame) -> pd.DataFrame:
     1. Excludes blocks with fewer than 10 pushes.
     2. Excludes blocks with a schedule value of 80.
     3. Excludes rows where consecutive push intervals are greater than 30 s.
+    4. Excludes rows where the average vertical position exceeds 750 mm.
 
     Args:
         df: The DataFrame containing the data to be filtered.
+        data_dir: The directory path where the subject files are located.
 
     Returns:
         A filtered DataFrame that has had the exclusion criteria applied.
@@ -912,10 +955,51 @@ def exclusion_criteria(df: pd.DataFrame) -> pd.DataFrame:
         get_blocks(df_filtered[df_filtered["schedule"] == 80]).size().index
     )
 
-    # Exclude rows where consecutive push intervals are greater than 30 s
+    # Exclude pushes where the consecutive push intervals are greater than 30 s
     df_filtered = df_filtered.drop(
         df_filtered[df_filtered["consecutive push intervals"] > 30].index
     )
+
+    # Get blocks with valid position data
+    continuous_data, _ = get_continuous_from_df_to_dict(df_filtered, data_dir)
+    df_cont_content = []
+
+    for block, data in continuous_data.items():
+        if np.any(data["position"] != np.nan):
+            df_cont_content.append(
+                df_filtered.xs(
+                    block, level=("subject", "session", "block"), drop_level=False
+                )
+            )
+
+    # Exclude pushes where the average vertical position exceeds the height of the boxes (750 mm)
+    df_cont = pd.concat(df_cont_content)
+    for subject in df_cont.index.unique("subject"):
+        df_cont_subject = filter_df(df_cont, {"subject": subject})
+        for idx, row in df_cont_subject.iterrows():
+            try:
+                conds = dict(
+                    subject=subject,
+                    session=idx[INDEX.index("session")],
+                    block=idx[INDEX.index("block")],
+                )
+                time = continuous_data[tuple(conds.values())]["time"]
+                vertical = continuous_data[tuple(conds.values())]["position"][:, 2]
+                push_interval_end = row["push times"]
+                push_interval_start = (
+                    push_interval_end - row["consecutive push intervals"]
+                )
+                x = np.abs(
+                    time[None, :]
+                    - np.array([[push_interval_start], [push_interval_end]])
+                ).argmin(axis=1)
+                v = vertical[x[0] : x[1]]
+                mean_vertical = v[~np.isnan(v)].mean()
+                if not np.isnan(mean_vertical):
+                    if mean_vertical > 750:
+                        df_filtered = df_filtered.drop(idx)
+            except:
+                continue
     return df_filtered
 
 
@@ -924,7 +1008,7 @@ def bin_data(
     x: str,
     bins: int | list[float] = None,
     bin_width: float = None,
-    strategy: str = 'left'
+    strategy: str = "center",
 ) -> pd.Series:
     """
     Bins data in the specified column of the DataFrame, with support for different binning strategies. This function
@@ -943,6 +1027,7 @@ def bin_data(
             - 'full': Labels the bins using the full interval (i.e., both left and right edges).
             - 'left': Labels the bins using only the left edge.
             - 'right': Labels the bins using only the right edge.
+            - 'center': Labels the bins using the center of the bin.
             Defaults to 'left'.
 
     Returns:
@@ -952,25 +1037,32 @@ def bin_data(
         df = pd.DataFrame({'value': np.random.randn(100)})
         df['binned'] = bin_data(df, 'value', bins=5, strategy='right')
     """
-
     # Perform initial binning based on n_bins or custom bin edges
     if bins is None:
         bins = 20
         if bin_width:
-            bins = np.arange(start=df[x].min(), stop=df[x].max() + bin_width, step=bin_width)
+            bins = np.arange(
+                start=df[x].min(), stop=df[x].max() + bin_width, step=bin_width
+            )
     _bins = pd.cut(df[x], bins=bins, include_lowest=True)
-    dtype = df[x].dtype  # Get the dtype of the column to maintain consistency in bin edges
+    dtype = df[
+        x
+    ].dtype  # Get the dtype of the column to maintain consistency in bin edges
 
     # Select the appropriate bin edges based on the strategy
     match strategy:
-        case 'full':
+        case "full":
             bin_edges = _bins.cat.categories
-        case 'right':
+        case "right":
             bin_edges = _bins.cat.categories.right.astype(dtype)
-        case _:
+        case "left":
             bin_edges = _bins.cat.categories.left.astype(dtype)
-    print(_bins)
+        case _:
+            bin_edges = (
+                (_bins.cat.categories.left + _bins.cat.categories.right) / 2
+            ).astype(dtype)
+
     # Apply the bin labels to the original data
-    return pd.cut(df[x], bins=bins, include_lowest=True, labels=bin_edges).cat.remove_unused_categories()
-
-
+    return pd.cut(
+        df[x], bins=bins, include_lowest=True, labels=bin_edges
+    ).cat.remove_unused_categories()
