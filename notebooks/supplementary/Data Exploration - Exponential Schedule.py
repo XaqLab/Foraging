@@ -16,7 +16,7 @@
 # %% [markdown]
 # # Intro
 #
-# This notebook provides a descriptive analysis of behavior and walks through observations that contextualize later analysis. As in the `Data Cleaning` notebook, the emphasis will be on the pushes instead of the continuous variables.
+# This notebook provides a descriptive analysis of behavior under the abandoned exponential schedule and walks through observations that contextualize later analysis. As in the `Data Cleaning` notebook, the emphasis will be on the pushes instead of the continuous variables.
 
 # %%
 # %load_ext autoreload
@@ -31,7 +31,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
-from foraging.config.constants import SEED
+from foraging.config.constants import SEED, KAPPA_LEVELS
 from foraging.plotting import PALETTE, PALETTE_DARK, bp, enhanced_violinplot
 
 from foraging.plotting.behavior import (
@@ -49,7 +49,7 @@ from foraging.plotting.behavior import (
     plot_wait_times_by_sessions,
     plot_matching_law
 )
-from foraging.utils.data import display_df, exclusion_criteria, filter_df, make_df
+from foraging.utils.data import display_df, exclusion_criteria, filter_df, make_df, get_blocks
 
 # Filter out annoying matplotlib logs
 mlogger = logging.getLogger("matplotlib")
@@ -57,9 +57,12 @@ mlogger.setLevel(logging.WARNING)
 
 # Constants
 RNG = np.random.default_rng(SEED)
-DATA_DIR = "../data"
+DATA_DIR = "../../data"
 EXPERIMENT_DIR = os.path.join(DATA_DIR, 'experiments')
-FIGURES_DIR = "../figures"
+FIGURES_DIR = "../../figures"
+
+# Modify the default kappa levels once
+KAPPA_LEVELS["viktor"] = {"low": [0.01], "high": [0.1, 0.2]}
 
 # %% [markdown]
 # # Load Data
@@ -70,9 +73,16 @@ FIGURES_DIR = "../figures"
 
 # %%
 # %%capture --no-display
-df = make_df(os.path.join(DATA_DIR, "experiments"))
+df = make_df(EXPERIMENT_DIR)
+df = df.xs(1, level="shape", drop_level=False)
 df = exclusion_criteria(df, EXPERIMENT_DIR)
-display_df(df, ["box", "push times", "reward outcomes"])
+
+# Remove some unnecessary blocks
+df = df.drop(
+    get_blocks(df[(df["schedule"] == 30) | (df["schedule"] == 7)]).size().index
+)
+df = df.drop(df[(df["schedule"] == 15) & (df["box"] == 'medium')].index)
+display_df(df, ["box", "push times", "reward outcomes"]);
 
 # %% [markdown]
 # ## Data Overview
@@ -97,19 +107,6 @@ sns.violinplot(block_summary, x="subject", y="n pushes per block", cut=0)
 plt.title("# pushes per block");
 
 # %% [markdown]
-# Here is a bird's eye view of one subject's behavioral data over the course of the entire experiment. Each row is a session of consecutive blocks. Each block's pushes are displayed as a raster plot over the duration of that block, and the pushes at each box position are stacked on top of each other (top to bottom is 3, 2, 1). Finally, pushes are colored by box schedule, so we can see how the schedules are assigned to each box over consecutive blocks.
-
-# %%
-conds = dict(subject="viktor")
-plot_experiment_overview(
-    df,
-    conds=conds,
-    title_prefix="Overview of pushes over entire experiment",
-    annotate_block=True,
-    fig_kwargs=dict(figsize=(40, 50)),
-);
-
-# %% [markdown]
 # # Explore Data
 # The behavioral quantities we will explore are: consecutive push intervals, wait times, stay pushes, switch pushes, runlengths of consecutive choices, etc. These are defined as follows:
 # + <span style='color:#03a9fc'>consecutive push intervals</span>: time between consecutive pushes.
@@ -126,7 +123,7 @@ plot_experiment_overview(
 # Here we show activity in an example block unfolding over time. Blue = fast box, yellow = medium box, red = slow box. Filled markers indicate rewarded pushes, unfilled unrewarded.
 
 # %%
-conds = dict(subject="viktor", session=20230811, block=3)
+conds = dict(subject="viktor", session=20221011, block=3)
 plot_pushes(df, conds, fig_kwargs=dict(figsize=(30, 2.2)), legend=False);
 
 # %% [markdown]
@@ -164,103 +161,19 @@ bp(enhanced_violinplot)(
 );
 
 # %% [markdown]
-# There is a bimodality present in a couple subjects. Below, we split the data into the exponential schedule and gamma schedule.
-
-# %%
-fig, ax = plt.subplots()
-bp(sns.swarmplot)(
-    df.xs(1, level="shape")
-    .groupby("subject")
-    .sample(10000, random_state=SEED, replace=True),
-    x="subject",
-    y="wait times",
-    hue="box",
-    palette=PALETTE_DARK,
-    legend=False,
-    log_scale=True,
-    size=0.25,
-    dodge=True,
-    ax=ax,
-)
-bp(enhanced_violinplot)(
-    df.xs(1, level="shape"),
-    x="subject",
-    y="wait times",
-    hue="box",
-    palette=PALETTE,
-    title_prefix="Distribution of wait times under exponential schedule",
-    y_unit="s",
-    cut=0,
-    inner=None,
-    log_scale=True,
-    common_norm=True,
-    ax=ax,
-);
-
-# %%
-fig, ax = plt.subplots()
-bp(sns.swarmplot)(
-    df.xs(10, level="shape")
-    .groupby("subject")
-    .sample(10000, random_state=SEED, replace=True),
-    x="subject",
-    y="wait times",
-    hue="box",
-    palette=PALETTE_DARK,
-    legend=False,
-    log_scale=True,
-    size=0.25,
-    dodge=True,
-    ax=ax,
-)
-bp(enhanced_violinplot)(
-    df.xs(10, level="shape"),
-    x="subject",
-    y="wait times",
-    hue="box",
-    palette=PALETTE,
-    title_prefix="Distribution of wait times under gamma schedule",
-    y_unit="s",
-    cut=0,
-    inner=None,
-    log_scale=True,
-    common_norm=True,
-    ax=ax,
-);
-
-# %% [markdown]
-# It's clear the bimodality results from some property of the exponential schedule. To confirm this and see if there are any other trends that emerge throughout the experiment, we'll next show the distribution of push intervals in each session. Since humans do not have session data, they are omitted for now.
-
-# %%
-# %%capture --no-display
-plot_wait_times_by_sessions(df);
-
-# %% [markdown]
-# These swarmplots are useful for visualizing individual data points by jittering the ones that collide, to the limit that the data points aren't too cluttered and impede comprehension. The x-axis denotes days since the first session (with day 0 corresponding to the first session) and the y-axis are the log push intervals in each session. For Dylan and Marco, the number of data points is manageable but for Viktor they are so numerous that you can see where the plot struggles to fit all the data points. Each swarmplot is preceded by an experiment overview where, for each session, we denote how many blocks had a certain parameter value, which gives us a sense of the timeline for how the experiment evolved and when decisions were made to change the experiment. The x-axes for a swarmplot and its corresponding experiment overview are aligned for ease of comparison.
-#
-# One thing to look for are sessions that look distributionally different from the others, e.g. day 0 for Dylan shows a bump around extremely fast push intervals around 1 second, and days 53-59 contain a big bump of pushes right above 1 second. For Marco, day 4 is extremely scarce in pushes compared to other days. It's interesting to see heterogeneous patterns in the pushes, in particular for Viktor. In fact, we see three distinct patterns of clusters organized in time: days 0-91 exhibit strong bimodality, days 100-129 are more unimodal and concentrate towards larger push intervals, and days 300-317 concentrate on even larger push intervals. Notice that day 300 coincides with a change in the experiment from the exponential schedule to gamma schedule.
-#
-# Since the exponential schedule depicts atypical behavior, this notebook will be dedicated to the gamma schedule and a supplementary notebook will focus on the exponential schedule.
-
-# %%
-df = filter_df(df, {"shape": 10})
-
-# %% [markdown]
 # Here are the distributions of wait times at each box as a function of stimulus reliability.
 
 # %%
 plot_wait_times(df);
 
 # %% [markdown]
-# The distributions are very similar across stimulus reliabilities, suggesting subjects are able to differentiate the boxes to a similar degree regardless of task difficulty. The distributions seem to grow slightly sharper as reliability increases.
-#
-# Next, we show the distribution of consecutive push intervals between all pairs of boxes simultaneously, similar to a transition matrix where the rows are the boxes the subject first pushes and the columns are where they push next.
+# There is a striking bimodality in the wait time distributions that is preserved across subjects-- there is a fast mode and a slow mode.
 
 # %%
 plot_stay_switch_pushes(df);
 
 # %% [markdown]
-# First, the switch times are qualitatively similar across all pairs of boxes. Second, the stay times across all boxes share bimodal features covering about the same range, but the fast box looks qualitatively different from the other boxes.
+# First, for Dylan, the switch times and stay times are remarkably similar across all pairs of boxes. Generally speaking, for each subject the switch times are qualitatively similar, suggesting that most of the time spent pushing different boxes is travel time.  Second, for each subject, the stay times look qualitatively similar to each other as well.
 #
 # Finally, the distribution of consecutive push intervals can reveal the complexity of the decision process-- for example, suppose the decision space is {push at $\text{box}_i$ , wait}, and each timestep the animal makes a decision whether and where to push. Then, ignoring travel cost, a simple Hidden Markov Model (HMM) of this decision process would result in exponentially distributed intervals between pushes. Fitting an exponential distribution to each empirical distribution via maximum likelihood estimation and then performing a Kolmogorov-Smirnoff test under the null hypothesis that the data is drawn from the fitted exponential distributions resulted in rejecting the null hypothesis in each case, so the push intervals are likely the result of a much more complicated decision process.
 #
@@ -276,7 +189,7 @@ plot_runlengths(df, stat="probability");
 # Aside from fitting in slightly more pushes at the fast box before switching when the reliability is high, there isn't much difference in runlengths between reliabilities.
 
 # %% [markdown]
-# ### Wait Times vs Reward Times
+# ### Accuracy
 #
 # Here, we show each wait time along with the reward interval of the box that was pushed. Basically, we want to see how well the subjects timed their pushes to the reward interval of the box. Our expectation is that as the stimulus reliability increases, the subjects should be able to time their pushes more reliably to occur after the reward interval has elapsed.
 
@@ -287,7 +200,7 @@ plot_push_intervals_vs_reward_intervals(
 );
 
 # %% [markdown]
-# As expected, the correlation and slope between the wait times and reward intervals increases with stimulus reliability.
+# Contrary to expectations, there appears to be no correlation between the wait times and reward intervals under any reliability conditions.
 
 # %% [markdown]
 # ### Surprise
@@ -296,6 +209,7 @@ plot_push_intervals_vs_reward_intervals(
 
 # %%
 # %%capture --no-display
+
 plot_next_push_surprise(
     df,
     fig_kwargs=dict(figsize=(20, 10)),
@@ -330,7 +244,7 @@ plot_reward_rates_across_blocks(
 );
 
 # %% [markdown]
-# As reliablity increases, the total reward rate combined across all boxes also slightly increases. Also, the starting reward rate in the first 10 seconds of the block increases with reliability. Next, we decompose the reward rate into different boxes.
+# The reward rates are very similar across subjects, starting off low and then increasing to a steady state that is only a bit lower than the gamma schedule! It is possible that even under this flawed paradigm, the subjects are still achieving some subjective reward rate.
 
 # %%
 # %%capture --no-display
@@ -343,7 +257,7 @@ plot_reward_rates_across_blocks(
 
 
 # %% [markdown]
-# Clearly, the reward rates are ordered the way we would expect them, fast > medium > slow. It's interesting that in the first ten seconds of the block across all reliabilities, the reward rates are also ordered, but generally start off low when reliability is low and collectively increase with reliability.
+# The reward rates are somewhat ordered fast > medium > slow in Dylan and Marco's data and strongly ordered in Viktor's. There isn't an appreciable difference between reliabilities.
 
 # %% [markdown]
 # ### Wait Time
@@ -357,7 +271,7 @@ def _auxiliary_plot(
     **kwargs,
 ):
     schedules = (
-        filter_df(df, {"stimulus reliability": "high", "subject": "viktor"})[
+        filter_df(df, {"subject": "viktor"})[
             ["box", "schedule"]
         ]
         .value_counts()
@@ -365,7 +279,6 @@ def _auxiliary_plot(
     )
     for box, schedule in schedules:
         ax.axhline(schedule, color=palette[box], linestyle="--")
-
 
 plot_quantity_across_blocks(
     df,
@@ -376,7 +289,7 @@ plot_quantity_across_blocks(
 );
 
 # %% [markdown]
-# Across all reliabilities, the wait times start off low and close together before differentiating as the block progresses. When reliability is low, the wait times are similar across boxes and differentiation occurs slowly compared to higher reliabilities. When reliability is high, the subjects's pushes are guided by the color cue, and so their pushes distinguish the boxes quickly. Next, we will see if how this translates to accuracy by counting the fraction of rewarded pushes in each time bin across blocks.
+# Dylan's and Marco's wait times are within range of the schedules but 1) fail to distinguish them when reliability is low 2) distinguish them weakly when the reliability is high. On the other hand, Viktor is pushing much more rapidly and distinguishing the schedules, for the same reward rate as the other two. This should translate to the other two monkeys achieving more accurate pushes than Viktor, which we confirm below.
 #
 # ### Accuracy
 
@@ -386,7 +299,7 @@ plot_accuracy_across_blocks(
 );
 
 # %% [markdown]
-# The accuracies start off low but increase over time in the block. As reliability increases, they start off higher.
+# For Dylan, there doesn't really seem to be much of a trend in his accuracies. For Marco, when reliability is low, the accuracies start off low and then increase with time, whereas when the reliability is high they seem to start off where they converged in the low reliability case and stay stable. For Viktor, the accuracies look pretty stable throughout time and maybe even decreasing a little when the reliability is high.
 
 # %% [markdown]
 # ## Matching Law
@@ -402,13 +315,14 @@ plot_accuracy_across_blocks(
 plot_matching_law(df, palette="rocket", min_obs=10);
 
 # %% [markdown]
-# Across all subjects, there is undermatching as indicated by slopes < 1 and bias that improves with reliability.
-#
+# For all subjects, there is undermatching as indicated by the slopes < 1 and a small bias. Dylan and Marco show no appreciable difference between reliabilities, but Viktor does seem to show a modest improvement in matching and reduction in bias when the stimulus is more reliable.
 
 # %% [markdown]
 # # Conclusion
 #
 # To summarize:
-# + Subjects become more accurate as reliability increases
-# + Initially in the block, reward rates across boxes are low but increase and differentiate with experience in the block
-# + Undermatching and bias improve with reliability
+# + Stimulus reliability has little effect on behavior
+# + Reward rate does increase with time in block but is less than what is achievable under the Gamma schedule
+# + Subjects weakly differentiate the boxes
+# + Viktor seems to have found a strategy where he pushes faster than the other subjects but achieves the same reward rate overall, even at the cost of lowered accuracy per push
+# + Modest undermatching and bias are observed across all subjects, with Viktor showing slight sensitivity to stimulus reliability

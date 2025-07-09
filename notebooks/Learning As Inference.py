@@ -34,8 +34,6 @@ from foraging import plotting, utils
 from foraging.config.constants import BOX_COLORS, BOX_LABELS, SEED
 from foraging.plotting import PALETTE, bp, format_yticks, per_block, titler
 
-# %%capture --no-display
-# %%capture --no-display
 from foraging.plotting.beliefs import (
     plot_fisher_info,
     plot_optimal_fisher_uncertainty,
@@ -56,10 +54,10 @@ from foraging.utils.models import GammaBoxBelief, IndependentBoxesBelief
 
 pd.options.mode.copy_on_write = True
 
-
 # constants
 RNG = np.random.default_rng(SEED)
 DATA_DIR = "../data"
+EXPERIMENT_DIR = os.path.join(DATA_DIR, 'experiments')
 
 # %% [markdown]
 # # Load data
@@ -68,7 +66,7 @@ DATA_DIR = "../data"
 
 # %%
 df = make_df(os.path.join(DATA_DIR, "experiments"))
-df = exclusion_criteria(df)
+df = exclusion_criteria(df, EXPERIMENT_DIR)
 df = filter_df(df, {"shape": 10})
 display_df(df, ["box", "push times", "reward outcomes"])
 
@@ -86,14 +84,38 @@ display_df(df, ["box", "push times", "reward outcomes"])
 # Here, we show the Fisher information as a function of wait time for different boxes, along with the optimal waiting times that maximize the Fisher information, under the gamma schedule. The exponential schedule will be treated separately in a supplementary notebook.
 
 # %%
+# Cramer-Rao lower bound for standard deviation as a function of number of observations
+import numpy as np
+import matplotlib.pyplot as plt
 
+means = [7, 14, 21]
+shape = 10
+n_obs = np.arange(1, 51)  # 1 to 50 observations
+colors = list(PALETTE.values())
+fisher_vals = [0.1303, 0.0326, 0.0145]
+plt.figure(figsize=(8, 5))
+for i, mu in enumerate(means):
+    fisher_info = shape / mu**2
+    std_crlb = np.sqrt(1 / (n_obs * fisher_info))
+    std_crlb_2 = np.sqrt(1/(n_obs * fisher_vals[i]))
+    plt.plot(n_obs, std_crlb, label=f"mean schedule = {mu}", color = colors[i])
+    plt.plot(n_obs, std_crlb_2, color = colors[i], linestyle = "--")
+
+plt.xlabel("# pushes")
+plt.ylabel("standard deviation")
+plt.title("Uncertainty shrinking with number of pushes (Perfectly reliable color cues vs reward observations only)")
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+# %%
 plot_fisher_info(
     np.linspace(1, 30, 100),
     schedules=[7, 14, 21],
     alpha=10,
     title="Fisher information for Gamma schedule",
 )
-plt.show()
+plt.show();
 
 # %% [markdown]
 # The optimal wait times that maximize the Fisher information of each box occur at distinct timepoints ordered by mean schedules. Notice that the maximal Fisher information of the two slower boxes are close together in value compared to the fast box, suggesting that the fast box may be easiest to figure out first because it requires not only fewer but also shorter pushes to reach a certain precision. We show how the precision grows with more observations by showing how the standard deviation, the square root of the Cramer-Rao lower bound, decreases with the number of obervations.
@@ -108,6 +130,7 @@ plot_optimal_fisher_uncertainty(
 )
 plt.show()
 
+
 # %% [markdown]
 # To get an estimate of the schedule down to within ±2-3 of the true schedule, one immediately starts of with such a precision after one push at the fast box under the gamma schedule. After 15-20 pushes, the precision of all boxes goes down to at least ±2-3 of the true schedule.
 
@@ -121,8 +144,6 @@ plt.show()
 # Here is an example block's belief trajectories.
 
 # %%
-
-
 # Create a posterior class that is independent for each box
 class Posterior(IndependentBoxesBelief):
     def __init__(self, n_boxes: int, *args, **kwargs):
@@ -134,7 +155,7 @@ schedule_beliefs, _ = process_blocks(
     df, compute_posteriors, Posterior, schedules=schedule_candidates, shape=10
 )
 
-conds = dict(subject="viktor", session=20230811, block=3)
+conds = dict(subject="viktor", session=20230807, block=5)
 plot_schedule_beliefs_in_block(df, schedule_beliefs, conds)
 
 # %%

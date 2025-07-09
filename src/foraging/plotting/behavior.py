@@ -540,7 +540,7 @@ def plot_recent_rewards_vs_push_percentiles(
 
 
 @legend_handler
-def plot_previous_push_interval_vs_push_percentiles(
+def plot_previous_push_interval_vs_push_interval(
     df: pd.DataFrame, n_samples: int = 5000, seed: int = SEED, **kwargs
 ):
     """
@@ -564,7 +564,8 @@ def plot_previous_push_interval_vs_push_percentiles(
     }
     rng = np.random.default_rng(seed)
 
-    def _helper(subject: str):
+    # For each subject, sample pushes calculate the reward fraction of the past `window` seconds prior to each push
+    for subject in df.index.unique("subject"):
         df_subject = filter_df(df, {"subject": subject})
         for row in df_subject.sample(
             n_samples, replace=True, random_state=rng
@@ -589,10 +590,6 @@ def plot_previous_push_interval_vs_push_percentiles(
             df_rate_content["push intervals (s)"].append(
                 row["consecutive push intervals"]
             )
-
-    # For each subject, sample pushes calculate the reward fraction of the past `window` seconds prior to each push
-    for subject in df.index.unique("subject"):
-        _helper(subject)
 
     # Plot the previous push interval vs. push interval
     fig_kwargs = kwargs_handler(kwargs, "fig_kwargs", dict(figsize=(5, 5)))
@@ -623,6 +620,63 @@ def plot_previous_push_interval_vs_push_percentiles(
         label="unity",
     )
     ax.legend()
+
+    fig.tight_layout()
+    return ax
+
+
+@legend_handler
+def plot_push_interval_autocorrelation(
+    df: pd.DataFrame, lags: int = 10, **kwargs
+):
+    """
+    Plot the autocorrelation of consecutive push intervals for each subject over a range of lags, aggregated over blocks.
+
+    Args:
+        df: A DataFrame containing push data.
+        lags: The number of lags to calculate the autocorrelation for.
+        **kwargs: Additional keyword arguments passed to the plotting function.
+          - fig_kwargs: Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
+
+    Returns:
+        The axes containing the plots.
+    """
+
+    # Prepare data for plotting
+    autocorr_data = {
+        "subject": [],
+        "lag": [],
+        "autocorrelation": [],
+    }
+
+    for subject in df.index.unique("subject"):
+        df_subject = filter_df(df, {"subject": subject})
+        for _, df_block in df_subject.groupby(level=["session", "block"]):
+            push_intervals = df_block["consecutive push intervals"].dropna()
+            if len(push_intervals) > 1:
+                for lag in range(1, lags + 1):
+                    autocorr_data["subject"].append(subject)
+                    autocorr_data["lag"].append(lag)
+                    autocorr_data["autocorrelation"].append(push_intervals.autocorr(lag))
+
+    # Convert to DataFrame
+    df_autocorr = pd.DataFrame(autocorr_data)
+
+    # Plot the autocorrelation
+    fig_kwargs = kwargs_handler(kwargs, "fig_kwargs")
+    fig, ax = plt.subplots(**fig_kwargs)
+    sns.lineplot(
+        data=df_autocorr,
+        x="lag",
+        y="autocorrelation",
+        hue="subject",
+        ax=ax,
+        **kwargs,
+    )
+    ax.set_title("Autocorrelation of Push Intervals")
+    ax.set_xlabel("Lag")
+    ax.set_ylabel("Autocorrelation")
+    ax.axhline(0, linestyle="--", color="black", linewidth=1)
 
     fig.tight_layout()
     return ax
@@ -1189,7 +1243,7 @@ def plot_wait_times(
         bp(sns.swarmplot)(
             df_subj,
             x="stimulus reliability",
-            order=stim_reliabilities[subj].keys(),
+            order=list(stim_reliabilities[subj].keys()),
             y="wait times",
             hue="box",
             palette=palette_dark,
@@ -1200,7 +1254,7 @@ def plot_wait_times(
         bp(enhanced_violinplot)(
             df_subj,
             x="stimulus reliability",
-            order=stim_reliabilities[subj].keys(),
+            order=list(stim_reliabilities[subj].keys()),
             y="wait times",
             hue="box",
             palette=palette,
@@ -1943,19 +1997,147 @@ def plot_matching_law(
     """
 
     # Bin pushes by time, group by box, count rewards and pushes
-    x_bins = "time"
-    df = df.copy()
-    bin_kwargs = kwargs_handler(kwargs, "bin_kwargs", dict(bin_width=120))
-    df[x_bins] = bin_data(df, "push times", **bin_kwargs)
-    grouped = get_blocks(df, ["stimulus reliability", "time", "box"])
+    grouped = get_blocks(df, ["stimulus reliability", "box"])
     rr = grouped["reward outcomes"].sum().to_frame()  # .reset_index()
     rr["pushes"] = grouped.size()  # .reset_index()[0]
 
     # Convert to relative rates in each time bin
-    total_pushes = get_blocks(rr, ["stimulus reliability", "time"])["pushes"].sum()
-    total_rewards = get_blocks(rr, ["stimulus reliability", "time"])[
+    total_pushes = get_blocks(rr, ["stimulus reliability"])["pushes"].sum()
+    total_rewards = get_blocks(rr, ["stimulus reliability"])[
         "reward outcomes"
     ].sum()
+    rr = pd.merge(
+        rr,
+        total_pushes,
+        on=["subject", "session", "block", "stimulus reliability"],
+        suffixes=["", "_total"],
+    )
+    rr = pd.merge(
+        rr,
+        total_rewards,
+        on=["subject", "session", "block", "stimulus reliability"],
+        suffixes=["", "_total"],
+    )
+    rr["relative_pushes"] = rr["pushes"] / rr["pushes_total"]
+    rr["relative_rewards"] = rr["reward outcomes"] / rr["reward outcomes_total"]
+
+    # Drop rows with NaN or infinite values
+    rr = rr.replace([np.inf, -np.inf], np.nan).dropna()
+
+    # For each block, fit matching law
+    @process_block_safely
+    def _inner(df: pd.DataFrame, index: tuple):
+        df_block = df.loc[index]
+        slopes, intercepts, observed_time_bins = [], [], []
+        if len(df_block) < 2:
+            return None
+        X = sm.add_constant(df_block["relative_rewards"])
+        y = df_block["relative_pushes"]
+        model = sm.OLS(y, X).fit()
+        try:
+            slopes.append(model.params[1])
+            intercepts.append(model.params[0])
+        except:
+            return None
+
+        return pd.DataFrame(
+            {"slope": slopes, "intercept": intercepts}
+        )
+
+    result = process_blocks(rr, _inner)
+
+    # Merge all matching law fits into one DataFrame
+    merged_df_list = []
+    for (subject, session, block), _df in result[0].items():
+        # Add columns for subject, session, and block
+        _df["subject"] = subject
+        _df["session"] = session
+        _df["block"] = block
+        _df["stimulus reliability"] = df.loc[(subject, session, block)].index.unique(
+            "stimulus reliability"
+        )[0]
+
+        # Append the DataFrame to the list
+        merged_df_list.append(_df)
+
+    # Concatenate all DataFrames in the list
+    merged_df = pd.concat(merged_df_list, ignore_index=True)
+    fig_kwargs = kwargs_handler(
+        kwargs, "fig_kwargs", {"sharey": True, "sharex": True, "nrows": 2, "ncols": 1, "figsize": (5, 5)}
+    )
+
+    @legend_handler
+    def _plot(i, subj, **kwargs):
+        df_subj = filter_df(merged_df, {"subject": subj})
+        fig, ax = fig_init(**fig_kwargs)
+        if min_obs:
+            df_subj = df_subj.groupby(
+                ["stimulus reliability"], observed=True, as_index=False
+            ).filter(lambda g: len(g) >= min_obs)
+        sns.barplot(
+            df_subj,
+            x="stimulus reliability",
+            order=list(stim_reliabilities[subj].keys()),
+            y="slope",
+            hue="stimulus reliability",
+            hue_order=list(stim_reliabilities[subj].keys()),
+            ax=ax[0],
+            **kwargs,
+        )
+        sns.barplot(
+            df_subj,
+            x="stimulus reliability",
+            order=list(stim_reliabilities[subj].keys()),
+            y="intercept",
+            hue="stimulus reliability",
+            hue_order=list(stim_reliabilities[subj].keys()),
+            ax=ax[1],
+            **kwargs,
+        )
+
+        fig.suptitle(f"Matching law for {subj}")
+        fig.tight_layout()
+        return ax
+
+    subject_plotter(merged_df["subject"].unique(), _plot, **kwargs)
+
+
+def plot_matching_law_across_blocks(
+    df: pd.DataFrame,
+    stim_reliabilities: list = KAPPA_LEVELS,
+    min_obs: int = 10,
+    **kwargs,
+):
+    """
+    Calculate and visualize the slopes and intercepts of the matching law for each subject over time.
+
+    Args:
+        df: A DataFrame containing push data.
+        stim_reliabilities: A list of stimulus reliability levels for each subject.
+        min_obs: The minimum number of observations required in a time bin to include it in the analysis.
+        **kwargs: Additional keyword arguments.
+            - bin_kwargs: Dictionary to specify binning properties for time (passed to `bin_data`).
+            - fig_kwargs: Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
+
+    Returns:
+        None
+    """
+
+    # Bin pushes by time, group by box, count rewards and pushes
+    x_bins = "time"
+    df = df.copy()
+    bin_kwargs = kwargs_handler(kwargs, "bin_kwargs", dict(bin_width=30))
+    df[x_bins] = bin_data(df, "push times", **bin_kwargs)
+    grouped = get_blocks(df, ["stimulus reliability", "time", "box rank"])
+    rr = grouped["reward outcomes"].sum().to_frame()
+    rr["pushes"] = grouped.size()
+    rr['theoretical_rewards'] = grouped['schedule'].apply(lambda x: 1/x.unique()[0])
+
+    # Convert to relative rates in each time bin
+    grouped = get_blocks(rr, ["stimulus reliability", "time"])
+    total_pushes = grouped["pushes"].sum()
+    total_rewards = grouped["reward outcomes"].sum()
+    total_theoretical_rewards = grouped['theoretical_rewards'].sum()
     rr = pd.merge(
         rr,
         total_pushes,
@@ -1968,8 +2150,15 @@ def plot_matching_law(
         on=["subject", "session", "block", "stimulus reliability", "time"],
         suffixes=["", "_total"],
     )
+    rr = pd.merge(
+        rr,
+        total_theoretical_rewards,
+        on=["subject", "session", "block", "stimulus reliability", "time"],
+        suffixes=["", "_total"],
+    )
     rr["relative_pushes"] = rr["pushes"] / rr["pushes_total"]
     rr["relative_rewards"] = rr["reward outcomes"] / rr["reward outcomes_total"]
+    rr["relative_theoretical_rewards"] = rr["theoretical_rewards"] / rr["theoretical_rewards_total"]
 
     # Drop rows with NaN or infinite values
     rr = rr.replace([np.inf, -np.inf], np.nan).dropna()
@@ -1985,6 +2174,7 @@ def plot_matching_law(
             if len(df_time) < 2:
                 continue
             X = sm.add_constant(df_time["relative_rewards"])
+            # X = sm.add_constant(df_time["relative_theoretical_rewards"])
             y = df_time["relative_pushes"]
             model = sm.OLS(y, X).fit()
             try:
