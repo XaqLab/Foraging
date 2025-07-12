@@ -72,30 +72,31 @@ df = exclusion_criteria(df, EXPERIMENT_DIR)
 display_df(df, ["box", "push times", "reward outcomes"])
 
 # %% [markdown]
-# # Estimating the Schedules
+# # Inferring the Schedules
 #
-# In theory, observations about reward carries information about the task parameters that generate them. For example, if the subject is able to perfectly observe when reward becomes available at each box, then they can average these reward times to get an estimate of the mean schedule. It is known that the sample mean of observations drawn from a Gaussian distribution is the most efficient estimator of the population mean, in the sense that the variance achieves the Cramer-Rao lower bound. We will show the same is true for the sample mean of observations drawn from a Gamma distribution, which is the distribution we use in the experiment to generate reward intervals.
+# In theory, observations about reward carries information about the task parameters that generate them. For example, if the subject is able to perfectly observe the reward interval $t_{\text{reward}}$, which is the time that needs to elapse before reward becomes available, then they can average these reward intervals to get an estimate of the mean schedule $\mu$. It is known that the sample mean of observations drawn from a Gaussian distribution is the most efficient estimator of the population mean, in the sense that the variance achieves the Cramer-Rao lower bound. We will show the same is true for the sample mean of observations drawn from a Gamma distribution, which is the distribution we use in the experiment to generate reward intervals.
 #
-# Now, in reality, there are conditions in the experiment where the subject cannot perfectly observe the reward time, which is the case when the color cue encoding reward times contains spatiotemporal noise. On the other end of the spectrum, opposite from perfect observations, are completely unreliable observations that offer no information about the reward times, and hence no information about the schedules that generated them; there is still hope in the form of censored observations made available when the subject decides to push at a box. Then, the subject observes whether reward was made available by the time they pushed, and they can use this observation to update their beliefs about the schedules. For example, if the subject waits a long time at a box they believe to be fast but still does not observe reward when they push, that is an indication that the box may be slower than anticipated, and vice versa if the subject only waits a short time at a box they thought was slow and is pleasantly surprised to receive reward. Both the perfect observations and the censored observations correspond to distinct but related likelihood functions, described below:
+# Now, in the actual experiment, the rewards are hidden when they become available and the subject only receives potentially noisy observations of the reward interval. The observations take the form of a color cue that encodes the reward interval with some spatiotemporal noise. On one end of the spectrum lie completely unreliable observations that offer no information about the reward intervals, and hence no information about the schedules that generated them; however, there is still hope in the form of censored observations made available when the subject decides to push at the box. Then, the subject observes whether reward was available by the time they pushed at $t_{\text{push}}$, and they can use this observation to update their beliefs about the schedules. For example, if the subject waits a long time at a box they believe to be fast but still does not observe reward when they push, that is an indication that the box may be slower than anticipated, and vice versa if the subject only waits a short time at a box they thought was slow and is pleasantly surprised to receive reward. Both the perfect observations and the censored observations correspond to distinct but related likelihood functions, described below:
 #
 # *Perfect Observations*
 #
 # $$
-# L(\lambda) = gamma.pdf(o)
+# L(\lambda) = Gamma.pdf(t_{\text{reward}})
 # $$
 #
 # *Censored Observations*
 #
 # $$
-# L(\lambda) = gamma.cdf(o)
+# L(\lambda) = Gamma.cdf(t_{\text{push}})
 # $$
 #
 # From these, we can derive lower bounds on how fast the uncertainty can shrink for the ideal observer. First, in order to do that, we need to derive the Fisher information, which we go into next.
 #
-# #### Fisher Information
+# ## Fisher Information
 #
-# The Fisher information tells us how discriminable the experiment parameters, such as the schedules, of the experiment are from similar parameters-- the higher the Fisher information, the higher the theoretical limit on our knowledge or certainty about the parameters. This relationship is formally known as the Cramer-Rao lower bound, which states that the variance of any unbiased estimator can be no lower than the inverse Fisher information. For example, if the subject knew the reward times $\{t_r\}$ exactly, then they could average them to get an estimate of the mean schedule, whose variance would be minimal among all estimators and thus equal to the inverse Fisher information.
+# The Fisher information tells us how discriminable the experiment parameters, such as the mean schedules, of the experiment are from similar parameters-- the higher the Fisher information, the higher the theoretical limit on our knowledge or certainty about the parameters. This relationship is formally known as the Cramer-Rao lower bound, which states that the variance of any unbiased estimator can be no lower than the inverse Fisher information. For example, if the subject knew the reward intervals $\{t_{\text{reward}}\}$ exactly, then they could average them to get an estimate of the mean schedule, whose variance would be minimal among all estimators and thus equal to the inverse Fisher information. We'll prove this when we derive the Fisher information for these observations.
 #
+# TODO: check if inverse fisher info of shape info falls off fast. weak argument is that with enough blocks they'll know the shape param
 # Alas, in reality, the subject's observations take the form of 1) censored observations $(r_t \in \{0, 1\})$ ie. was reward available by the time they pushed at time $t$ 2) noisy color cues that encode the reward time $o(t_r)$. These observations carry less information about the schedule than direct observations of the reward time, so naturally the variance of the estimators using these observations will not be minimal. Nonetheless, it is useful to know an upper bound on the precision of the estimation problem. We derive the Fisher information of the mean schedule ($\lambda$) as a function of the wait time ($t$), and the shape parameter ($\alpha$), using only observations about reward.
 #
 # $$J(\lambda) = (\frac{t}{\lambda})^2 \frac{f^2(t|\lambda, \alpha)}{F(t|\lambda, \alpha)(1-F(t|\lambda, \alpha))}$$
