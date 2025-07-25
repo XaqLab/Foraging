@@ -8,9 +8,9 @@
   function addWidgetsRenderer() {
     var mimeElement = document.querySelector('script[type="application/vnd.jupyter.widget-view+json"]');
     var scriptElement = document.createElement('script');
-    
+
     var widgetRendererSrc = 'https://unpkg.com/@jupyter-widgets/html-manager@*/dist/embed-amd.js';
-    
+
     var widgetState;
 
     // Fallback for older version:
@@ -18,9 +18,9 @@
       widgetState = mimeElement && JSON.parse(mimeElement.innerHTML);
 
       if (widgetState && (widgetState.version_major < 2 || !widgetState.version_major)) {
-        
+
         var widgetRendererSrc = 'https://unpkg.com/@jupyter-js-widgets@*/dist/embed.js';
-        
+
       }
     } catch(e) {}
 
@@ -7923,7 +7923,7 @@ a.anchor-link {
 <div class="jp-OutputArea-child">
 <div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
 <div class="jp-RenderedText jp-OutputArea-output" data-mime-type="application/vnd.jupyter.stderr" tabindex="0">
-<pre>100%|██████████| 631/631 [00:10&lt;00:00, 61.99it/s] 
+<pre>100%|██████████| 631/631 [00:10&lt;00:00, 61.99it/s]
 </pre>
 </div>
 </div>
@@ -8163,10 +8163,10 @@ a.anchor-link {
 <div class="jp-OutputArea-child">
 <div class="jp-OutputPrompt jp-OutputArea-prompt"></div>
 <div class="jp-RenderedText jp-OutputArea-output" data-mime-type="text/plain" tabindex="0">
-<pre>marginal belief results: 
+<pre>marginal belief results:
 	(accuracy, p-value) = (0.6054308672762538, 0.0)
 	(r-squared, p-value) = (0.18314803645579225,0.0)
-perfect model results: 
+perfect model results:
 	(accuracy, p-value) = (0.6070933776669437, 0.0)
 	(r-squared, p-value) = (0.18392538584348228,0.0)
 </pre>

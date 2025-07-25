@@ -7,23 +7,26 @@ import seaborn as sns
 from matplotlib import pyplot as plt
 from matplotlib.colors import ListedColormap
 from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 from numpy.typing import ArrayLike
 from scipy.optimize import minimize_scalar
-from scipy.stats import gamma
 
-from foraging.config.constants import BOX_COLORS, BOX_LABELS
+from foraging.config.constants import BOX_COLORS, BOX_LABELS, HEATMAP_PALETTE, PALETTE
 from foraging.plotting import (
-    HEATMAP_PALETTE,
-    PALETTE,
     bp,
     fig_init,
     legend_handler,
+    multiplot,
     titler,
 )
 from foraging.plotting._base import subject_plotter
 from foraging.utils import INDEX, MIN_INDEX
 from foraging.utils._base import kwargs_handler
-from foraging.utils.beliefs import get_mean_beliefs, get_std_beliefs
+from foraging.utils.beliefs import (
+    fisher_info_reward_observations,
+    get_mean_beliefs,
+    get_std_beliefs,
+)
 from foraging.utils.data import (
     bin_data,
     filter_df,
@@ -74,19 +77,8 @@ def plot_fisher_info(
     schedules: list[float],
     palette: dict = PALETTE,
     alpha: float = 1,
-    figsize: tuple[float, float] = (10, 5),
-    title: str = "Fisher Information",
+    title: str = "Fisher Information Reward Observations",
 ):
-
-    # Calculate fisher information
-    def _fisher_info(t, schedule, alpha):
-        scale = schedule / alpha
-        cdf = gamma.cdf(t, a=alpha, scale=scale)
-        return (
-            (t / schedule) ** 2
-            * gamma.pdf(t, a=alpha, scale=scale) ** 2
-            / (cdf * (1 - cdf))
-        )
 
     # Find optimal push time for each schedule
     optimal_fisher_t = {}
@@ -95,19 +87,22 @@ def plot_fisher_info(
     _, ax = plt.subplots()
     colors = list(palette.values())
     for i, schedule in enumerate(schedules):
-        res = minimize_scalar(lambda x: -_fisher_info(x, schedule, alpha))
+        res = minimize_scalar(
+            lambda x: -fisher_info_reward_observations(x, schedule, alpha)
+        )
 
         # Result
         x_max = res.x
-        f_max = _fisher_info(x_max, schedule, alpha)
+        f_max = fisher_info_reward_observations(x_max, schedule, alpha)
 
         print(
             f"Optimal Fisher info for schedule {schedule} with shape = {alpha} occurs at t = {x_max:.4f}, with value {f_max:.4f}"
         )
         optimal_fisher_info[schedule] = f_max
         optimal_fisher_t[schedule] = x_max
-        fishers.append(_fisher_info(t, schedule, alpha))
+        fishers.append(fisher_info_reward_observations(t, schedule, alpha))
         ax.plot(t, fishers[i], label=schedule, color=colors[i])
+
     ax.set_ylabel("Fisher information")
     ax.set_xlabel("push time (s)")
     ymax = np.array(fishers).max()
@@ -132,45 +127,68 @@ def plot_fisher_info(
 
 
 @legend_handler
-def plot_optimal_fisher_uncertainty(
+def plot_cramer_rao_lb(
     n: int,
     schedules: list[float],
+    palette: dict = PALETTE,
     alpha: float = 1,
-    title: str = "Fisher-optimal uncertainty as a function of number of pushes",
+    title: str = "Cramer-Rao Lower Bound as a Function of # Observations",
 ):
+
+    # Plot Cramer-Rao lower bound for perfect observations vs reward observations
     n = np.arange(n) + 1
-
-    # Calculate fisher information
-    def _fisher_info(t, schedule, alpha):
-        scale = schedule / alpha
-        cdf = gamma.cdf(t, a=alpha, scale=scale)
-        return (
-            (t / schedule) ** 2
-            * gamma.pdf(t, a=alpha, scale=scale) ** 2
-            / (cdf * (1 - cdf))
-        )
-
-    # Find optimal push time for each schedule
-    optimal_fisher_t = {}
-    optimal_fisher_info = {}
-    for schedule in schedules:
-        res = minimize_scalar(lambda x: -_fisher_info(x, schedule, alpha))
-
-        # Result
-        x_max = res.x
-        f_max = _fisher_info(x_max, schedule, alpha)
-        optimal_fisher_info[schedule] = f_max
-        optimal_fisher_t[schedule] = x_max
-
-    _, ax = plt.subplots()
     colors = list(PALETTE.values())
-    for i, (k, v) in enumerate(optimal_fisher_info.items()):
-        ax.plot(n, np.sqrt(1 / (n * v)), label=k, color=colors[i])
-    ax.set_title(title)
-    ax.set_xlabel("# pushes")
-    ax.set_ylabel("standard deviation")
-    ax.legend()
-    return ax
+    for i, schedule in enumerate(schedules):
+
+        # Find optimal push time for each schedule
+        res = minimize_scalar(
+            lambda x: -fisher_info_reward_observations(x, schedule, alpha)
+        )
+        x_max = res.x
+        fisher_info_reward = fisher_info_reward_observations(x_max, schedule, alpha)
+        fisher_info_perfect = alpha / schedule**2
+
+        std_crlb_perfect = np.sqrt(1 / (n * fisher_info_perfect))
+        std_crlb_reward = np.sqrt(1 / (n * fisher_info_reward))
+
+        plt.plot(n, std_crlb_perfect, color=colors[i])
+        plt.plot(n, std_crlb_reward, color=colors[i], linestyle="--")
+
+    # Custom legend
+    legend_elements = []
+
+    # Add schedule patches
+    labels = list(PALETTE.keys())
+    for i, schedule in enumerate(schedules):
+        legend_elements.append(Patch(color=colors[i], label=labels[i]))
+
+    # Add line style indicators
+    legend_elements.append(
+        Line2D(
+            [0],
+            [0],
+            color="black",
+            linestyle="-",
+            linewidth=2,
+            label="Perfect observations",
+        )
+    )
+    legend_elements.append(
+        Line2D(
+            [0],
+            [0],
+            color="black",
+            linestyle="--",
+            linewidth=2,
+            label="Reward observations",
+        )
+    )
+
+    plt.xlabel("# observations")
+    plt.ylabel("standard deviation")
+    plt.title(title)
+    plt.legend(handles=legend_elements)
+    return plt.gca()
 
 
 def reward_beliefs3d(
@@ -232,7 +250,7 @@ def reward_beliefs3d(
     return ax
 
 
-@legend_handler(loc="upper left", bbox=(1.1, 1))
+@legend_handler(bbox=(1.15, 1))
 def plot_schedule_beliefs_in_block(
     df: pd.DataFrame,
     beliefs: dict[tuple, BeliefModule],
@@ -309,6 +327,7 @@ def plot_schedule_beliefs_in_block(
         sns.heatmap(
             interpolated_beliefs[:, i, :].T,
             cmap=heatmap_palette[box_labels[i]],
+            cbar_kws={"label": "probability"},
             ax=ax[i],
         )
         if show_stats:
@@ -422,30 +441,30 @@ def plot_schedule_beliefs_mean_and_std_across_blocks(
 
     # Get beliefs of each block
     def _inner(df: pd.DataFrame, index: tuple):
-        df_block = df.loc[index]
+        df_block = df.loc[index].reset_index()
         posteriors = np.array(beliefs[index].features)
         schedule_candidates = beliefs[index].support[0]
 
         # Get mean and std of beliefs
         mean = get_mean_beliefs(posteriors, schedule_candidates)
         std = get_std_beliefs(posteriors, schedule_candidates)
-        push_times = df_block["push times"].values
+        x_vals = df_block[x].values
         box = df_block["box"].values
         box_rank = df_block["box rank"].values
         res = {
-            (index + (i,)): [
+            (index + (i + 1,)): [
                 mean[i + 1, box_rank[i]],
                 std[i + 1, box_rank[i]],
-                push_times[i],
+                x_vals[i],
                 box[i],
-                i,
             ]
             for i in range(len(mean) - 1)
         }
 
         # Add prior
+        box_labels = list(PALETTE.keys())
         for i in df_block["box rank"].unique():
-            res[(index + (-i,))] = [mean[0, i], std[0, i], 0, box[0], 0]
+            res[(index + (-i,))] = [mean[0, i], std[0, i], 0, box_labels[i]]
         return res
 
     res, _ = process_blocks(df, _inner)
@@ -453,12 +472,12 @@ def plot_schedule_beliefs_mean_and_std_across_blocks(
     df_beliefs = pd.DataFrame.from_dict(
         res,
         orient="index",
-        columns=["mean of belief", "s.d. of belief", "push times", "box", "n pushes"],
+        columns=["mean", "standard deviation", x, "box"],
     )
+
     df_beliefs.index = pd.MultiIndex.from_tuples(
         df_beliefs.index, names=INDEX[:MIN_INDEX]
     )
-
     # Bin pushes by time
     if x == "push times":
         bin_kwargs = kwargs_handler(kwargs, "bin_kwargs", dict(bin_width=60))
@@ -476,16 +495,37 @@ def plot_schedule_beliefs_mean_and_std_across_blocks(
         bp(sns.lineplot)(
             df_subj,
             x=x,
-            y="mean of belief",
+            y="mean",
             hue="box",
             palette=palette,
             ax=ax[0],
             **kwargs,
         )
+
+        # Plot schedules on top of means
+        schedules = sorted(filter_df(df, conds=conds)["schedule"].unique())
+        colors = list(palette.values())
+        for i, schedule in enumerate(schedules):
+            ax[0].axhline(schedule, color=colors[i], linestyle="--")
+
+        actual_schedule_line = Line2D(
+            [0], [0], color="black", linestyle="--", label="actual schedule"
+        )
+
+        # If you have an existing legend, you can add this to the existing handles
+        existing_handles, existing_labels = ax[0].get_legend_handles_labels()
+        all_handles = existing_handles + [actual_schedule_line]
+        all_labels = existing_labels + ["actual schedule"]
+
+        # Remove the old legend and create a new one
+        if ax[0].get_legend():
+            ax[0].get_legend().remove()
+            ax[0].legend(handles=all_handles, labels=all_labels)
+
         bp(sns.lineplot)(
             df_subj,
             x=x,
-            y="s.d. of belief",
+            y="standard deviation",
             hue="box",
             palette=palette,
             ax=ax[1],

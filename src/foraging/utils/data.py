@@ -25,9 +25,9 @@ from foraging.utils import INDEX
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
+
 # import polars as pl
-
-
+# TODO: consider whether its worth encapsulating functions into a class, like in rl.py
 def get_subjects(path: str) -> list[str]:
     """
     Retrieve the names of all subjects from experiment matfiles.
@@ -128,7 +128,7 @@ def make_df(
         "duration": [],
         "box position": [],
         "push times": [],
-        "wait times": [],
+        "push intervals": [],
         "reward outcomes": [],
         "reward intervals": [],
     }
@@ -273,7 +273,7 @@ def make_df(
 
                             # Populate push-specific data
                             staging_dict["push times"].extend(push_times)
-                            staging_dict["wait times"].extend(
+                            staging_dict["push intervals"].extend(
                                 np.insert(
                                     push_times[1:] - push_times[:-1], 0, push_times[0]
                                 )
@@ -331,7 +331,7 @@ def make_df(
     df["box"] = df["box rank"].map(box_labels)
     df["box position label"] = df["box position"].map(box_pos_labels)
     df["prev box"] = get_blocks(df)["box"].shift(1)
-    df["normalized pushes"] = df["wait times"] / df["schedule"]
+    df["normalized pushes"] = df["push intervals"] / df["schedule"]
     df["consecutive push intervals"] = df["push times"].diff()
     df["eye tracking"] = df["eye tracking"].map({"TRUE": True, "FALSE": False})
     df["position tracking"] = df["position tracking"].map(
@@ -1006,7 +1006,7 @@ def exclusion_criteria(df: pd.DataFrame, data_dir: str) -> pd.DataFrame:
 def bin_data(
     df: pd.DataFrame,
     x: str,
-    bins: int | list[float] = None,
+    bins: int | list[float] = 20,
     bin_width: float = None,
     strategy: str = "center",
 ) -> pd.Series:
@@ -1021,7 +1021,7 @@ def bin_data(
         bins: Number of bins or list of bin edges.
             If an integer is provided, the data will be divided into that number of equal-width bins.
             If a list of floats is provided, it will specify the bin edges.
-            Defaults to 20.
+            Defaults to 30.
         bin_width: If specified, this is the width of each bin. Bins will be determined by dividing the range into equal-sized bins of this width.
         strategy: Labeling strategy for the bins.
             - 'full': Labels the bins using the full interval (i.e., both left and right edges).
@@ -1038,12 +1038,10 @@ def bin_data(
         df['binned'] = bin_data(df, 'value', bins=5, strategy='right')
     """
     # Perform initial binning based on n_bins or custom bin edges
-    if bins is None:
-        bins = 20
-        if bin_width:
-            bins = np.arange(
-                start=df[x].min(), stop=df[x].max() + bin_width, step=bin_width
-            )
+    if bin_width:
+        bins = np.arange(
+            start=df[x].min(), stop=df[x].max() + bin_width, step=bin_width
+        )
     _bins = pd.cut(df[x], bins=bins, include_lowest=True)
     dtype = df[
         x

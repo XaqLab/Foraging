@@ -1,5 +1,7 @@
 import numpy as np
 
+# Plotting constants
+# Palette
 BOX_COLORS = list(
     np.array([(0, 169, 252), (255, 131, 0), (255, 0, 0)]) / 255
 )  # blue, orange, red
@@ -8,10 +10,13 @@ BOX_COLORS_DARK = list(np.array([(0, 109, 163), (207, 107, 0), (207, 0, 0)]) / 2
 # BOX_COLORS_DARK = list(np.array([(60, 138, 0), (207, 107, 0), (207, 0, 0)]) / 255)
 
 BOX_LABELS = ["fast", "medium", "slow"]
-BOX_POSITIONS = ["S", "NE", "NW"]
-BOX_POSITIONS_ORDER = [2, 0, 1]  # NW S NE ordering
-KAPPA_CATEGORIES = ["low", "medium", "high"]
 
+PALETTE = dict(zip(BOX_LABELS, BOX_COLORS))
+PALETTE_DARK = dict(zip(BOX_LABELS, BOX_COLORS_DARK))
+HEATMAP_PALETTE = dict(zip(BOX_LABELS, ["Blues_r", "Oranges_r", "Reds_r"]))
+
+# Stimulus reliability
+KAPPA_CATEGORIES = ["low", "medium", "high"]
 KAPPA_LEVELS = {
     "dylan": dict(zip(["low", "high"], [(0.01, 0.04), (0.07, 0.1)])),
     "marco": dict(zip(["low", "high"], [(0.01,), (0.1, 0.2)])),
@@ -29,5 +34,9 @@ KAPPA_LEVELS = {
     ),
 }
 
-
+# Misc
+MULTIPLOT_FIGSIZE = (15, 5)
+BIN_WIDTH = 30
+BOX_POSITIONS = ["S", "NE", "NW"]
+BOX_POSITIONS_ORDER = [2, 0, 1]  # NW S NE ordering
 SEED = 42

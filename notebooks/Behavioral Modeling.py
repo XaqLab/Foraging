@@ -35,9 +35,6 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 from gymnasium import spaces
-
-# %%capture --no-display
-# %%capture --no-display
 from matplotlib import patches
 from matplotlib.lines import Line2D
 from numpy.random import PCG64, Generator
@@ -66,15 +63,7 @@ from foraging.plotting.behavior import (
     plot_pushes,
     plot_runlengths,
 )
-from foraging.utils import INDEX, MIN_INDEX, beliefs, stats
-from foraging.utils.data import (
-    bin_data,
-    display_df,
-    exclusion_criteria,
-    filter_df,
-    get_blocks,
-    make_df,
-)
+from foraging.utils.rl import ForagingEnv, ForagingFixedModelEnv, ForagingManager
 
 # Filter out annoying matplotlib logs
 mlogger = logging.getLogger("matplotlib")
@@ -85,6 +74,9 @@ SEED = 42
 RNG = np.random.default_rng(SEED)
 DATA_DIR = "../data"
 FIGURES_DIR = "../figures"
+
+# %% [markdown]
+# # V1
 
 # %%
 
@@ -254,37 +246,6 @@ class ForagingBeliefEnv(ForagingEnv):
         # Combine base observation with beliefs
         return np.concatenate([base_obs, self.beliefs])
 
-
-# %%
-
-naive_env_low_noise = make_vec_env(
-    lambda: ForagingEnv(
-        n_boxes=3,
-        shape=1.0,
-        schedules=[0.1, 0.05, 0.02],
-        max_steps=1000,
-        observation_noise=0.1,  # Adjust this to control observation uncertainty
-    ),
-    n_envs=1,
-)
-model = PPO("MlpPolicy", naive_env_low_noise, verbose=1)
-model.learn(total_timesteps=100_000)
-
-# %%
-
-naive_env_low_noise = make_vec_env(
-    lambda: ForagingBeliefEnv(
-        n_boxes=3,
-        shape=1.0,
-        schedules=[0.1, 0.05, 0.02],
-        assumed_schedules=[0.1, 0.05, 0.02],
-        max_steps=1000,
-        observation_noise=0.1,  # Adjust this to control observation uncertainty
-    ),
-    n_envs=1,
-)
-model = PPO("MlpPolicy", naive_env_low_noise, verbose=1)
-model.learn(total_timesteps=100_000)
 
 # %%
 
@@ -502,6 +463,74 @@ plot_reward_rates(
     list(envs.keys()),
     colors=colors,
 )
+
+# %% [markdown]
+# # V2
+
+# %%
+schedules = [7, 14, 21]
+under_matched_schedules = [10, 14, 18]
+noise_levels = {"no noise": 0, "low noise": 0.5, "high noise": 2}
+n_boxes = 3
+shape = 10.0
+env_maker = lambda schedules, observation_noise: ForagingEnv(
+    schedules, n_boxes=n_boxes, shape=shape, observation_noise=observation_noise
+)
+env_maker_fixed_model = lambda schedules, observation_noise: ForagingFixedModelEnv(
+    schedules, n_boxes=n_boxes, shape=shape, observation_noise=observation_noise
+)
+
+# Create environments
+envs = dict(
+    model_free_no_noise=DummyVecEnv(
+        [lambda: env_maker(schedules, noise_levels["no noise"])]
+    ),
+    model_free_low_noise=DummyVecEnv(
+        [lambda: env_maker(schedules, noise_levels["low noise"])]
+    ),
+    model_free_high_noise=DummyVecEnv(
+        [lambda: env_maker(schedules, noise_levels["high noise"])]
+        # ),
+        # correct_model_no_noise=DummyVecEnv(
+        #     [lambda: env_maker_fixed_model(schedules, noise_levels["no noise"])]
+        # ),
+        # correct_model_low_noise=DummyVecEnv(
+        #     [lambda: env_maker_fixed_model(schedules, noise_levels["low noise"])]
+        # ),
+        # correct_model_high_noise=DummyVecEnv(
+        #     [lambda: env_maker_fixed_model(schedules, noise_levels["high noise"])]
+        # ),
+        # under_matched_model_no_noise=DummyVecEnv(
+        #     [lambda: env_maker_fixed_model(under_matched_schedules, noise_levels["no noise"])]
+        # ),
+        # under_matched_model_low_noise=DummyVecEnv(
+        #     [lambda: env_maker_fixed_model(under_matched_schedules, noise_levels["low noise"])]
+        # ),
+        # under_matched_model_high_noise=DummyVecEnv(
+        #     [lambda: env_maker_fixed_model(under_matched_schedules, noise_levels["high noise"])]
+    ),
+)
+
+manager = ForagingManager(envs)
+manager.train_agents(total_timesteps=100000)
+manager.evaluate_agents()
+
+# %%
+colors = [
+    "blue",
+    "deepskyblue",
+    "cyan",
+    "green",
+    "lime",
+    "olive",
+    "purple",
+    "magenta",
+    "violet",
+]
+
+# Plot results
+manager.plot_reward_rates(colors=colors)
+
 
 # %%
 # Create figure with 3 subplots

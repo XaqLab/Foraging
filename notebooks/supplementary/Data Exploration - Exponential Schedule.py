@@ -31,25 +31,31 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
-from foraging.config.constants import SEED, KAPPA_LEVELS
-from foraging.plotting import PALETTE, PALETTE_DARK, bp, enhanced_violinplot
-
+from foraging.config.constants import KAPPA_LEVELS, PALETTE, PALETTE_DARK, SEED
+from foraging.plotting import bp, enhanced_violinplot
 from foraging.plotting.behavior import (
-    plot_accuracy_across_blocks,
+    plot_accuracy_across_block,
     plot_experiment_overview,
+    plot_matching_law,
     plot_next_push_surprise,
+    plot_push_intervals,
+    plot_push_intervals_by_sessions,
     plot_push_intervals_vs_reward_intervals,
+    plot_push_rates_across_block,
     plot_pushes,
-    plot_quantity_across_blocks,
-    plot_reward_rates_across_blocks,
+    plot_quantity_across_block,
+    plot_reward_rates_across_block,
     plot_runlengths,
     plot_stay_probabilities,
     plot_stay_switch_pushes,
-    plot_wait_times,
-    plot_wait_times_by_sessions,
-    plot_matching_law
 )
-from foraging.utils.data import display_df, exclusion_criteria, filter_df, make_df, get_blocks
+from foraging.utils.data import (
+    display_df,
+    exclusion_criteria,
+    filter_df,
+    get_blocks,
+    make_df,
+)
 
 # Filter out annoying matplotlib logs
 mlogger = logging.getLogger("matplotlib")
@@ -58,7 +64,7 @@ mlogger.setLevel(logging.WARNING)
 # Constants
 RNG = np.random.default_rng(SEED)
 DATA_DIR = "../../data"
-EXPERIMENT_DIR = os.path.join(DATA_DIR, 'experiments')
+EXPERIMENT_DIR = os.path.join(DATA_DIR, "experiments")
 FIGURES_DIR = "../../figures"
 
 # Modify the default kappa levels once
@@ -81,8 +87,8 @@ df = exclusion_criteria(df, EXPERIMENT_DIR)
 df = df.drop(
     get_blocks(df[(df["schedule"] == 30) | (df["schedule"] == 7)]).size().index
 )
-df = df.drop(df[(df["schedule"] == 15) & (df["box"] == 'medium')].index)
-display_df(df, ["box", "push times", "reward outcomes"]);
+df = df.drop(df[(df["schedule"] == 15) & (df["box"] == "medium")].index)
+display_df(df, ["box", "push times", "reward outcomes"])
 
 # %% [markdown]
 # ## Data Overview
@@ -95,7 +101,7 @@ print(df.groupby("subject")["schedule"].unique())
 # %%
 sns.histplot(df, x="duration")
 plt.title("Duration of block")
-plt.xlabel("duration (s)");
+plt.xlabel("duration (s)")
 
 # %%
 block_summary = (
@@ -104,7 +110,7 @@ block_summary = (
     .reset_index(name="n pushes per block")
 )
 sns.violinplot(block_summary, x="subject", y="n pushes per block", cut=0)
-plt.title("# pushes per block");
+plt.title("# pushes per block")
 
 # %% [markdown]
 # # Explore Data
@@ -124,7 +130,7 @@ plt.title("# pushes per block");
 
 # %%
 conds = dict(subject="viktor", session=20221011, block=3)
-plot_pushes(df, conds, fig_kwargs=dict(figsize=(30, 2.2)), legend=False);
+plot_pushes(df, conds, fig_kwargs=dict(figsize=(30, 2.2)), legend=False)
 
 # %% [markdown]
 # ## Pushes
@@ -136,7 +142,7 @@ fig, ax = plt.subplots()
 bp(sns.swarmplot)(
     df.groupby("subject").sample(10000, random_state=SEED, replace=True),
     x="subject",
-    y="wait times",
+    y="push intervals",
     hue="box",
     palette=PALETTE_DARK,
     legend=False,
@@ -148,29 +154,29 @@ bp(sns.swarmplot)(
 bp(enhanced_violinplot)(
     df,
     x="subject",
-    y="wait times",
+    y="push intervals",
     hue="box",
     palette=PALETTE,
-    title_prefix="Distribution of wait times at each box",
+    title_prefix="Distribution of push intervals at each box",
     y_unit="s",
     cut=0,
     inner=None,
     log_scale=True,
     common_norm=True,
     ax=ax,
-);
+)
 
 # %% [markdown]
 # Here are the distributions of wait times at each box as a function of stimulus reliability.
 
 # %%
-plot_wait_times(df);
+plot_push_intervals(df)
 
 # %% [markdown]
 # There is a striking bimodality in the wait time distributions that is preserved across subjects-- there is a fast mode and a slow mode.
 
 # %%
-plot_stay_switch_pushes(df);
+plot_stay_switch_pushes(df)
 
 # %% [markdown]
 # First, for Dylan, the switch times and stay times are remarkably similar across all pairs of boxes. Generally speaking, for each subject the switch times are qualitatively similar, suggesting that most of the time spent pushing different boxes is travel time.  Second, for each subject, the stay times look qualitatively similar to each other as well.
@@ -183,7 +189,7 @@ plot_stay_switch_pushes(df);
 # To get a sense of the statistics of *sequences* of pushes, we can gather the runlengths, that is the number of consecutive pushes at the same box before the subject switches.
 
 # %%
-plot_runlengths(df, stat="probability");
+plot_runlengths(df, stat="probability")
 
 # %% [markdown]
 # Aside from fitting in slightly more pushes at the fast box before switching when the reliability is high, there isn't much difference in runlengths between reliabilities.
@@ -195,9 +201,9 @@ plot_runlengths(df, stat="probability");
 
 # %%
 plot_push_intervals_vs_reward_intervals(
-    filter_df(df[(df["wait times"] < 60) & (df["reward intervals"] < 60)]),
+    filter_df(df[(df["push intervals"] < 60) & (df["reward intervals"] < 60)]),
     annotate_reg=True,
-);
+)
 
 # %% [markdown]
 # Contrary to expectations, there appears to be no correlation between the wait times and reward intervals under any reliability conditions.
@@ -214,7 +220,7 @@ plot_next_push_surprise(
     df,
     fig_kwargs=dict(figsize=(20, 10)),
     legend_kwargs=dict(loc="upper left", bbox_to_anchor=(1, 1), title=None),
-);
+)
 
 # %% [markdown]
 # Across both rewarded and unrewarded cases, there is a transition point at 20-25 s between waiting longer and going sooner the next push that is roughly preserved across all conditions. As reliability increases, the wait time on the x-axis clusters by boxes better and better. There is a distinct string of stay pushes that occur near the bottom of the graph where the subject pushes a few seconds after the current push. Visually, it appears that the subject switches a lot more across both reward outcomes, possibly switching more the longer they've waited, but when choosing to stay and push again, does so more after being rewarded. We confirm this below by counting how many times they stay or switch depending on how long they waited and the reward outcome.
@@ -225,7 +231,7 @@ plot_next_push_surprise(
 # Here we calculate the probability of staying and pushing the same box again as a function of waiting time. We do this separately for the rewarded and unrewarded case.
 
 # %%
-plot_stay_probabilities(df, min_obs=10);
+plot_stay_probabilities(df, min_obs=10)
 
 # %% [markdown]
 # Clearly, the probability of staying is greater after receiving reward, but it generally goes down the longer the subject waits, with the exception of some weird quirks that could be due to low data volume. Tentatively, it even looks like the probability of staying grows more similar between reward outcomes as the subject waits longer.
@@ -234,33 +240,55 @@ plot_stay_probabilities(df, min_obs=10);
 # ## Block Dynamics
 #
 # In this section, we explore how behavioral variables, such as reward rate and push frequency, evolve over time in the block. We will also compare to the optimal reward rate possible, if the subject were able to get each reward as soon as it became available. This is equal to the inverse mean schedules, and under independence of boxes and negligible travel costs, the sum of their individual reward rates yields the total reward rate.
+#
+# First, we'll examine the block initiation times to get a good sense of the right bin size for binning push times.
+
+# %%
+df_init = df.xs(1, level="push #")
+bp(sns.violinplot)(
+    df_init,
+    x="subject",
+    y="push times",
+    cut=0,
+    log_scale=True,
+    title_prefix="Distribution of block initiation times",
+    y_unit="s",
+    legend=False,
+)
 
 # %% [markdown]
 # ### Reward Rate
 
 # %%
-plot_reward_rates_across_blocks(
-    df, bin_kwargs=dict(bin_width=10), min_obs=10
-);
+plot_reward_rates_across_block(df, min_obs=10)
 
 # %% [markdown]
 # The reward rates are very similar across subjects, starting off low and then increasing to a steady state that is only a bit lower than the gamma schedule! It is possible that even under this flawed paradigm, the subjects are still achieving some subjective reward rate.
 
 # %%
 # %%capture --no-display
-plot_reward_rates_across_blocks(
+plot_reward_rates_across_block(
     df,
     by_box=True,
-    bin_kwargs=dict(bin_width=10),
     min_obs=5,
-);
-
+)
 
 # %% [markdown]
 # The reward rates are somewhat ordered fast > medium > slow in Dylan and Marco's data and strongly ordered in Viktor's. There isn't an appreciable difference between reliabilities.
+#
+# ### Push Rate
+
+# %%
+plot_push_rates_across_block(
+    df,
+    by_box=True,
+    min_obs=10,
+)
+
 
 # %% [markdown]
-# ### Wait Time
+# ### Push Intervals
+
 
 # %%
 def _auxiliary_plot(
@@ -271,7 +299,7 @@ def _auxiliary_plot(
     **kwargs,
 ):
     schedules = (
-        filter_df(df, {"subject": "viktor"})[
+        filter_df(df, {"stimulus reliability": "high", "subject": "viktor"})[
             ["box", "schedule"]
         ]
         .value_counts()
@@ -280,13 +308,13 @@ def _auxiliary_plot(
     for box, schedule in schedules:
         ax.axhline(schedule, color=palette[box], linestyle="--")
 
-plot_quantity_across_blocks(
+
+plot_quantity_across_block(
     df,
-    y="wait times",
-    bin_kwargs=dict(bin_width=10),
+    y="push intervals",
     auxiliary_plot=_auxiliary_plot,
-    min_obs=5,
-);
+    min_obs=10,
+)
 
 # %% [markdown]
 # Dylan's and Marco's wait times are within range of the schedules but 1) fail to distinguish them when reliability is low 2) distinguish them weakly when the reliability is high. On the other hand, Viktor is pushing much more rapidly and distinguishing the schedules, for the same reward rate as the other two. This should translate to the other two monkeys achieving more accurate pushes than Viktor, which we confirm below.
@@ -294,9 +322,7 @@ plot_quantity_across_blocks(
 # ### Accuracy
 
 # %%
-plot_accuracy_across_blocks(
-    df, bin_kwargs=dict(bin_width=10), min_obs=10
-);
+plot_accuracy_across_block(df, min_obs=10)
 
 # %% [markdown]
 # For Dylan, there doesn't really seem to be much of a trend in his accuracies. For Marco, when reliability is low, the accuracies start off low and then increase with time, whereas when the reliability is high they seem to start off where they converged in the low reliability case and stay stable. For Viktor, the accuracies look pretty stable throughout time and maybe even decreasing a little when the reliability is high.
@@ -311,8 +337,7 @@ plot_accuracy_across_blocks(
 # where $C_i$ and $R_i$ denote the number of times option $i$ has been chosen and reward obtained from that option, respectively. The constant of proportionality captures how sensitive the subjects are to the relative reward rates-- if the subject does not perceive much difference between the options, then the constant of proportionality will be less than 1 and the subject will be said to be "undermatching". When the constant of proportionality is greater than 1, then the subject is "overmatching". In the literature, undermatching is more common than overmatching, and also subjects have been observed to have a baseline response rate, or bias that cannot be attributed to reward. This bias and sensitivity to reward rates can be captured by linearly regressing the relative response rates on the relative reward rates, which is what we do below for each block with slopes and intercepts aggregated across blocks.
 
 # %%
-# %%capture --no-display
-plot_matching_law(df, palette="rocket", min_obs=10);
+plot_matching_law(df)
 
 # %% [markdown]
 # For all subjects, there is undermatching as indicated by the slopes < 1 and a small bias. Dylan and Marco show no appreciable difference between reliabilities, but Viktor does seem to show a modest improvement in matching and reduction in bias when the stimulus is more reliable.

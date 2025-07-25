@@ -31,7 +31,6 @@ import seaborn as sns
 from matplotlib import pyplot as plt
 
 from foraging.plotting import bp
-
 from foraging.plotting.behavior import (
     plot_block_onsets_vs_push_percentiles,
     plot_experiment_overview,
@@ -44,7 +43,6 @@ from foraging.plotting.behavior import (
     plot_vertical_position_in_block,
     plot_vertical_position_vs_push_percentiles,
 )
-
 from foraging.utils.data import display_df, exclusion_criteria, make_df
 
 pd.options.mode.copy_on_write = True
@@ -57,6 +55,19 @@ EXPERIMENT_DIR = "../data/experiments"
 ANALYSIS_DIR = "../data/analysis"
 FIGURES_DIR = "../figures"
 SEED = 42
+
+# %% [markdown]
+# # Table of Contents
+# - [Load Data](#load-data)
+#   - [Data Overview](#data-overview)
+# - [Analyze Outliers](#analyze-outliers)
+#   - [Example Blocks](#example-blocks)
+#   - [Block Initiation](#block-initiation)
+#   - [Reward](#reward)
+#   - [Time](#time)
+#   - [Space](#space)
+#   - [HMM Policy Identification](#hmm-policy-identification)
+# - [Clean Data](#clean-data)
 
 # %% [markdown]
 # # Load Data
@@ -90,7 +101,7 @@ print(df.groupby("subject")["schedule"].unique())
 # %%
 sns.histplot(df, x="duration")
 plt.title("Duration of block")
-plt.xlabel("duration (s)");
+plt.xlabel("duration (s)")
 
 # %%
 block_summary = (
@@ -99,7 +110,7 @@ block_summary = (
     .reset_index(name="n pushes per block")
 )
 sns.violinplot(block_summary, x="subject", y="n pushes per block", cut=0)
-plt.title("# pushes per block");
+plt.title("# pushes per block")
 
 # %% [markdown]
 # Here is a bird's eye view of one subject's behavioral data over the course of the entire experiment. Each row is a session of consecutive blocks. Each block's pushes are displayed as a raster plot over the duration of that block, and the pushes at each box position are stacked on top of each other (top to bottom is 3, 2, 1). Finally, pushes are colored by box schedule, so we can see how the schedules are assigned to each box over consecutive blocks.
@@ -112,14 +123,16 @@ plot_experiment_overview(
     title_prefix="Overview of pushes over entire experiment",
     annotate_block=True,
     fig_kwargs=dict(figsize=(40, 50)),
-);
+)
 
 # %% [markdown]
 # # Analyze Outliers
 #
 # Before we get to the fun stuff of analyzing behavior, it is worth taking pains to clean the data by filtering out behavior that seems "off-task". This may seem counterproductive to the goal of analyzing free behavior, but there is a trade-off between the goals of modeling as much of the behavior as possible and having a simple model of a subset of "interesting" behavior. The goal of this notebook is to design a rudimentary exclusion criteria to isolate this subset of outliers. Intuitively, long bouts of time when the subject is not pushing should be indicative of off-task or "lapse" behavior. This is a vague criterion that we will refine by exploring the distribution of consecutive push intervals, the times between consecutive pushes.
 #
-# Here, each subject's push intervals are shown on a logscale. The individual circles are outliers that would show up on a boxplot of the data, defined as all datapoints lying outside of 1.5*IQR (inter-quartile range) from the first and third quartile (in the original data space, not log).
+# Here, each subject's consecutive push intervals are shown on a logscale, where consecutive push intervals are defined as time between consecutive pushes *irrespective of which boxes get pushed*. In later notebooks, we will make a distinction between these push intervals and push intervals between consecutive pushes *at the same box*. Henceforth, in this notebook, push intervals refer to consecutive push intervals.
+#
+# The individual circles are outliers that would show up on a boxplot of the data, defined as all datapoints lying outside of 1.5*IQR (inter-quartile range) from the first and third quartile (in the original data space, not log).
 
 # %%
 # Plot distribution of push intervals on log-scale
@@ -157,7 +170,7 @@ bp(sns.violinplot)(
     y_unit="s",
     legend=False,
     ax=ax,
-);
+)
 
 # %% [markdown]
 # We see a mix of bimodality and unimodality among the subjects. Next, we will sort each push interval by the percentile at which it occurs in each subject's data.
@@ -166,7 +179,7 @@ bp(sns.violinplot)(
 df["push percentiles"] = df.groupby("subject", as_index=False)[
     "consecutive push intervals"
 ].rank(pct=True)
-plot_push_percentiles(df);
+plot_push_percentiles(df)
 
 # %% [markdown]
 # Aside from the humans, whose percentile curves are characteristic of a gaussian, the other subjects are heavily non-gaussian. The rest of this notebook is dedicated to getting a better sense of when a boundary emreges between normally long and abnormally long push intervals. Next, we will consider the characteristics of example blocks containing the longest push intervals.
@@ -178,7 +191,7 @@ plot_push_percentiles(df);
 #
 
 # %%
-plot_long_push_blocks(df, 3);
+plot_long_push_blocks(df, 3)
 
 # %% [markdown]
 # Some push intervals appear long because the subject doesn't initiate the task for a long time. We will show the distribution of initiation times next. Also, some blocks are very sparse while other blocks have long segments of task-engaged behavior interrupted by long breaks when the monkey does not push. One consideration for the exclusion criteria is to drop blocks that contain fewer than n pushes e.g. 10 pushes, even if there are a couple "reasonable looking" pushes; it's very likely the animal is actually disengaged the entirety of that block, thus casting doubt on any reasonable behavior appearing in that block. For blocks that are denser in pushes, we need a different criteria.
@@ -191,7 +204,6 @@ plot_long_push_blocks(df, 3);
 #
 
 # %%
-fig, ax = plt.subplots()
 df_init = df.xs(1, level="push #")
 bp(sns.violinplot)(
     df_init,
@@ -202,8 +214,7 @@ bp(sns.violinplot)(
     title_prefix="Distribution of block initiation times",
     y_unit="s",
     legend=False,
-    ax=ax,
-);
+)
 
 # %% [markdown]
 # Dylan appears to initiate the block extremely late compared to other subjects, with a mode around 100 s. Marco also seems to have a decent chunk of blocks which are initiated after 100 s. Next, we'll consider possible correlates of long push intervals, such as reward and spatial position.
@@ -215,13 +226,13 @@ bp(sns.violinplot)(
 # Now we will compare the relationship between reward and push intervals. For each subject, we sample 5000 pushes and count how many rewards were obtained in a 30 second window preceding each push.
 
 # %%
-plot_recent_rewards_vs_push_percentiles(df);
+plot_recent_rewards_vs_push_percentiles(df)
 
 # %% [markdown]
 # It appears that for Viktor and the humans, there is a weak increase in the number of rewards preceding each push as the push interval increases. However, for Dylan and Marco, there is a sharp decline in the number of rewards for the top 20%-30% of push intervals. Could this be related to an increased failure rate or lack of pushes? This is what we look at next.
 
 # %%
-plot_recent_rewards_vs_push_percentiles(df, invert_reward=True);
+plot_recent_rewards_vs_push_percentiles(df, invert_reward=True)
 
 # %% [markdown]
 # So it's not the number of failures, as that goes down across all subjects to different extents. The subjects might be pushing less overall before a long push interval, suggesting that push intervals might be correlated across time. To see this, we will visualize the relationship between each push interval and the previous push interval.
@@ -229,23 +240,23 @@ plot_recent_rewards_vs_push_percentiles(df, invert_reward=True);
 # %% [markdown]
 # ## Time
 #
-# Here, we show the duration of the past 5 push intervals before a long push or medium push to see whether there is a temporal correlation present.
+# Here, we show the duration of the past 5 push intervals before a long push or medium push to see whether there is a temporal correlation present. We additionally cluster pushes based on whether they were a stay push, meaning the subject consecutively pushed at the same box, or a switch push, meaning they pushed at one box and then pushed at a different box.
 
 # %%
-plot_previous_push_interval_vs_push_interval(df);
+plot_previous_push_interval_vs_push_interval(df)
 
 
 # %% [markdown]
-# There is a remarkably strongly linear relationship between the duration of the current and previous push interval across all subjects, a relationship that weakens with longer push intervals. This supports that push intervals of similar duration occur close together in time.
+# As expected, stay pushes are smaller push intervals than switch pushes and are preceded by similar-sized push intervals. The switch pushes have two interesting structures, a vertical and horizontal component, which represent push intervals happening independently of one another.
 
 # %%
-plot_session_onsets_vs_push_percentiles(df);
+plot_session_onsets_vs_push_percentiles(df)
 
 # %% [markdown]
 # For Dylan and Marco, there is an increasing trend in the session onset times. For Viktor, this trend appears in the top 20% of push intervals. We can also investigate whether long push intervals tend to emerge later in each block as well.
 
 # %%
-plot_block_onsets_vs_push_percentiles(df);
+plot_block_onsets_vs_push_percentiles(df)
 
 # %% [markdown]
 # There doesn't really seem to be a pattern in the block onset times. Next we will look at spatial correlates of the push intervals.
@@ -256,7 +267,7 @@ plot_block_onsets_vs_push_percentiles(df);
 
 # %%
 conds = {"subject": "marco", "session": 20211213, "block": 7}
-plot_vertical_position_in_block(df, conds, EXPERIMENT_DIR);
+plot_vertical_position_in_block(df, conds, EXPERIMENT_DIR)
 
 # %% [markdown]
 # This is one of the blocks that was highlighted in the `Example Block` section. There is a long push interval spanning nearly 1000 s where the subject varies between climbing and being on the ground.
@@ -264,7 +275,7 @@ plot_vertical_position_in_block(df, conds, EXPERIMENT_DIR);
 
 # %%
 # %%capture --no-display
-plot_vertical_position_vs_push_percentiles(df, EXPERIMENT_DIR);
+plot_vertical_position_vs_push_percentiles(df, EXPERIMENT_DIR)
 
 # %% [markdown]
 # There is a very strong relationship between vertical position and the top push intervals of each subject. In particular, it looks like the top 10% of pushes is when the subjects engage in climbing.
@@ -278,7 +289,7 @@ plot_vertical_position_vs_push_percentiles(df, EXPERIMENT_DIR);
 # %%
 plot_hmm_probabilities_in_block(
     df, os.path.join(EXPERIMENT_DIR, "HMM.solution_[K2].pkl"), block_idx=3
-);
+)
 
 # %% [markdown]
 # # Clean Data
@@ -301,7 +312,7 @@ plot_hmm_probabilities_in_block(
 
 # %%
 # %%capture --no-display
-df_filtered = exclusion_criteria(df, EXPERIMENT_DIR);
+df_filtered = exclusion_criteria(df, EXPERIMENT_DIR)
 
 # %%
 print(
@@ -332,13 +343,13 @@ bp(sns.violinplot)(
     y_unit="s",
     legend=False,
     ax=ax,
-);
+)
 
 # %%
 df_filtered["push percentiles"] = df_filtered.groupby("subject", as_index=False)[
     "consecutive push intervals"
 ].rank(pct=True)
-plot_push_percentiles(df_filtered);
+plot_push_percentiles(df_filtered)
 
 # %% [markdown]
 # Compared to the beginning of this notebook, after removing the outliers for each subject, we see now that the push intervals are within a more reasonable range and behave more like a gaussian.

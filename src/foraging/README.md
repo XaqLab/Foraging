@@ -8,4 +8,4 @@ This subpackage contains utility scripts.
 This subpackage contains plotting scripts.
 
 ## Settings
-The `.env` file contains the paths to config files for `logging` and `matplotlib`. 
+The `.env` file contains the paths to config files for `logging` and `matplotlib`.

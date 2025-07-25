@@ -21,7 +21,7 @@ from scipy.optimize import curve_fit
 from scipy.spatial.distance import euclidean
 from tqdm import tqdm
 
-from foraging.config.constants import BOX_LABELS
+from foraging.config.constants import BOX_LABELS, MULTIPLOT_FIGSIZE
 from foraging.utils import flatten, kwargs_handler
 from foraging.utils.data import filter_df
 
@@ -261,8 +261,6 @@ def bp(func: Callable):
                         lambda g: len(g) >= min_obs
                     ),
                     x=x,
-                    hue=hue,
-                    palette=palette,
                     ax=ax,
                     legend=legend,
                     **kwargs,
@@ -311,6 +309,34 @@ def bp(func: Callable):
         return ret  # Assume there is usually an ax in here
 
     return wrapper
+
+
+def multiplot(_func=None, figsize=MULTIPLOT_FIGSIZE):
+    """
+    A decorator to set figures containing multiple plots to a default figsize.
+
+    Args:
+        func: The plotting function to wrap.
+
+    Returns:
+        The wrapped function with adjusted figsize.
+    """
+
+    def _inner(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            # add default figsize to kwargs
+            fig_kwargs = kwargs_handler(kwargs, "fig_kwargs")
+            if "figsize" not in fig_kwargs:
+                fig_kwargs["figsize"] = figsize
+            kwargs["fig_kwargs"] = fig_kwargs
+            return func(*args, **kwargs)
+
+        return wrapper
+
+    if _func:
+        return _inner(_func)
+    return _inner
 
 
 def legend_handler(_func=None, loc="upper left", bbox=(1, 1)):

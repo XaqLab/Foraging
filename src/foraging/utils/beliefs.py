@@ -4,7 +4,7 @@ from typing import Any, Type
 import numpy as np
 import pandas as pd
 from numpy.typing import ArrayLike
-from scipy.stats import uniform
+from scipy.stats import gamma, uniform
 from sklearn.linear_model import LogisticRegression
 from sklearn.utils.class_weight import compute_sample_weight
 
@@ -24,16 +24,25 @@ from foraging.utils.stats import mcfadden_pseudo_rsquared, permutation_test_logi
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-# TODO: write class that can compute posteriors over dataframe and
-# TODO: return df index for each event so that we have alignment information
-# class ComputeScheduleBeliefs:
-#     def __init__(self, posterior_class: Type[AbstractBelief], *args, **kwargs):
-#         self.posterior_class = posterior_class
-#         self.args = args
-#         self.kwargs = kwargs
-#         self.beliefs_by_blocks = {}
 
-#     def compute(self):
+# Calculate fisher information
+def fisher_info_reward_observations(t, schedule, alpha):
+    scale = schedule / alpha
+    cdf = gamma.cdf(t, a=alpha, scale=scale)
+
+    # Handle vectorized operations with explicit warning suppression
+    with np.errstate(divide="ignore", invalid="ignore"):
+        denominator = cdf * (1 - cdf)
+        result = (
+            (t / schedule) ** 2 * gamma.pdf(t, a=alpha, scale=scale) ** 2 / denominator
+        )
+
+        # Replace invalid values (inf, nan) with 0
+        if np.isscalar(result):
+            return 0.0 if not np.isfinite(result) else result
+        else:
+            result = np.where(np.isfinite(result), result, 0.0)
+            return result
 
 
 # @process_block_safely
@@ -64,7 +73,7 @@ def compute_posteriors(
     # Iterate over each box in order from fastest to slowest
     n_obs = len(block_data)
     push_times = block_data["push times"].values
-    push_intervals = block_data["wait times"].values
+    push_intervals = block_data["push intervals"].values
     reward_outcomes = block_data["reward outcomes"].values
     box_ranks = block_data["box rank"].values
     n_boxes = block_data["n boxes"].values[0]
