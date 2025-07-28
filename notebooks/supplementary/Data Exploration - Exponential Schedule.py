@@ -226,7 +226,7 @@ plot_next_push_surprise(
 # Across both rewarded and unrewarded cases, there is a transition point at 20-25 s between waiting longer and going sooner the next push that is roughly preserved across all conditions. As reliability increases, the wait time on the x-axis clusters by boxes better and better. There is a distinct string of stay pushes that occur near the bottom of the graph where the subject pushes a few seconds after the current push. Visually, it appears that the subject switches a lot more across both reward outcomes, possibly switching more the longer they've waited, but when choosing to stay and push again, does so more after being rewarded. We confirm this below by counting how many times they stay or switch depending on how long they waited and the reward outcome.
 
 # %% [markdown]
-# ### Probability of staying
+# ### Staying vs switching
 #
 # Here we calculate the probability of staying and pushing the same box again as a function of waiting time. We do this separately for the rewarded and unrewarded case.
 
@@ -260,7 +260,7 @@ bp(sns.violinplot)(
 # ### Reward Rate
 
 # %%
-plot_reward_rates_across_block(df, min_obs=10)
+plot_reward_rates_across_block(df, min_obs=20)
 
 # %% [markdown]
 # The reward rates are very similar across subjects, starting off low and then increasing to a steady state that is only a bit lower than the gamma schedule! It is possible that even under this flawed paradigm, the subjects are still achieving some subjective reward rate.
@@ -270,7 +270,7 @@ plot_reward_rates_across_block(df, min_obs=10)
 plot_reward_rates_across_block(
     df,
     by_box=True,
-    min_obs=10,
+    min_obs=20,
     average_blocks=True,
 )
 
@@ -280,8 +280,11 @@ plot_reward_rates_across_block(
 # ### Push Rate
 
 # %%
-plot_push_rates_across_block(df, by_box=True, min_obs=10, average_blocks=True)
+plot_push_rates_across_block(df, by_box=True, min_obs=20, average_blocks=True)
 
+
+# %% [markdown]
+# Dylan's push rates don't differentiate in the low reliability, but appears to do so somewhat in the high reliability. Marco also weakly differentiates the fast box from the slower boxes. Viktor differentiates the three boxes most strongly.
 
 # %% [markdown]
 # ### Push Intervals
@@ -304,6 +307,7 @@ def _auxiliary_plot(
     )
     for box, schedule in schedules:
         ax.axhline(schedule, color=palette[box], linestyle="--")
+    ax.set_ylim(0, ax.get_ylim()[1] + 2)
 
 
 plot_quantity_across_block(
@@ -319,10 +323,10 @@ plot_quantity_across_block(
 # ### Reward-per-push
 
 # %%
-plot_reward_per_push_across_block(df, min_obs=10, by_box=True)
+plot_reward_per_push_across_block(df, min_obs=10, by_box=True, average_blocks=True)
 
 # %% [markdown]
-# For Dylan, there doesn't really seem to be much of a trend in his accuracies. For Marco, when reliability is low, the accuracies start off low and then increase with time, whereas when the reliability is high they seem to start off where they converged in the low reliability case and stay stable. For Viktor, the accuracies look pretty stable throughout time and maybe even decreasing a little when the reliability is high.
+# For Dylan and Marco, even though they pretty much push at the same push intervals across boxes, this naturally leads to an ordering in their accuracies going fast > medium > slow. They also have higher accuracies on average than Viktor, who has adopted a "spamming" strategy.
 
 # %% [markdown]
 # ## Matching Law
@@ -337,7 +341,7 @@ plot_reward_per_push_across_block(df, min_obs=10, by_box=True)
 plot_matching_law(df)
 
 # %% [markdown]
-# For all subjects, there is undermatching as indicated by the slopes < 1 and a small bias. Dylan and Marco show no appreciable difference between reliabilities, but Viktor does seem to show a modest improvement in matching and reduction in bias when the stimulus is more reliable.
+# There is a remarkable level of matching, even though some subjects adopt very simple strategies, such as waiting a fixed, long time to push. Matching can occur in these cases where the reward probability is close to 1 across boxes due to the long wait time, so then the relative reward rate is driven by the relative push rate.
 
 # %% [markdown]
 # # Conclusion
@@ -347,4 +351,4 @@ plot_matching_law(df)
 # + Reward rate does increase with time in block but is less than what is achievable under the Gamma schedule
 # + Subjects weakly differentiate the boxes
 # + Viktor seems to have found a strategy where he pushes faster than the other subjects but achieves the same reward rate overall, even at the cost of lowered accuracy per push
-# + Modest undermatching and bias are observed across all subjects, with Viktor showing slight sensitivity to stimulus reliability
+# + Matching can emerge even when subjects adopt simple "dumb" strategies such as waiting the same amount of time to push each box
