@@ -7,6 +7,7 @@ INDEX = (
     "session",
     "block",
     "push #",
+    "block_id",
     "stimulus type",
     "shape",
     "stimulus reliability",

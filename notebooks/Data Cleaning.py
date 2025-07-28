@@ -120,7 +120,6 @@ conds = dict(subject="viktor")
 plot_experiment_overview(
     df,
     conds=conds,
-    title_prefix="Overview of pushes over entire experiment",
     annotate_block=True,
     fig_kwargs=dict(figsize=(40, 50)),
 )
@@ -166,7 +165,7 @@ bp(sns.violinplot)(
     cut=0,
     inner=None,
     log_scale=True,
-    title_prefix="Distribution of consecutive push intervals",
+    title="Distribution of consecutive push intervals",
     y_unit="s",
     legend=False,
     ax=ax,
@@ -211,7 +210,7 @@ bp(sns.violinplot)(
     y="push times",
     cut=0,
     log_scale=True,
-    title_prefix="Distribution of block initiation times",
+    title="Distribution of block initiation times",
     y_unit="s",
     legend=False,
 )
@@ -339,7 +338,7 @@ bp(sns.violinplot)(
     cut=0,
     inner=None,
     log_scale=True,
-    title_prefix="Distribution of consecutive push intervals",
+    title="Distribution of consecutive push intervals",
     y_unit="s",
     legend=False,
     ax=ax,

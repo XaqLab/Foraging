@@ -369,7 +369,16 @@ def make_df(
             df_filter = filter_df(df, {"subject": subject, "kappa": values})
             df.loc[df_filter.index, "stimulus reliability"] = label
 
-    # Set index, refer to INDEX definition in utils
+    # Create unique block ID as hash of subject, session, and block
+    df["block_id"] = (
+        df["subject"].astype(str)
+        + "_"
+        + df["session"].astype(str)
+        + "_"
+        + df["block"].astype(str)
+    ).apply(hash)
+
+    # Set index, refer to INDEX definition in utils.__init__.py
     df.set_index(list(INDEX), inplace=True)
     df.sort_index(inplace=True)
     return df

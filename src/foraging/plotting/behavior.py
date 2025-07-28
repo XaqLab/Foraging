@@ -53,8 +53,7 @@ logger.setLevel(logging.DEBUG)
 def plot_experiment_overview(
     df: pd.DataFrame,
     conds: dict = None,
-    title: str = "",
-    title_prefix: str = "",
+    title: str = "Overview of pushes over entire experiment",
     palette: dict = PALETTE,
     label_rotation: float = 35,
     annotate_block: bool = False,
@@ -67,8 +66,7 @@ def plot_experiment_overview(
     Args:
         df: DataFrame.
         conds: Dictionary to filter df.
-        title: Title of figure. If specified, overrides `title_prefix`.
-        title_prefix: Prefix of title that is used to construct the contents of the title together with conds. See `titler` for more details. Ignored if `title` is specified.
+        title: Title of figure.
         palette: Dictionary mapping box schedules to colors. Can also be a list of just colors.
         label_rotation: Angle to rotate y-tick labels by.
         annotate_block: if True, also display the block parameters above each block.
@@ -180,14 +178,14 @@ def plot_experiment_overview(
     ax.tick_params(axis="y", labelrotation=label_rotation)
     ax.set_xlabel("time in block (s)")
     ax.set_ylabel("session")
-    ax.set_title(titler(title=title, title_prefix=title_prefix, conds=conds))
+    ax.set_title(titler(title=title, conds=conds))
     fig.tight_layout()
     return ax
 
 
 def plot_push_percentiles(df: pd.DataFrame, percentiles: dict = None, **kwargs):
     """
-    Plot the percentiles of consecutive push intervals for each subject. It marks specific percentiles if provided.
+    Plot the percentiles of consecutive push intervals for each subject.
 
     Args:
         df: A DataFrame containing the data to be plotted.
@@ -205,7 +203,7 @@ def plot_push_percentiles(df: pd.DataFrame, percentiles: dict = None, **kwargs):
             x="consecutive push intervals",
             y="push percentiles",
             conds={"subject": subj},
-            title_prefix="Percentiles of consecutive push intervals",
+            title="Percentiles of consecutive push intervals",
             x_unit="s",
             legend=False,
             **kwargs,
@@ -261,7 +259,7 @@ def plot_long_push_blocks(
             plot_pushes(
                 g.sort_index(),
                 conds=conds,
-                title_prefix="",
+                title="",
                 legend=False,
                 ax=axes[i],
                 **kwargs,
@@ -276,8 +274,7 @@ def plot_long_push_blocks(
 def plot_pushes(
     df: pd.DataFrame,
     conds: dict = None,
-    title: str = "",
-    title_prefix: str = "Pushes for ",
+    title: str = "Pushes",
     palette: dict = PALETTE,
     box_labels: list = BOX_POSITIONS,
     legend: bool = True,
@@ -290,8 +287,7 @@ def plot_pushes(
     Args:
         df: DataFrame.
         conds: Dictionary to filter df.
-        title: Title of figure. If specified, overrides `title_prefix`.
-        title_prefix: Prefix of title that is used to construct the contents of the title together with conds. See `titler` for more details. Ignored if `title` is specified.
+        title: Title of figure.
         palette: Dictionary mapping box schedules to colors. Can also be a list of just colors.
         box_labels: Labels on y-axis for each box.
         legend: If True, display legend. Specify keyword arguments in `legend_kwargs`.
@@ -306,7 +302,6 @@ def plot_pushes(
         df,
         conds=conds,
         title=title,
-        title_prefix=title_prefix,
         palette=palette,
         legend=legend,
         ax=ax,
@@ -330,8 +325,7 @@ def plot_block_events(
     y: str = "box position",
     x_unit: str = "s",
     y_unit: str = None,
-    title: str = "",
-    title_prefix: str = "Block activity",
+    title: str = "Block activity",
     palette: dict = PALETTE,
     legend: bool = True,
     ax: plt.Axes = None,
@@ -347,8 +341,7 @@ def plot_block_events(
         y: Name of y variable in DataFrame. Defaults to `box rank`.
         x_unit: Unit to assign to x. Defaults to `s` for seconds. Ignored if None.
         y_unit: Unit to assign to y. Defaults to None. Ignored if None.
-        title: Title of figure. If specified, overrides `title_prefix`.
-        title_prefix: Prefix of title that is used to construct the contents of the title together with conds. See `titler` for more details. Ignored if `title` is specified.
+        title: Title of figure.
         palette: Dictionary mapping box schedules to colors. Can also be a list of just colors.
         legend: If True, display legend. Specify keyword arguments in `legend_kwargs`.
         ax: Axes to plot on. If None, a new figure and axes are created using plt.subplots. Specify keyword arguments in `fig_kwargs`.
@@ -398,8 +391,7 @@ def plot_block_events(
     # Set labels
     ax.add_collection(lc)
     ax.autoscale()
-    title = titler(title=title, title_prefix=title_prefix, conds=conds)
-    ax.set_title(title)
+    ax.set_title(titler(title=title, conds=conds))
     ax.set_ylabel(unitler(y, y_unit))
     ax.set_xlabel(unitler(x, x_unit))
 
@@ -802,7 +794,7 @@ def plot_vertical_position_in_block(df: pd.DataFrame, conds: dict, data_dir: str
         conds=conds,
         y="z-coordinate",
         y_unit="mm",
-        title_prefix="Vertical position in block",
+        title="Vertical position in block",
         ax=ax,
     )
     ax.axhline(y=500, label="screen", linestyle=":", c="black")
@@ -1197,7 +1189,7 @@ def plot_push_intervals_by_sessions(
             conds={"subject": subj},
             hue="box",
             palette=PALETTE,
-            title="Push intervals across sessions",
+            title_override="Push intervals across sessions",
             size=1,
             log_scale=True,
             legend=False,
@@ -1233,7 +1225,6 @@ def plot_push_intervals(
     **kwargs,
 ):
     """
-    Plot push intervals across stimulus reliabilities for each subject.
     This function visualizes the distribution of push intervals across different stimulus reliabilities for each subject.
 
     Args:
@@ -1541,6 +1532,9 @@ def plot_runlengths(
 @multiplot
 def plot_push_intervals_vs_reward_intervals(
     df: pd.DataFrame,
+    conds: dict = None,
+    title: str = "Push intervals vs reward intervals",
+    title_override: str = None,
     palette: dict = PALETTE,
     stim_reliabilities: dict = KAPPA_LEVELS,
     annotate_reg: bool = False,
@@ -1548,7 +1542,6 @@ def plot_push_intervals_vs_reward_intervals(
 ):
     """
     Plot linear regression of push intervals against reward intervals in a block.
-    This function performs a linear regression analysis of push intervals against reward intervals for each subject, visualizing the relationship with scatter plots and regression lines.
 
     Args:
         df: A DataFrame of experiment data for a given block.
@@ -1562,7 +1555,7 @@ def plot_push_intervals_vs_reward_intervals(
     Returns:
         None
     """
-
+    df = filter_df(df, conds)
     # Remove first push from each box, since reward time is messed up for first pushes
     # df = df.drop(df[df['push # by box'] == 1].index)
     fig_kwargs = kwargs_handler(kwargs, "fig_kwargs", {"sharey": True, "sharex": True})
@@ -1582,7 +1575,6 @@ def plot_push_intervals_vs_reward_intervals(
                 y="push intervals",
                 conds={"stimulus reliability": kappa},
                 hue="box",
-                style="stay/switch",
                 palette=palette,
                 ax=axes[i],
                 legend=i == len(kappas) - 1,
@@ -1616,8 +1608,13 @@ def plot_push_intervals_vs_reward_intervals(
                     transform=axes[i].transAxes,
                     fontsize=10,
                 )
-
-        fig.suptitle(f"Push intervals vs reward intervals for {subj}")
+        fig.suptitle(
+            titler(
+                title=title + " for " + subj,
+                conds=conds,
+                title_override=title_override + " for " + subj,
+            )
+        )
         fig.tight_layout()
         return axes
 
@@ -1753,6 +1750,46 @@ def plot_stay_probabilities(
     subject_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
+def plot_block_average_or_traces(
+    df: pd.DataFrame,
+    average_blocks: bool,
+    units: str = "block_id",
+    base_params: dict = {},
+):
+    base_params = base_params.copy()
+    if average_blocks:
+        bp(sns.lineplot)(df, **base_params)
+    else:
+        legend_flag = "legend" in base_params
+        if legend_flag:
+            base_params["legend"] = False
+
+        # Traces
+        bp(sns.lineplot)(
+            df,
+            **base_params,
+            units=units,
+            estimator=None,
+            errorbar=None,
+            alpha=0.2,
+        )
+
+        if "x_unit" in base_params:
+            base_params.pop("x_unit")
+        if "y_unit" in base_params:
+            base_params.pop("y_unit")
+        if legend_flag:
+            base_params["legend"] = True
+
+        # Average
+        bp(sns.lineplot)(
+            df,
+            **base_params,
+            errorbar=None,
+            lw=5,
+        )
+
+
 @multiplot
 def plot_reward_rates_across_block(
     df: pd.DataFrame,
@@ -1760,10 +1797,10 @@ def plot_reward_rates_across_block(
     palette: dict = PALETTE,
     window: int = 5,
     by_box: bool = False,
+    average_blocks: bool = False,
     **kwargs,
 ):
     """
-    Plot the reward rates across different blocks, optionally by box.
     This function calculates and visualizes the reward rates across different blocks, smoothing the data over a specified window and optionally separating the data by box.
 
     Args:
@@ -1772,6 +1809,7 @@ def plot_reward_rates_across_block(
         palette: A dictionary mapping box schedules to colors.
         window: The window size for smoothing the reward rate.
         by_box: If True, separate the reward rates by box.
+        average_blocks: If True, average the reward rates across blocks.
         **kwargs: Additional keyword arguments.
           - bin_kwargs: Dictionary to specify binning properties for time (passed to `bin_data`).
           - fig_kwargs: Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
@@ -1790,24 +1828,29 @@ def plot_reward_rates_across_block(
 
     # Aggregate rewards by box or across boxes
     groupers = (
-        ["stimulus reliability", "time", "box"]
+        ["stimulus reliability", "block_id", "time", "box"]
         if by_box
-        else ["stimulus reliability", "time"]
+        else ["stimulus reliability", "block_id", "time"]
     )
     df_grouped = get_blocks(df, groupers)
     rr = df_grouped["reward outcomes"].sum().to_frame().reset_index()
 
-    # Calculate reward rate only for bins with data
+    # Calculate reward rate
     rr["reward rate"] = rr["reward outcomes"] / rr["time"].apply(lambda x: x.length)
 
-    # Smooth the curve
+    # Smooth the curve of each block's data
     groupers = ["box"] if by_box else []
     rr["reward rate"] = get_blocks(rr, groupers)["reward rate"].transform(
         lambda x: x.rolling(window=window, min_periods=1).mean()
     )
     rr["time"] = rr["time"].apply(lambda x: float(x.left))
-
     fig_kwargs = kwargs_handler(kwargs, "fig_kwargs", {"sharey": True, "sharex": True})
+    base_params = {"x": "time", "y": "reward rate", "x_unit": "s", **kwargs}
+
+    if by_box:
+        base_params.update({"hue": "box", "palette": palette})
+    else:
+        base_params.update({"color": "black"})
 
     @legend_handler
     def _plot(i, subj, **kwargs):
@@ -1816,30 +1859,17 @@ def plot_reward_rates_across_block(
         fig_kwargs["ncols"] = len(kappas)
         fig, ax = fig_init(**fig_kwargs)
         for i, kappa in enumerate(kappas):
-            if by_box:
-                bp(sns.lineplot)(
-                    rr_subj,
-                    conds={"stimulus reliability": kappa},
-                    x="time",
-                    y="reward rate",
-                    hue="box",
-                    x_unit="s",
-                    palette=palette,
-                    ax=ax[i],
-                    legend=i == len(kappas) - 1,
+            base_params.update(
+                {
+                    "conds": {"stimulus reliability": kappa},
+                    "ax": ax[i],
+                    "legend": i == len(kappas) - 1,
                     **kwargs,
-                )
-            else:
-                bp(sns.lineplot)(
-                    rr_subj,
-                    conds={"stimulus reliability": kappa},
-                    x="time",
-                    y="reward rate",
-                    x_unit="s",
-                    ax=ax[i],
-                    legend=i == len(kappas) - 1,
-                    **kwargs,
-                )
+                }
+            )
+            plot_block_average_or_traces(
+                rr_subj, average_blocks=average_blocks, base_params=base_params
+            )
         fig.suptitle(f"Reward rate for {subj}")
         fig.tight_layout()
         return ax
@@ -1854,6 +1884,7 @@ def plot_push_rates_across_block(
     palette: dict = PALETTE,
     window: int = 10,
     by_box: bool = False,
+    average_blocks: bool = False,
     **kwargs,
 ):
     """
@@ -1866,6 +1897,7 @@ def plot_push_rates_across_block(
         palette: A dictionary mapping box schedules to colors.
         window: The window size for smoothing the push rate.
         by_box: If True, separate the push rates by box.
+        average_blocks: If True, average the push rates across blocks.
         **kwargs: Additional keyword arguments.
           - bin_kwargs: Dictionary to specify binning properties for time (passed to `bin_data`).
           - fig_kwargs: Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
@@ -1884,9 +1916,9 @@ def plot_push_rates_across_block(
 
     # Aggregate pushes by box or across boxes
     groupers = (
-        ["stimulus reliability", "time", "box"]
+        ["stimulus reliability", "block_id", "time", "box"]
         if by_box
-        else ["stimulus reliability", "time"]
+        else ["stimulus reliability", "block_id", "time"]
     )
     grouped = get_blocks(df, groupers)
     rr = grouped.size().to_frame().reset_index()
@@ -1900,6 +1932,12 @@ def plot_push_rates_across_block(
     rr["time"] = rr["time"].apply(lambda x: float(x.left))
 
     fig_kwargs = kwargs_handler(kwargs, "fig_kwargs", {"sharey": True, "sharex": True})
+    base_params = {"x": "time", "y": "push rate", "x_unit": "s", **kwargs}
+
+    if by_box:
+        base_params.update({"hue": "box", "palette": palette})
+    else:
+        base_params.update({"color": "black"})
 
     @legend_handler
     def _plot(i, subj, **kwargs):
@@ -1908,30 +1946,17 @@ def plot_push_rates_across_block(
         fig_kwargs["ncols"] = len(kappas)
         fig, ax = fig_init(**fig_kwargs)
         for i, kappa in enumerate(kappas):
-            if by_box:
-                bp(sns.lineplot)(
-                    rr_subj,
-                    conds={"stimulus reliability": kappa},
-                    x="time",
-                    y="push rate",
-                    hue="box",
-                    x_unit="s",
-                    palette=palette,
-                    ax=ax[i],
-                    legend=i == len(kappas) - 1,
+            base_params.update(
+                {
+                    "conds": {"stimulus reliability": kappa},
+                    "ax": ax[i],
+                    "legend": i == len(kappas) - 1,
                     **kwargs,
-                )
-            else:
-                bp(sns.lineplot)(
-                    rr_subj,
-                    conds={"stimulus reliability": kappa},
-                    x="time",
-                    y="push rate",
-                    x_unit="s",
-                    ax=ax[i],
-                    legend=i == len(kappas) - 1,
-                    **kwargs,
-                )
+                }
+            )
+            plot_block_average_or_traces(
+                rr_subj, average_blocks=average_blocks, base_params=base_params
+            )
         fig.suptitle(f"Push rate for {subj}")
         fig.tight_layout()
         return ax
@@ -1973,7 +1998,7 @@ def plot_quantity_across_block(
     df.copy()
     bin_kwargs = kwargs_handler(kwargs, "bin_kwargs", dict(bin_width=BIN_WIDTH))
     df[x_bins] = bin_data(df, "push times", **bin_kwargs)
-    groupers = ["stimulus reliability", "time", "box"]
+    groupers = ["stimulus reliability", "block_id", "time", "box"]
     df_grouped = get_blocks(df, groupers)
     df_average = df_grouped[y].mean().to_frame().reset_index()
 
@@ -2021,11 +2046,13 @@ def plot_quantity_across_block(
 
 
 @multiplot
-def plot_accuracy_across_block(
+def plot_reward_per_push_across_block(
     df: pd.DataFrame,
     stim_reliabilities: list = KAPPA_LEVELS,
     palette: dict = PALETTE,
     window: int = 10,
+    by_box: bool = False,
+    average_blocks: bool = False,
     **kwargs,
 ):
     """
@@ -2049,18 +2076,34 @@ def plot_accuracy_across_block(
     df = df.copy()
     bin_kwargs = kwargs_handler(kwargs, "bin_kwargs", dict(bin_width=60))
     df[x_bins] = bin_data(df, "push times", **bin_kwargs)
-    grouped = get_blocks(df, ["stimulus reliability", "time", "box"])
+    groupers = (
+        ["stimulus reliability", "block_id", "time", "box"]
+        if by_box
+        else ["stimulus reliability", "block_id", "time"]
+    )
+    grouped = get_blocks(df, groupers)
     rr = grouped["reward outcomes"].sum().to_frame().reset_index()
     rr["push rate"] = grouped.size().reset_index()[0]
-    rr["ratio"] = rr["reward outcomes"] / rr["push rate"]
+    rr["reward per push"] = rr["reward outcomes"] / rr["push rate"]
 
     # Smooth the curve
     if window:
-        rr["ratio"] = get_blocks(rr, groupers=["box"])["ratio"].transform(
-            lambda x: x.rolling(window=window, min_periods=1).mean()
-        )
+        if by_box:
+            rr["reward per push"] = get_blocks(rr, groupers=["box"])[
+                "reward per push"
+            ].transform(lambda x: x.rolling(window=window, min_periods=1).mean())
+        else:
+            rr["reward per push"] = get_blocks(rr)["reward per push"].transform(
+                lambda x: x.rolling(window=window, min_periods=1).mean()
+            )
 
     fig_kwargs = kwargs_handler(kwargs, "fig_kwargs", {"sharey": True, "sharex": True})
+    base_params = {"x": "time", "y": "reward per push", "x_unit": "s", **kwargs}
+
+    if by_box:
+        base_params.update({"hue": "box", "palette": palette})
+    else:
+        base_params.update({"color": "black"})
 
     @legend_handler
     def _plot(i, subj, **kwargs):
@@ -2069,21 +2112,20 @@ def plot_accuracy_across_block(
         fig, ax = fig_init(**fig_kwargs)
         rr_subj = filter_df(rr, {"subject": subj})
         for i, kappa in enumerate(kappas):
-            bp(sns.lineplot)(
-                rr_subj,
-                conds={"stimulus reliability": kappa},
-                x="time",
-                y="ratio",
-                hue="box",
-                x_unit="s",
-                palette=palette,
-                ax=ax[i],
-                legend=i == len(kappas) - 1,
-                **kwargs,
+            base_params.update(
+                {
+                    "conds": {"stimulus reliability": kappa},
+                    "ax": ax[i],
+                    "legend": i == len(kappas) - 1,
+                    **kwargs,
+                }
+            )
+            plot_block_average_or_traces(
+                rr_subj, average_blocks=average_blocks, base_params=base_params
             )
             if i == 0:
                 ax[i].set_ylabel(r"$\frac{\text{# rewards}}{\text{# pushes}}$")
-        fig.suptitle(f"Accuracy for {subj}")
+        fig.suptitle(f"Reward-per-push for {subj}")
         fig.tight_layout()
         return ax
 
@@ -2479,7 +2521,7 @@ def plot_frequencies_over_experiment(
     category: str,
     conds: dict = None,
     title: str = None,
-    title_prefix: str = None,
+    title_override: str = None,
     palette: list = BOX_COLORS,
     label_rotation: float = 35,
     ax: plt.Axes = None,
@@ -2524,7 +2566,7 @@ def plot_frequencies_over_experiment(
     ax.tick_params(axis="y", labelrotation=label_rotation)
     ax.set_xlabel("blocks")
     ax.set_ylabel("session")
-    ax.set_title(titler(title=title, title_prefix=title_prefix, conds=conds))
+    ax.set_title(titler(title=title, conds=conds, title_override=title_override))
 
     # Draw the scale bar
     scale_length = 1
@@ -2550,8 +2592,8 @@ def plot_frequencies_over_experiment(
 def plot_fisher(
     df: pd.DataFrame,
     conds: dict = None,
-    title: str = None,
-    title_prefix: str = "Fisher info for",
+    title: str = "Fisher information",
+    title_override: str = None,
     box_colors: list = BOX_COLORS,
     box_labels: list = None,
     legend: bool = True,
@@ -2567,8 +2609,8 @@ def plot_fisher(
         df: Dataframe
         conds: Dictionary to filter df. Should specify a block.
         x: x-axis
-        title: Title of figure. If specified, overrides `title_prefix`.
-        title_prefix: Prefix of title that is used to construct the contents of the title together with conds. See `titler` for more details. Ignored if `title` is specified.
+        title: Title of figure.
+        title_override: Overrides title. See `titler` for more details.
         box_colors: List of colors for each box
         box_labels: Labels of each box
         legend: If True, a custom legend is added to the plot.
@@ -2587,7 +2629,7 @@ def plot_fisher(
 
     # Get data from block
     x = "push times"
-    df_block = utils.data.filter_df(df, conds)
+    df_block = filter_df(df, conds)
     x_vals = df_block[x].values
     y = "specific fisher" if specific else "fisher"
     y_vals = df_block[y].values
@@ -2624,8 +2666,7 @@ def plot_fisher(
     conds["shape"] = shape[0]
     box_labels = box_labels if box_labels else schedules
 
-    title = titler(title=title, title_prefix=title_prefix, conds=conds)
-    ax.set_title(title)
+    ax.set_title(titler(title=title, conds=conds, title_override=title_override))
     ax.set_ylabel("Fisher information")
     ax.set_xlabel(unitler(x, "s"))
 

@@ -34,7 +34,6 @@ import seaborn as sns
 from foraging.config.constants import MULTIPLOT_FIGSIZE, PALETTE, PALETTE_DARK, SEED
 from foraging.plotting import bp, enhanced_violinplot
 from foraging.plotting.behavior import (
-    plot_accuracy_across_block,
     plot_experiment_overview,
     plot_matching_law,
     plot_matching_law_coefficients,
@@ -45,6 +44,7 @@ from foraging.plotting.behavior import (
     plot_push_rates_across_block,
     plot_pushes,
     plot_quantity_across_block,
+    plot_reward_per_push_across_block,
     plot_reward_rates_across_block,
     plot_runlengths,
     plot_stay_probabilities,
@@ -61,6 +61,9 @@ RNG = np.random.default_rng(SEED)
 DATA_DIR = "../data"
 EXPERIMENT_DIR = os.path.join(DATA_DIR, "experiments")
 FIGURES_DIR = "../figures"
+
+# %%
+# TODO: TOC like in data cleaning
 
 # %% [markdown]
 # # Load Data
@@ -105,7 +108,6 @@ conds = dict(subject="viktor")
 plot_experiment_overview(
     df,
     conds=conds,
-    title_prefix="Overview of pushes over entire experiment",
     annotate_block=True,
 )
 
@@ -114,8 +116,8 @@ plot_experiment_overview(
 # The behavioral quantities we will explore are: push intervals, consecutive push intervals, stay pushes, switch pushes, runlengths of consecutive choices, etc. These are defined as follows:
 # + <span style='color:#03a9fc'>push intervals</span>: time between pushes *at the same box*, which can include pushes made at other boxes during this interval. This is essentially how long the subject has been waiting on this box to be ready before they push at that box again. Depending on context, this is interchangeable with push times (for example, if discussing push times in a block, then this should be interpreted as the absolute time the push occurred in the block, not the time between pushes. On the other hand, push times for an individual choice the subject made should be interpreted as the push interval). Unless otherwise noted, this is the default meaning for push intervals.
 # + <span style='color:#fa5cbe'>consecutive push intervals</span>: time between *consecutive* pushes-- unlike general push intervals, this can include the time between pushes at different boxes.
-# + <span style='color:#fa0c9f'>stay times</span>: the intersection of consecutive push intervals and general push intervals, which occurs when the subject chooses to stay at their current box and push again.
-# + <span style='color:#22c793'>switch times</span>: the time between consecutive pushes at different boxes, which may potentially largely capture travel time between equidistant boxes.
+# + <span style='color:#fa0c9f'>stay times/stay pushes</span>: the intersection of consecutive push intervals and general push intervals, which occurs when the subject chooses to stay at their current box and push again.
+# + <span style='color:#22c793'>switch times/switch pushes</span>: the time between consecutive pushes at different boxes, which may potentially largely capture travel time between equidistant boxes.
 # + <span style='color:#ff9d00'>runlengths</span>: the number of times the subject pushes the same box before switching boxes.
 #
 # One hypothesis we would like to test is whether the subjects' push intervals obey the matching law, which is a normative principle that states that how often an option is picked is proportional to the reward they give. For example, a box with a faster schedule should be visited more frequently than a slower box. A good discussion of when matching is the result of theoretically optimal decision-making can be found in [(Sakai & Fukai 2008)](https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0003795). In our study, the matching law should materialize as the reward rates being proportional to the visit frequencies of each box; since each box has a different schedule, then, in expectation, the push times for a given box should be proportional to the schedules of that box.
@@ -154,7 +156,7 @@ bp(enhanced_violinplot)(
     y="push intervals",
     hue="box",
     palette=PALETTE,
-    title_prefix="Distribution of push intervals at each box",
+    title="Distribution of push intervals at each box",
     y_unit="s",
     cut=0,
     inner=None,
@@ -188,7 +190,7 @@ bp(enhanced_violinplot)(
     y="push intervals",
     hue="box",
     palette=PALETTE,
-    title_prefix="Distribution of push intervals under exponential schedule",
+    title="Distribution of push intervals under exponential schedule",
     y_unit="s",
     cut=0,
     inner=None,
@@ -219,7 +221,7 @@ bp(enhanced_violinplot)(
     y="push intervals",
     hue="box",
     palette=PALETTE,
-    title_prefix="Distribution of push intervals under gamma schedule",
+    title="Distribution of push intervals under gamma schedule",
     y_unit="s",
     cut=0,
     inner=None,
@@ -262,7 +264,7 @@ plot_stay_switch_pushes(df)
 # %% [markdown]
 # First, the switch times are qualitatively similar across all pairs of boxes. Second, the stay times across all boxes share bimodal features covering about the same range, but the fast box looks qualitatively different from the other boxes.
 #
-# Finally, the distribution of consecutive push intervals can reveal the complexity of the decision process-- for example, suppose the decision space is {push at $\text{box}_i$ , wait}, and each timestep the animal makes a decision whether and where to push. Then, ignoring travel cost, a simple Hidden Markov Model (HMM) of this decision process would result in exponentially distributed intervals between pushes. Fitting an exponential distribution to each empirical distribution via maximum likelihood estimation and then performing a Kolmogorov-Smirnoff test under the null hypothesis that the data is drawn from the fitted exponential distributions resulted in rejecting the null hypothesis in each case, so the push intervals are likely the result of a much more complicated decision process.
+# Finally, the distribution of consecutive push intervals can reveal the complexity of the decision process-- for example, suppose the decision process can be modeled as a simple Markov jump process, where the decision state is merely {push at box $_i$ }. Then, this would result in exponentially distributed intervals between pushes. Fitting an exponential distribution to each empirical distribution via maximum likelihood estimation and then performing a Kolmogorov-Smirnoff test under the null hypothesis that the data is drawn from the fitted exponential distributions resulted in rejecting the null hypothesis in each case, so the push intervals are likely the result of a much more complicated decision process.
 #
 
 # %% [markdown]
@@ -278,19 +280,38 @@ plot_runlengths(df, stat="probability")
 # %% [markdown]
 # ### Accuracy
 #
-# Here, we show each push interval along with the corresponding reward interval of the box that was pushed. Basically, we want to see how accurately the subjects timed their pushes to the reward interval of the box. Our expectation is that as the stimulus reliability increases, the subjects should be able to time their pushes more reliably to occur after the reward interval has elapsed.
+# Here, we show each push interval along with the corresponding reward interval of the box that was pushed. Basically, we want to see how accurately the subjects timed their pushes to the reward interval of the box-- if they push before the reward interval is up, then they miss the reward, but if they push after the reward interval, then they get the reward. Our expectation is that as the stimulus reliability increases, the subjects should be able to time their pushes more reliably to occur after the reward interval has elapsed.
 
 # %%
 plot_push_intervals_vs_reward_intervals(
-    filter_df(df[(df["push intervals"] < 60) & (df["reward intervals"] < 60)]),
+    df[(df["push intervals"] < 60) & (df["reward intervals"] < 60)],
     annotate_reg=True,
 )
 
 # %% [markdown]
-# As expected, the correlation and slope between the push intervals and reward intervals increases with stimulus reliability.
+# As expected, the correlation and slope between the push intervals and reward intervals increases with stimulus reliability. We can further decompose the pushes into stay pushes and switch pushes.
+
+# %%
+plot_push_intervals_vs_reward_intervals(
+    df[(df["push intervals"] < 60) & (df["reward intervals"] < 60)],
+    conds={"stay/switch": "stay"},
+    title_override="(Stay pushes) push intervals vs reward intervals",
+    annotate_reg=True,
+)
 
 # %% [markdown]
-# #TODO: behavioral adaptation between blocks with different stimulus reliability? for example, one might expect that after adapting to an unreliable block, there is a reliance on internal model over color for some time before animal adjusts to new block statistics
+# Most of the stay pushes occur at the fast box, and they explain the cluster of inaccurate pushes that occur at the bottom of the earlier figure.
+
+# %%
+plot_push_intervals_vs_reward_intervals(
+    df[(df["push intervals"] < 60) & (df["reward intervals"] < 60)],
+    conds={"stay/switch": "switch"},
+    title_override="(Switch pushes) push intervals vs reward intervals",
+    annotate_reg=True,
+)
+
+# %% [markdown]
+# The majority of pushes are switch pushes, including the cluster of longer pushes.
 
 # %% [markdown]
 # ### Surprise
@@ -308,7 +329,7 @@ plot_next_push_surprise(
 # Across both rewarded and unrewarded cases, there is a transition point at 20-25 s between waiting longer and going sooner the next push that is roughly preserved across all conditions. As reliability increases, the push intervals on the x-axis cluster by boxes. There is a distinct string of stay pushes that occur near the bottom of the graph where the subject pushes a few seconds after the current push. Visually, it appears that the subject switches a lot more across both reward outcomes, possibly switching more the longer they've waited, but when choosing to stay and push again, does so more after being rewarded. We confirm this below by counting how many times they stay or switch depending on how long they waited to push and the reward outcome.
 
 # %% [markdown]
-# ### Probability of staying
+# ### Staying vs switching
 #
 # Here we calculate the probability of staying and pushing the same box again as a function of push interval. We do this separately for the rewarded and unrewarded case.
 
@@ -333,13 +354,13 @@ bp(sns.violinplot)(
     y="push times",
     cut=0,
     log_scale=True,
-    title_prefix="Distribution of block initiation times",
+    title="Distribution of block initiation times",
     y_unit="s",
     legend=False,
 )
 
 # %% [markdown]
-# Looks like a bin size of 20-30 seconds should be big enough to prevent accidentally creating artifical transients.
+# Looks like a bin size of 20-30 seconds should be big enough to prevent accidentally creating artifical transients in the first bin of each block.
 #
 # ### Reward Rate
 
@@ -350,11 +371,7 @@ plot_reward_rates_across_block(df, min_obs=10)
 # Reward rate increases as subjects gain more experience in the block. As reliablity increases, the total reward rate combined across all boxes also increases. Next, we decompose the reward rate into different boxes.
 
 # %%
-plot_reward_rates_across_block(
-    df,
-    by_box=True,
-    min_obs=10,
-)
+plot_reward_rates_across_block(df, by_box=True, min_obs=10, average_blocks=True)
 
 # %% [markdown]
 # Clearly, the reward rates are ordered the way we would expect them, fast > medium > slow.
@@ -363,15 +380,11 @@ plot_reward_rates_across_block(
 # ### Push Rate
 
 # %%
-plot_push_rates_across_block(
-    df,
-    by_box=True,
-    min_obs=10,
-)
+plot_push_rates_across_block(df, by_box=True, min_obs=10, average_blocks=True)
 
 
 # %% [markdown]
-# When the stimulus reliability is low, the subjects initially struggle to distinguish the boxes. As time goes on, they learn.
+# When the stimulus reliability is low, the subjects initially struggle to distinguish the boxes. As time goes on in the block, they learn.
 
 # %% [markdown]
 # ### Push Intervals
@@ -394,25 +407,23 @@ def _auxiliary_plot(
     )
     for box, schedule in schedules:
         ax.axhline(schedule, color=palette[box], linestyle="--")
+    ax.set_ylim(0, ax.get_ylim()[1] + 2)
 
 
 plot_quantity_across_block(
-    df,
-    y="push intervals",
-    auxiliary_plot=_auxiliary_plot,
-    min_obs=10,
+    df, y="push intervals", auxiliary_plot=_auxiliary_plot, min_obs=10
 )
 
 # %% [markdown]
-# Across all reliabilities, the push intervals start off low and close together before differentiating as the block progresses. When reliability is low, the push intervals are similar across boxes and differentiation occurs slowly compared to higher reliabilities. When reliability is high, the subjects's pushes are guided by the color cue, and so their pushes distinguish the boxes quickly. Next, we will see if how this translates to accuracy by counting the fraction of rewarded pushes in each time bin across blocks.
+# When reliability is low, the push intervals are similar across boxes and differentiation occurs slowly compared to higher reliabilities. When reliability is high, pushes are largely driven by the color cue, so the pushes distinguish the boxes early in the block. Next, we will see how this translates to reward-per-push by counting the fraction of rewarded pushes in each time bin across blocks.
 #
-# ### Accuracy
+# ### Reward-per-push
 
 # %%
-plot_accuracy_across_block(df, min_obs=10)
+plot_reward_per_push_across_block(df, min_obs=10, by_box=True, average_blocks=True)
 
 # %% [markdown]
-# The accuracies start off low but increase over time in the block. As reliability increases, they start off higher.
+# The reward-per-push start off low but increase over time in the block. As reliability increases, they start off higher.
 
 # %% [markdown]
 # ## Matching Law
@@ -422,13 +433,11 @@ plot_accuracy_across_block(df, min_obs=10)
 # $$ \frac{C_i}{\sum_i C_i} \propto \frac{R_i}{\sum_i R_i}$$
 #
 # where $C_i$ and $R_i$ denote the number of times option $i$ has been chosen and reward obtained from that option, respectively. The constant of proportionality captures how sensitive the subjects are to the relative reward rates-- if the subject does not perceive much difference between the options, then the constant of proportionality will be less than 1 and the subject will be said to be "undermatching". When the constant of proportionality is greater than 1, then the subject is "overmatching". In the literature, undermatching is more common than overmatching, and also subjects have been observed to have a baseline response rate, or bias that cannot be attributed to reward. This bias and sensitivity to reward rates can be captured by linearly regressing the relative response rates on the relative reward rates, which is what we do below for each block with slopes and intercepts aggregated across blocks.
+#
+# *Note, the matching law may appear for seemingly trivial behavior. Imagine a subject that waits long enough to push each box at a fixed push interval, then their relative reward will largely be driven by their relative push rate, resulting in close to perfect matching. In the supplementary notebook for the exponential schedule, we observe exactly this scenario.
 
 # %%
 plot_matching_law(df)
-
-# %%
-# %%capture --no-display
-plot_matching_law(df, palette="rocket", min_obs=10)
 
 # %% [markdown]
 # Across all subjects, there is undermatching as indicated by slopes < 1 and bias that improves with reliability.
@@ -439,5 +448,6 @@ plot_matching_law(df, palette="rocket", min_obs=10)
 #
 # To summarize:
 # + Subjects become more accurate as reliability increases
+# + Subjects tend to "figure out" the fast box faster than the slower boxes
 # + Initially in the block, reward rates across boxes are low but increase and differentiate with experience in the block
 # + Undermatching and bias improve with reliability

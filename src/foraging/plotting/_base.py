@@ -35,16 +35,17 @@ def fig_init(ax: plt.Axes = None, **kwargs):
     return ax.get_figure(), ax
 
 
-def titler(title: str = "", title_prefix: str = "", conds: dict = {}):
+def titler(title: str = None, conds: dict = None, title_override: str = None):
+    if title_override is not None:
+        return title_override
     if title is None:
         return None
-    return (
-        title
-        if len(title) > 0
-        else title_prefix
-        + "\n"
-        + ", ".join([k + " = " + str(v) for k, v in conds.items()])
-    )
+    if conds is None or len(conds) == 0:
+        return title
+    conds_str = ", ".join([k + " = " + str(v) for k, v in conds.items()])
+    if len(title) > 0:
+        return title + "\n" + conds_str
+    return conds_str
 
 
 def unitler(label: str, unit: str):
@@ -146,7 +147,6 @@ def bp(func: Callable):
         conds: dict = None,
         single_block: bool = False,
         title: str = "",
-        title_prefix: str = "",
         legend: Any = "auto",
         x_unit: str = None,
         y_unit: str = None,
@@ -163,17 +163,16 @@ def bp(func: Callable):
             x: Name of x variable to be plotted.
             hue: Name of hue variable to be plotted.
             palette: List or dictionary mapping hue levels to colors.
-            conds: Dictionary mapping level keys to values to be used to filter `df`. Necessary for setting title.
+            conds: Dictionary mapping level keys to values to be used to filter `df`.
             single_block: True indicates `df` should be treated as a single block.
-            title: Title for figure (overrides `title_prefix`).
-            title_prefix: Prefix string that precedes the string template that enumerates conditions for this block(s).
+            title: Title for figure.
             legend: If True, display figure.
             x_unit: Unit of the x-axis. If None, then ignored.
             y_unit: Unit of the y-axis. If None, then ignored.
             min_obs: Threshold for min number of observations a bin must have to be displayed. Only used if not None.
             attempt_index: Refer to `filter_df` for more details.
             ax: Axis to plot on (not None if reusing premade figure and axis object).
-            **kwargs: keyword arguments
+            **kwargs: Additional keyword arguments.
                 - fig_kwargs: keyword arguments to be passed to `plt.subplots`.
                 - legend_kwargs: keyword arguments to be passed to `Axes.legend`.
                 - title_kwargs: keyword arguments to be passed to `Axes.set_title`.
@@ -182,7 +181,7 @@ def bp(func: Callable):
                 - additional keyword arguments get passed to wrapped function, which is meant to be a seaborn-style function.
 
         Returns:
-            ax, or optional return arguments from wrapped function usually in the form of ax + extra
+            ax, or optional return arguments from wrapped function (usually in the form of ax + extra).
         """
         kwargs = deepcopy(kwargs)
 
@@ -276,7 +275,7 @@ def bp(func: Callable):
             [_ax.set_xticks(range(len(xticks)), xticks) for _ax in flatten(ax)]
 
         # Set title (if multiple axes, this does the first one)
-        title = titler(title=title, title_prefix=title_prefix, conds=conds)
+        title = titler(title=title, conds=conds)
         _ax = np.atleast_1d(ax)
         if title:
             _ax[0].set_title(title, **title_kwargs)

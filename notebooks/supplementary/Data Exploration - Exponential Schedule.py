@@ -34,7 +34,6 @@ import seaborn as sns
 from foraging.config.constants import KAPPA_LEVELS, PALETTE, PALETTE_DARK, SEED
 from foraging.plotting import bp, enhanced_violinplot
 from foraging.plotting.behavior import (
-    plot_accuracy_across_block,
     plot_experiment_overview,
     plot_matching_law,
     plot_next_push_surprise,
@@ -44,6 +43,7 @@ from foraging.plotting.behavior import (
     plot_push_rates_across_block,
     plot_pushes,
     plot_quantity_across_block,
+    plot_reward_per_push_across_block,
     plot_reward_rates_across_block,
     plot_runlengths,
     plot_stay_probabilities,
@@ -270,7 +270,8 @@ plot_reward_rates_across_block(df, min_obs=10)
 plot_reward_rates_across_block(
     df,
     by_box=True,
-    min_obs=5,
+    min_obs=10,
+    average_blocks=True,
 )
 
 # %% [markdown]
@@ -279,11 +280,7 @@ plot_reward_rates_across_block(
 # ### Push Rate
 
 # %%
-plot_push_rates_across_block(
-    df,
-    by_box=True,
-    min_obs=10,
-)
+plot_push_rates_across_block(df, by_box=True, min_obs=10, average_blocks=True)
 
 
 # %% [markdown]
@@ -319,10 +316,10 @@ plot_quantity_across_block(
 # %% [markdown]
 # Dylan's and Marco's wait times are within range of the schedules but 1) fail to distinguish them when reliability is low 2) distinguish them weakly when the reliability is high. On the other hand, Viktor is pushing much more rapidly and distinguishing the schedules, for the same reward rate as the other two. This should translate to the other two monkeys achieving more accurate pushes than Viktor, which we confirm below.
 #
-# ### Accuracy
+# ### Reward-per-push
 
 # %%
-plot_accuracy_across_block(df, min_obs=10)
+plot_reward_per_push_across_block(df, min_obs=10, by_box=True)
 
 # %% [markdown]
 # For Dylan, there doesn't really seem to be much of a trend in his accuracies. For Marco, when reliability is low, the accuracies start off low and then increase with time, whereas when the reliability is high they seem to start off where they converged in the low reliability case and stay stable. For Viktor, the accuracies look pretty stable throughout time and maybe even decreasing a little when the reliability is high.
