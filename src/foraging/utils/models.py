@@ -41,6 +41,25 @@ class AbstractBelief(ABC):
         pass
 
 
+class IndexedBelief(AbstractBelief):
+    """
+    A belief that is indexed by an integer.
+    This is useful for representing a belief that is indexed by a box number, for example.
+    The update method is then called with the box number as the first argument.
+    The query method is then called with the box number as the first argument.
+    The features method is then called with the box number as the first argument.
+    The support method is then called with the box number as the first argument.
+    """
+
+    @abstractmethod
+    def update(self, i: int, *args, **kwargs):
+        pass
+
+    @abstractmethod
+    def query(self, i: int, *args, **kwargs):
+        pass
+
+
 class AbstractID(ABC):
 
     @abstractmethod
@@ -185,14 +204,14 @@ class GammaBoxBelief(ArrayBelief):
         )  # this automatically normalizes due to setter property!!
 
 
-class IndependentBoxesBelief(AbstractBelief):
+class IndependentBoxesBelief(IndexedBelief):
     def __init__(self, n_boxes: int, belief_cls: Type[AbstractBelief], *args, **kwargs):
         self.n_boxes = n_boxes
         self.belief_cls = belief_cls
         self.beliefs = [belief_cls(*args, **kwargs) for _ in range(n_boxes)]
 
-    def update(self, box: int, *args, **kwargs):
-        self.beliefs[box].update(*args, **kwargs)
+    def update(self, i: int, *args, **kwargs):
+        self.beliefs[i].update(*args, **kwargs)
 
     def query(self, i: int, *args, **kwargs):
         return self.beliefs[i].query(*args, **kwargs)
@@ -229,21 +248,26 @@ class IndependentBoxesBelief(AbstractBelief):
             belief.features = features[i]
 
 
+class IndependentGammaBoxesBelief(IndependentBoxesBelief):
+    def __init__(self, n_boxes: int, *args, **kwargs):
+        super().__init__(n_boxes, GammaBoxBelief, *args, **kwargs)
+
+
 class PermutationBelief(ArrayBelief):
     def __init__(self, params: list):
         super().__init__(list(permutations(params)))
 
 
-class GammaBoxPermutationBelief(PermutationBelief):
+class PermutationGammaBoxesBelief(PermutationBelief, IndexedBelief):
     def __init__(self, schedules: list, shape: int = 1):
         super().__init__(schedules)
         self.shape = shape
 
-    def likelihood(self, obs: tuple[bool, float, int], perm: list):
+    def likelihood(self, i: int, obs: tuple[bool, float], perm: list):
         # Extract the reward availability and push interval.
         is_avail = obs[0]
         t = obs[1]
-        schedule = perm[obs[2]]
+        schedule = perm[i]
 
         # Calculate the probability of reward being available/unavailable after t time has passed under the given latents.
         p_t = gamma.cdf(t, self.shape, scale=schedule / self.shape)
@@ -255,10 +279,11 @@ class GammaBoxPermutationBelief(PermutationBelief):
             return 1.0 - p_t
         return p_t
 
-    def update(self, obs: tuple[bool, float, int]):
-        self.features = (
-            self.likelihood(obs) * self.features
-        )  # this automatically normalizes due to setter property!!
+    def update(self, i: int, obs: tuple[bool, float]):
+        new_features = np.zeros(len(self.support))
+        for j, perm in enumerate(self.support):
+            new_features[j] = self.likelihood(i, obs, perm) * self.features[j]
+        self.features = new_features
 
 
 class RealID(AbstractID):

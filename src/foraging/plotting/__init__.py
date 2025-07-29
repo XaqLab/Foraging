@@ -15,6 +15,7 @@ from ._base import (
     legend_handler,
     multiplot,
     per_block,
+    plot_block_average_or_traces,
     plot_variable_subplots,
     subject_plotter,
     titler,

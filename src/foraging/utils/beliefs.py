@@ -1,16 +1,16 @@
 import logging
-from typing import Any, Type
+from typing import Any, Callable, Type
 
 import numpy as np
 import pandas as pd
 from numpy.typing import ArrayLike
-from scipy.stats import gamma, uniform
+from scipy.stats import entropy, gamma, uniform
 from sklearn.linear_model import LogisticRegression
 from sklearn.utils.class_weight import compute_sample_weight
 
 from foraging.utils import discrete_time
 from foraging.utils.data import process_block_safely
-from foraging.utils.models import AbstractBelief, BeliefModule, EventID
+from foraging.utils.models import BeliefModule, EventID, IndexedBelief
 from foraging.utils.stats import mcfadden_pseudo_rsquared, permutation_test_logistic
 
 logger = logging.getLogger(__name__)
@@ -37,11 +37,11 @@ def fisher_info_reward_observations(t, schedule, alpha):
             return result
 
 
-# @process_block_safely
+@process_block_safely
 def compute_posteriors(
     df: pd.DataFrame,
     index: tuple,
-    posterior_class: Type[AbstractBelief],
+    posterior_maker: Callable[Any, IndexedBelief],
     *args,
     **kwargs,
 ) -> BeliefModule:
@@ -58,7 +58,6 @@ def compute_posteriors(
     Returns:
         BeliefModule: the computed beliefs about reward schedules.
     """
-
     # Extract data corresponding to the given index
     block_data = df.loc[index]
 
@@ -67,18 +66,17 @@ def compute_posteriors(
     push_times = block_data["push times"].values
     push_intervals = block_data["push intervals"].values
     reward_outcomes = block_data["reward outcomes"].values
-    box_ranks = block_data["box rank"].values
-    n_boxes = block_data["n boxes"].values[0]
+    box_positions = block_data["box position"].values
 
     # Construct posterior
-    # TODO: add flexible constructor method that can be block dependent
-    posterior = BeliefModule(EventID(index + (0,)), posterior_class(*args, **kwargs))
+    posterior = BeliefModule(
+        EventID(index + (0,)), posterior_maker(df, index, *args, **kwargs)
+    )
 
-    # TODO: add posterior class that explicitly takes box index as an argument cos it maintains separate references for each box ie. MultiBoxPosterior. This will be the expected type for this method as well
     for i in range(n_obs):
         posterior.update(
             EventID(index + (push_times[i],)),
-            box_ranks[i],
+            box_positions[i],
             (reward_outcomes[i], push_intervals[i]),
         )
     return posterior
@@ -623,7 +621,7 @@ def predict_pushed_box(
         return None
 
 
-def get_mean_beliefs(
+def get_mean_beliefs_over_time(
     beliefs: ArrayLike | list, supp: ArrayLike | list
 ) -> ArrayLike | list:
     """
@@ -641,7 +639,7 @@ def get_mean_beliefs(
     return [x @ supp for x in beliefs]
 
 
-def get_std_beliefs(
+def get_std_beliefs_over_time(
     beliefs: ArrayLike | list, supp: ArrayLike | list
 ) -> np.ndarray | list:
     """
@@ -659,3 +657,9 @@ def get_std_beliefs(
             beliefs @ (supp[:, np.newaxis] ** 2) - (beliefs @ supp[:, np.newaxis]) ** 2
         ).squeeze()
     return [np.sqrt(x @ (supp**2) - (x @ supp) ** 2) for x in beliefs]
+
+
+def get_entropy_beliefs_over_time(beliefs: ArrayLike | list) -> np.ndarray | list:
+    if isinstance(beliefs, np.ndarray):
+        return entropy(beliefs, axis=1)
+    return [entropy(x) for x in beliefs]

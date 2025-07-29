@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.17.2
+#       jupytext_version: 1.16.7
 #   kernelspec:
 #     display_name: xaqlab2
 #     language: python
@@ -43,7 +43,11 @@ from foraging.plotting.beliefs import (
     plot_schedule_beliefs_mean_and_std_across_blocks,
 )
 from foraging.utils import INDEX, MIN_INDEX
-from foraging.utils.beliefs import compute_posteriors, get_mean_beliefs, get_std_beliefs
+from foraging.utils.beliefs import (
+    compute_posteriors,
+    get_mean_beliefs_over_time,
+    get_std_beliefs_over_time,
+)
 from foraging.utils.data import (
     display_df,
     exclusion_criteria,

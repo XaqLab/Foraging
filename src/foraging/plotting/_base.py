@@ -674,6 +674,45 @@ def enhanced_violinplot(
     return ax
 
 
+def plot_block_average_or_traces(
+    df: pd.DataFrame,
+    average_blocks: bool,
+    units: str = "block_id",
+    params: dict = {},
+):
+    params = params.copy()
+    if average_blocks:
+        bp(sns.lineplot)(df, **params)
+    else:
+        legend_flag = "legend" in params
+        params["legend"] = False
+
+        # Traces
+        bp(sns.lineplot)(
+            df,
+            **params,
+            units=units,
+            estimator=None,
+            errorbar=None,
+            alpha=0.2,
+        )
+
+        if "x_unit" in params:
+            params.pop("x_unit")
+        if "y_unit" in params:
+            params.pop("y_unit")
+        if legend_flag:
+            params["legend"] = True
+
+        # Average
+        bp(sns.lineplot)(
+            df,
+            **params,
+            errorbar=None,
+            lw=5,
+        )
+
+
 # Credit to https://stackoverflow.com/questions/22852244/how-to-get-the-numerical-fitting-results-when-plotting-a-regression-in-seaborn
 def regplot(
     x: ArrayLike,

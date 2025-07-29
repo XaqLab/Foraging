@@ -399,6 +399,13 @@ def display_df(df: pd.DataFrame, cols: list[str]) -> DisplayHandle:
     return display(Markdown(df.head()[cols].to_markdown()))
 
 
+def map_box_positions_to_ranks(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Map box positions to ranks.
+    """
+    return df[["box position", "box rank"]].drop_duplicates().set_index("box position")
+
+
 def filter_df(
     df: pd.DataFrame, conds: dict[str, Any] = None, attempt_index: bool = False
 ) -> pd.DataFrame:

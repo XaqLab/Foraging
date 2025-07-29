@@ -19,17 +19,19 @@ from foraging.plotting import (
     multiplot,
     titler,
 )
-from foraging.plotting._base import subject_plotter
+from foraging.plotting._base import plot_block_average_or_traces, subject_plotter
 from foraging.utils import INDEX, MIN_INDEX
 from foraging.utils._base import kwargs_handler
 from foraging.utils.beliefs import (
     fisher_info_reward_observations,
-    get_mean_beliefs,
-    get_std_beliefs,
+    get_entropy_beliefs_over_time,
+    get_mean_beliefs_over_time,
+    get_std_beliefs_over_time,
 )
 from foraging.utils.data import (
     bin_data,
     filter_df,
+    map_box_positions_to_ranks,
     process_block_safely,
     process_blocks,
 )
@@ -279,7 +281,6 @@ def plot_schedule_beliefs_in_block(
     Returns:
         ax: The matplotlib Axes object with the plot.
     """
-
     # Get block data
     df_block = filter_df(df, conds)
     n_boxes = df_block["n boxes"].values[0]
@@ -287,7 +288,7 @@ def plot_schedule_beliefs_in_block(
     posteriors = np.array(beliefs[tuple(conds.values())].features)
     schedule_candidates = beliefs[tuple(conds.values())].support[0]
     schedules = np.sort(df_block["schedule"].unique())
-    mean_across_pushes = get_mean_beliefs(posteriors, schedule_candidates)[1:]
+    mean_across_pushes = get_mean_beliefs_over_time(posteriors, schedule_candidates)[1:]
 
     # Create a new array to hold the interpolated data
     # The new number of columns will be the difference between the max and min time points, creating 1 second time bins
@@ -296,17 +297,17 @@ def plot_schedule_beliefs_in_block(
         (new_num_cols, posteriors.shape[1], posteriors.shape[2])
     )
     start = 0
-    for i, t in enumerate(push_times):
+    for box_pos, t in enumerate(push_times):
         end = int(t)
-        interpolated_beliefs[start:end, :, :] = posteriors[i, :, :]
+        interpolated_beliefs[start:end, :, :] = posteriors[box_pos, :, :]
         start = end
 
     if show_stats:
-        mean_across_time = get_mean_beliefs(
+        mean_across_time = get_mean_beliefs_over_time(
             interpolated_beliefs, schedule_candidates
         )  # E[lambda] at each timepoint
         std_across_time = np.nan_to_num(
-            get_std_beliefs(interpolated_beliefs, schedule_candidates)
+            get_std_beliefs_over_time(interpolated_beliefs, schedule_candidates)
         )
     fig, ax = fig_init(
         ax,
@@ -322,37 +323,42 @@ def plot_schedule_beliefs_in_block(
         ),
     )
     box_labels = list(heatmap_palette.keys())
-    for i in range(n_boxes):
+    pos_to_rank = map_box_positions_to_ranks(df_block)
+    for box_pos in range(n_boxes):
+        box_rank = pos_to_rank.loc[box_pos].values[0]
+
         # Plot belief probabilities
         sns.heatmap(
-            interpolated_beliefs[:, i, :].T,
-            cmap=heatmap_palette[box_labels[i]],
+            interpolated_beliefs[:, box_pos, :].T,
+            cmap=heatmap_palette[box_labels[box_rank]],
             cbar_kws={"label": "probability"},
-            ax=ax[i],
+            ax=ax[box_pos],
         )
         if show_stats:
-            ax[i].plot(
-                mean_across_time[:, i], color=palette[box_labels[i]], label="mean"
+            ax[box_pos].plot(
+                mean_across_time[:, box_pos],
+                color=palette[box_labels[box_rank]],
+                label="mean",
             )
-            ax[i].plot(
-                mean_across_time[:, i] - std_across_time[:, i],
-                color=palette[box_labels[i]],
+            ax[box_pos].plot(
+                mean_across_time[:, box_pos] - std_across_time[:, box_pos],
+                color=palette[box_labels[box_rank]],
                 linestyle=":",
                 label="s.d.",
             )
-            ax[i].plot(
-                mean_across_time[:, i] + std_across_time[:, i],
-                color=palette[box_labels[i]],
+            ax[box_pos].plot(
+                mean_across_time[:, box_pos] + std_across_time[:, box_pos],
+                color=palette[box_labels[box_rank]],
                 linestyle=":",
             )
 
         # Plot true schedule
-        ax[i].axhline(schedules[i], color="black", linestyle="--")
-        ax[i].set_title(f"Belief about schedule for {box_labels[i]} box")
-        ax[i].set_xlabel("Time (s)")
-        ax[i].set_ylabel("Possible schedules")
-        current_yticks = ax[i].get_yticks()
-        ax[i].set_yticklabels(
+        ax[box_pos].axhline(schedules[box_rank], color="black", linestyle="--")
+        ax[box_pos].set_title(f"Belief about schedule for {box_labels[box_rank]} box")
+        ax[box_pos].set_xlabel("Time (s)")
+        ax[box_pos].set_ylabel("Possible schedules")
+        current_yticks = ax[box_pos].get_yticks()
+        ax[box_pos].set_yticklabels(
             [
                 schedule_candidates[int(j)]
                 for j in current_yticks
@@ -362,17 +368,17 @@ def plot_schedule_beliefs_in_block(
 
         # Plot reward outcomes
         reward_mask = df_block["reward outcomes"].values
-        box_mask = df_block["box rank"].values == i
-        ax[i].scatter(
+        box_mask = df_block["box rank"].values == box_rank
+        ax[box_pos].scatter(
             push_times[reward_mask & box_mask],
-            mean_across_pushes[reward_mask & box_mask, i],
+            mean_across_pushes[reward_mask & box_mask, box_pos],
             c="black",
             marker="^",
             s=50,
         )
-        ax[i].scatter(
+        ax[box_pos].scatter(
             push_times[~reward_mask & box_mask],
-            mean_across_pushes[~reward_mask & box_mask, i],
+            mean_across_pushes[~reward_mask & box_mask, box_pos],
             edgecolors="black",
             marker="v",
             s=50,
@@ -380,7 +386,7 @@ def plot_schedule_beliefs_in_block(
         )
 
         # Add legend
-        if i == 0:
+        if box_pos == 0:
             handles = [
                 Line2D([0], [0], color="black", linestyle="--", label="true schedule"),
                 Line2D(
@@ -403,7 +409,7 @@ def plot_schedule_beliefs_in_block(
                 handles.append(
                     Line2D([0], [0], color="black", linestyle=":", label="s.d.")
                 )
-            ax[i].legend(handles=handles)
+            ax[box_pos].legend(handles=handles)
 
     fig.suptitle(titler("Beliefs about schedule", conds=conds))
     fig.tight_layout()
@@ -416,6 +422,7 @@ def plot_schedule_beliefs_mean_and_std_across_blocks(
     conds: dict[str, Any] = None,
     x: str = "push times",
     palette: dict = PALETTE,
+    average_blocks: bool = False,
     **kwargs,
 ) -> plt.Axes:
     """
@@ -446,24 +453,26 @@ def plot_schedule_beliefs_mean_and_std_across_blocks(
         schedule_candidates = beliefs[index].support[0]
 
         # Get mean and std of beliefs
-        mean = get_mean_beliefs(posteriors, schedule_candidates)
-        std = get_std_beliefs(posteriors, schedule_candidates)
+        mean = get_mean_beliefs_over_time(posteriors, schedule_candidates)
+        std = get_std_beliefs_over_time(posteriors, schedule_candidates)
         x_vals = df_block[x].values
         box = df_block["box"].values
-        box_rank = df_block["box rank"].values
+        box_positions = df_block["box position"].values
+        block_id = df_block["block_id"].values[0]
         res = {
             (index + (i + 1,)): [
-                mean[i + 1, box_rank[i]],
-                std[i + 1, box_rank[i]],
+                mean[i + 1, box_positions[i]],
+                std[i + 1, box_positions[i]],
                 x_vals[i],
                 box[i],
+                block_id,
             ]
             for i in range(len(mean) - 1)
         }
 
         # Add prior
         box_labels = list(PALETTE.keys())
-        for i in df_block["box rank"].unique():
+        for i in df_block["box position"].unique():
             res[(index + (-i,))] = [mean[0, i], std[0, i], 0, box_labels[i]]
         return res
 
@@ -472,7 +481,7 @@ def plot_schedule_beliefs_mean_and_std_across_blocks(
     df_beliefs = pd.DataFrame.from_dict(
         res,
         orient="index",
-        columns=["mean", "standard deviation", x, "box"],
+        columns=["mean", "standard deviation", x, "box", "block_id"],
     )
 
     df_beliefs.index = pd.MultiIndex.from_tuples(
@@ -492,14 +501,17 @@ def plot_schedule_beliefs_mean_and_std_across_blocks(
         fig, ax = fig_init(**fig_kwargs)
         conds = {"subject": subj}
         df_subj = filter_df(df_beliefs, conds=conds)
-        bp(sns.lineplot)(
-            df_subj,
-            x=x,
-            y="mean",
-            hue="box",
-            palette=palette,
-            ax=ax[0],
+
+        base_params = {
+            "x": x,
+            "y": "mean",
+            "hue": "box",
+            "palette": palette,
+            "ax": ax[0],
             **kwargs,
+        }
+        plot_block_average_or_traces(
+            df_subj, average_blocks=average_blocks, params=base_params
         )
 
         # Plot schedules on top of means
@@ -522,17 +534,114 @@ def plot_schedule_beliefs_mean_and_std_across_blocks(
             ax[0].get_legend().remove()
             ax[0].legend(handles=all_handles, labels=all_labels)
 
-        bp(sns.lineplot)(
-            df_subj,
-            x=x,
-            y="standard deviation",
-            hue="box",
-            palette=palette,
-            ax=ax[1],
-            legend=False,
-            **kwargs,
+        base_params.update(
+            {
+                "y": "standard deviation",
+                "legend": False,
+                "ax": ax[1],
+            }
         )
-        fig.suptitle(titler(title_prefix="Beliefs about schedule", conds=conds))
+        plot_block_average_or_traces(
+            df_subj, average_blocks=average_blocks, params=base_params
+        )
+
+        fig.suptitle(titler(title="Beliefs about schedule", conds=conds))
+        fig.tight_layout()
+        return ax
+
+    subject_plotter(df.index.unique("subject"), _plot, **kwargs)
+
+
+def plot_schedule_beliefs_entropy_across_blocks(
+    df: pd.DataFrame,
+    beliefs: dict[tuple, BeliefModule],
+    conds: dict[str, Any] = None,
+    x: str = "push times",
+    palette: dict = PALETTE,
+    average_blocks: bool = False,
+    **kwargs,
+) -> plt.Axes:
+    """
+    Plots the beliefs about the schedule for a specific block in the experiment, with uncertainty bands
+    and reward outcomes.
+
+    Args:
+        df: DataFrame containing session data.
+        index: Index of the block to analyze in the DataFrame.
+        x: The value from `df` used for the x-axis, typically 'push #' or 'push times'.
+        ax: Optional, existing matplotlib Axes object. If None, a new one will be created.
+
+        kwargs:
+            - 'fig_kwargs': Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
+            - 'plt_kwargs': Dictionary to specify additional plotting properties for the line plot (passed to `bp wrapper`).
+            - 'lgd_kwargs': Dictionary of keyword arguments for customizing the legend (passed to `plt.legend`).
+
+    Returns:
+        ax: The matplotlib Axes object with the plot.
+    """
+
+    df = filter_df(df, conds)
+
+    # Get beliefs of each block
+    def _inner(df: pd.DataFrame, index: tuple):
+        df_block = df.loc[index].reset_index()
+        posteriors = beliefs[index].features
+
+        # Get entropy of beliefs over time in block
+        entropies = get_entropy_beliefs_over_time(posteriors)
+        x_vals = df_block[x].values
+        box = df_block["box"].values
+        box_positions = df_block["box position"].values
+        block_id = df_block["block_id"].values[0]
+        res = {
+            (index + (i + 1,)): [entropies[i + 1], x_vals[i], block_id]
+            for i in range(len(entropies) - 1)
+        }
+
+        # Add prior
+        res[(index + (0,))] = [entropies[0], 0, block_id]
+        return res
+
+    res, _ = process_blocks(df, _inner)
+    res = reduce(lambda x, y: {**x, **y}, list(res.values()), {})
+    columns = ["entropy", x, "block_id"]
+    df_beliefs = pd.DataFrame.from_dict(
+        res,
+        orient="index",
+        columns=columns,
+    )
+
+    df_beliefs.index = pd.MultiIndex.from_tuples(
+        df_beliefs.index, names=INDEX[:MIN_INDEX]
+    )
+    if x in df_beliefs.index.names:
+        df_beliefs = df_beliefs.drop(x, axis=1)
+
+    # Bin pushes by time
+    if x == "push times":
+        bin_kwargs = kwargs_handler(kwargs, "bin_kwargs", dict(bin_width=60))
+        df_beliefs[x] = bin_data(df_beliefs, x, **bin_kwargs).values
+
+    fig_kwargs = kwargs_handler(kwargs, "fig_kwargs", {"nrows": 1, "ncols": 1})
+
+    @legend_handler
+    def _plot(i, subj, **kwargs):
+        fig, ax = fig_init(**fig_kwargs)
+        conds = {"subject": subj}
+        df_subj = filter_df(df_beliefs, conds=conds)
+
+        base_params = {
+            "x": x,
+            "y": "entropy",
+            "color": "black",
+            "ax": ax,
+            **kwargs,
+        }
+        plot_block_average_or_traces(
+            df_subj, average_blocks=average_blocks, params=base_params
+        )
+
+        fig.suptitle(titler(title="Entropy of beliefs about schedule", conds=conds))
         fig.tight_layout()
         return ax
 

@@ -34,7 +34,12 @@ from foraging.plotting import (
     titler,
     unitler,
 )
-from foraging.plotting._base import get_bar_heights, palette_handler, regplot
+from foraging.plotting._base import (
+    get_bar_heights,
+    palette_handler,
+    plot_block_average_or_traces,
+    regplot,
+)
 from foraging.utils import INDEX, MIN_INDEX, kwargs_handler
 from foraging.utils.data import (
     bin_data,
@@ -1750,46 +1755,6 @@ def plot_stay_probabilities(
     subject_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
-def plot_block_average_or_traces(
-    df: pd.DataFrame,
-    average_blocks: bool,
-    units: str = "block_id",
-    base_params: dict = {},
-):
-    base_params = base_params.copy()
-    if average_blocks:
-        bp(sns.lineplot)(df, **base_params)
-    else:
-        legend_flag = "legend" in base_params
-        if legend_flag:
-            base_params["legend"] = False
-
-        # Traces
-        bp(sns.lineplot)(
-            df,
-            **base_params,
-            units=units,
-            estimator=None,
-            errorbar=None,
-            alpha=0.2,
-        )
-
-        if "x_unit" in base_params:
-            base_params.pop("x_unit")
-        if "y_unit" in base_params:
-            base_params.pop("y_unit")
-        if legend_flag:
-            base_params["legend"] = True
-
-        # Average
-        bp(sns.lineplot)(
-            df,
-            **base_params,
-            errorbar=None,
-            lw=5,
-        )
-
-
 @multiplot
 def plot_reward_rates_across_block(
     df: pd.DataFrame,
@@ -1868,7 +1833,7 @@ def plot_reward_rates_across_block(
                 }
             )
             plot_block_average_or_traces(
-                rr_subj, average_blocks=average_blocks, base_params=base_params
+                rr_subj, average_blocks=average_blocks, params=base_params
             )
         fig.suptitle(f"Reward rate for {subj}")
         fig.tight_layout()
@@ -1955,7 +1920,7 @@ def plot_push_rates_across_block(
                 }
             )
             plot_block_average_or_traces(
-                rr_subj, average_blocks=average_blocks, base_params=base_params
+                rr_subj, average_blocks=average_blocks, params=base_params
             )
         fig.suptitle(f"Push rate for {subj}")
         fig.tight_layout()
@@ -2121,7 +2086,7 @@ def plot_reward_per_push_across_block(
                 }
             )
             plot_block_average_or_traces(
-                rr_subj, average_blocks=average_blocks, base_params=base_params
+                rr_subj, average_blocks=average_blocks, params=base_params
             )
             if i == 0:
                 ax[i].set_ylabel(r"$\frac{\text{# rewards}}{\text{# pushes}}$")
