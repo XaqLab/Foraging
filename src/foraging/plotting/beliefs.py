@@ -33,11 +33,11 @@ from foraging.utils.data import (
     process_block_safely,
     process_blocks,
 )
-from foraging.utils.models import BeliefModule, Observation
+from foraging.utils.models import AbstractBelief, BeliefModule
 
 
 def likelihood_single_obs(
-    obs_model: Observation,
+    obs_model: AbstractBelief,
     latents: ArrayLike,
     obs: Any,
     ax: Optional[plt.Axes] = None,
@@ -61,7 +61,7 @@ def likelihood_single_obs(
     fig, ax = fig_init(ax, **kwargs)
 
     # Compute likelihood for each latent
-    likelihoods = [obs_model.probability(obs, latent) for latent in latents]
+    likelihoods = [obs_model.likelihood(obs, latent) for latent in latents]
 
     # Plot the likelihoods
     ax.plot(latents, likelihoods)
