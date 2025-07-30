@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.16.7
+#       jupytext_version: 1.17.2
 #   kernelspec:
 #     display_name: xaqlab2
 #     language: python
@@ -43,11 +43,7 @@ from foraging.plotting.beliefs import (
     plot_schedule_beliefs_mean_and_std_across_blocks,
 )
 from foraging.utils import INDEX, MIN_INDEX
-from foraging.utils.beliefs import (
-    compute_posteriors,
-    get_mean_beliefs_over_time,
-    get_std_beliefs_over_time,
-)
+from foraging.utils.beliefs import compute_posteriors, get_mean_beliefs, get_std_beliefs
 from foraging.utils.data import (
     display_df,
     exclusion_criteria,
@@ -56,9 +52,8 @@ from foraging.utils.data import (
     process_blocks,
 )
 from foraging.utils.models import (
-    GammaBoxBelief,
-    GammaBoxPermutationBelief,
-    IndependentBoxesBelief,
+    IndependentGammaBoxesBelief,
+    PermutationGammaBoxesBelief,
 )
 
 pd.options.mode.copy_on_write = True
@@ -138,11 +133,6 @@ plot_cramer_rao_lb(n=50, schedules=[7, 14, 21], alpha=10)
 # After 50 pushes, all schedules can be estimated within ±1-2 s. Note that these results are shown for shape parameter = 10; when shape = 1, it takes 3-4x longer to achieve the same precision.
 
 # %% [markdown]
-# ## What if the hypothesis space is discrete and finite?
-#
-# Now, this framework is only applicable if we assume the subjects 1) treat the boxes as independent and 2) start their inference process from scratch at the start of each block. If the schedules are kept constant over several blocks and merely permuted, then it is conceivable that the subjects eventually get a good handle on the identities of the schedules and only infer the assighment of specific schedules to boxes, not the values of the schedules themselves. In that case, their beliefs are defined over $m!$ permutations, where $m$ is the number of boxes. Analogous to the Fisher information, one can simulate observations under one of the permutations and show how quickly the posterior converges to the right permutation as a function of the number of observations (the result will generalize to the other permutations).
-
-# %% [markdown]
 # ## Empirical Beliefs using Censored Observations
 #
 # Given real behavioral data, we can construct Bayes-optimal beliefs about the schedules using censored observations when the color cue is completely unreliable. These beliefs take the form of a posterior over possible schedules, and they are updated according to Bayes rule:
@@ -153,39 +143,21 @@ plot_cramer_rao_lb(n=50, schedules=[7, 14, 21], alpha=10)
 
 
 # %%
-# Create a posterior class that is independent for each box
-class Posterior(IndependentBoxesBelief):
-    def __init__(self, n_boxes: int, *args, **kwargs):
-        super().__init__(n_boxes, GammaBoxBelief, *args, **kwargs)
-
-
 schedule_candidates = np.arange(30) + 1
-schedule_beliefs_shape10, _ = process_blocks(
-    filter_df(df, {"kappa": 0, "shape": 10}),
-    compute_posteriors,
-    Posterior,
-    schedules=schedule_candidates,
-    shape=10,
-)
-schedule_beliefs_shape1, _ = process_blocks(
-    filter_df(df, {"kappa": 0, "shape": 1}),
-    compute_posteriors,
-    Posterior,
-    schedules=schedule_candidates,
-    shape=1,
-)
-schedule_beliefs = schedule_beliefs_shape10 | schedule_beliefs_shape1
-conds = dict(subject="viktor", session=20230807, block=5)
-plot_schedule_beliefs_in_block(df, schedule_beliefs, conds)
 
-# %%
-schedule_beliefs_shape10, _ = process_blocks(
-    filter_df(df, {"kappa": 0, "shape": 10}),
-    compute_posteriors,
-    GammaBoxPermutationBelief,
-    schedules=[7, 14, 21],
-    shape=10,
-)
+
+def posterior_maker(df, index):
+    block = df.loc[index]
+    shape = block.index.unique("shape")[0]
+    n_boxes = block["n boxes"].values[0]
+    return IndependentGammaBoxesBelief(
+        n_boxes, schedules=schedule_candidates, shape=shape
+    )
+
+
+schedule_beliefs, _ = process_blocks(df, compute_posteriors, posterior_maker)
+conds = dict(subject="viktor", session=20230807, block=5)
+plot_schedule_beliefs_in_block(df, schedule_beliefs, conds=conds)
 
 # %% [markdown]
 # Now we will aggregate posteriors over blocks and report the average summary statistics of those posteriors.
@@ -193,11 +165,34 @@ schedule_beliefs_shape10, _ = process_blocks(
 # %%
 plot_schedule_beliefs_mean_and_std_across_blocks(
     df,
-    schedule_beliefs_shape10,
+    schedule_beliefs,
     conds={"kappa": 0, "shape": 10},
     x="push # by box",
     min_obs=5,
 )
+
+
+# %% [markdown]
+# ## What if the hypothesis space is discrete and finite?
+#
+# Now, this framework is only applicable if we assume the subjects 1) treat the boxes as independent and 2) start their inference process from scratch at the start of each block. If the schedules are kept constant over several blocks and merely permuted, then it is conceivable that the subjects eventually get a good handle on the identities of the schedules and only infer the assighment of specific schedules to boxes, not the values of the schedules themselves. In that case, their beliefs are defined over $m!$ permutations, where $m$ is the number of boxes. Analogous to the Fisher information, one can simulate observations under one of the permutations and show how quickly the posterior converges to the right permutation as a function of the number of observations (the result will generalize to the other permutations).
+
+
+# %%
+def posterior_maker(df, index):
+    block = df.loc[index]
+    shape = block.index.unique("shape")[0]
+    schedules = sorted(df["schedule"].unique())
+    return PermutationGammaBoxesBelief(schedules, shape=shape)
+
+
+schedule_beliefs_permutations, _ = process_blocks(
+    df, compute_posteriors, posterior_maker, use_tqdm=True
+)
+
+# %%
+perm_beliefs = np.array(schedule_beliefs_permutations[tuple(conds.values())].features)
+sns.heatmap(perm_beliefs.T)
 
 # %% [markdown]
 # # Extra: Knowing the shape parameter after a couple blocks of behavior
