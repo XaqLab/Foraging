@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.16.7
+#       jupytext_version: 1.17.2
 #   kernelspec:
 #     display_name: xaqlab2
 #     language: python
@@ -36,7 +36,6 @@ from foraging.plotting import bp, enhanced_violinplot
 from foraging.plotting.behavior import (
     plot_experiment_overview,
     plot_matching_law,
-    plot_matching_law_coefficients,
     plot_next_push_surprise,
     plot_push_intervals,
     plot_push_intervals_by_sessions,
@@ -360,18 +359,18 @@ bp(sns.violinplot)(
 )
 
 # %% [markdown]
-# Looks like a bin size of 20-30 seconds should be big enough to prevent accidentally creating artifical transients in the first bin of each block.
+# Looks like a bin size of 20-30 seconds should be big enough to prevent accidentally creating artifical transients in the first bin of each block. If we make the bin size too small, then we will be capturing trivial failures in the beginning of the block that aren't really reflective of anything important.
 #
 # ### Reward Rate
 
 # %%
-plot_reward_rates_across_block(df, min_obs=10)
+plot_reward_rates_across_block(df, min_obs=10, show_traces=True, smooth=True)
 
 # %% [markdown]
 # Reward rate increases as subjects gain more experience in the block. As reliablity increases, the total reward rate combined across all boxes also increases. Next, we decompose the reward rate into different boxes.
 
 # %%
-plot_reward_rates_across_block(df, by_box=True, min_obs=10, average_blocks=True)
+plot_reward_rates_across_block(df, by_box=True, min_obs=10, show_traces=True)
 
 # %% [markdown]
 # Clearly, the reward rates are ordered the way we would expect them, fast > medium > slow.

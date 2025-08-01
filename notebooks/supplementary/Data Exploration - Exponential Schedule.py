@@ -271,7 +271,7 @@ plot_reward_rates_across_block(
     df,
     by_box=True,
     min_obs=20,
-    average_blocks=True,
+    show_traces=True,
 )
 
 # %% [markdown]

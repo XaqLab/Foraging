@@ -43,7 +43,7 @@ from foraging.plotting.beliefs import (
     plot_schedule_beliefs_mean_and_std_across_blocks,
 )
 from foraging.utils import INDEX, MIN_INDEX
-from foraging.utils.beliefs import compute_posteriors, get_mean_beliefs, get_std_beliefs
+from foraging.utils.beliefs import compute_posteriors
 from foraging.utils.data import (
     display_df,
     exclusion_criteria,

@@ -676,14 +676,12 @@ def enhanced_violinplot(
 
 def plot_block_average_or_traces(
     df: pd.DataFrame,
-    average_blocks: bool,
+    show_traces: bool,
     units: str = "block_id",
     params: dict = {},
 ):
     params = params.copy()
-    if average_blocks:
-        bp(sns.lineplot)(df, **params)
-    else:
+    if show_traces:
         legend_flag = "legend" in params
         params["legend"] = False
 
@@ -711,6 +709,9 @@ def plot_block_average_or_traces(
             errorbar=None,
             lw=5,
         )
+
+    else:
+        bp(sns.lineplot)(df, **params)
 
 
 # Credit to https://stackoverflow.com/questions/22852244/how-to-get-the-numerical-fitting-results-when-plotting-a-regression-in-seaborn

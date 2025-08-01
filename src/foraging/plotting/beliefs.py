@@ -511,7 +511,7 @@ def plot_schedule_beliefs_mean_and_std_across_blocks(
             **kwargs,
         }
         plot_block_average_or_traces(
-            df_subj, average_blocks=average_blocks, params=base_params
+            df_subj, show_traces=average_blocks, params=base_params
         )
 
         # Plot schedules on top of means
@@ -542,7 +542,7 @@ def plot_schedule_beliefs_mean_and_std_across_blocks(
             }
         )
         plot_block_average_or_traces(
-            df_subj, average_blocks=average_blocks, params=base_params
+            df_subj, show_traces=average_blocks, params=base_params
         )
 
         fig.suptitle(titler(title="Beliefs about schedule", conds=conds))
@@ -638,7 +638,7 @@ def plot_schedule_beliefs_entropy_across_blocks(
             **kwargs,
         }
         plot_block_average_or_traces(
-            df_subj, average_blocks=average_blocks, params=base_params
+            df_subj, show_traces=average_blocks, params=base_params
         )
 
         fig.suptitle(titler(title="Entropy of beliefs about schedule", conds=conds))

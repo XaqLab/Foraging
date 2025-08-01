@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 from IPython.core.display import Markdown
 from IPython.core.display_functions import DisplayHandle, display
+from numpy.typing import ArrayLike
 from pandas.core.groupby import DataFrameGroupBy
 from tqdm import tqdm
 
@@ -321,13 +322,7 @@ def make_df(
         by=["subject", "session", "block", "push times"]
     )
 
-    # Add some more columns based on block-dependent statistics
-    # df["box rank"] = (
-    #     df.groupby(["subject", "session", "block"])["schedule"].rank(
-    #         method="dense"
-    #     )
-    #     - 1
-    # ).astype(int) # ranks boxes fast --> medium --> slow
+    # Add some more columns
     df["box"] = df["box rank"].map(box_labels)
     df["box position label"] = df["box position"].map(box_pos_labels)
     df["prev box"] = get_blocks(df)["box"].shift(1)
@@ -349,6 +344,10 @@ def make_df(
     df["stay/switch"] = (
         df["box rank"].diff().astype(bool).map({False: "stay", True: "switch"})
     )
+
+    # Convenience columns
+    df["time"] = df["push times"]
+    df["_time"] = pd.to_datetime(df["time"], unit="s")
 
     # Correct some columns
     df["shape"] = df["shape"].astype(int)
@@ -1020,9 +1019,8 @@ def exclusion_criteria(df: pd.DataFrame, data_dir: str) -> pd.DataFrame:
 
 
 def bin_data(
-    df: pd.DataFrame,
-    x: str,
-    bins: int | list[float] = 20,
+    x: ArrayLike | pd.Series,
+    bins: int | list[float] = 10,
     bin_width: float = None,
     strategy: str = "center",
 ) -> pd.Series:
@@ -1032,12 +1030,11 @@ def bin_data(
     defining the number of bins or specific bin edges.
 
     Args:
-        df: Input DataFrame containing the data.
-        x: Name of the column to bin.
+        x: Array-like data or pandas Series to bin.
         bins: Number of bins or list of bin edges.
             If an integer is provided, the data will be divided into that number of equal-width bins.
             If a list of floats is provided, it will specify the bin edges.
-            Defaults to 30.
+            Defaults to 20.
         bin_width: If specified, this is the width of each bin. Bins will be determined by dividing the range into equal-sized bins of this width.
         strategy: Labeling strategy for the bins.
             - 'full': Labels the bins using the full interval (i.e., both left and right edges).
@@ -1051,32 +1048,36 @@ def bin_data(
 
     Example:
         df = pd.DataFrame({'value': np.random.randn(100)})
-        df['binned'] = bin_data(df, 'value', bins=5, strategy='right')
+        df['binned'] = bin_data(df['value'], bins=5, strategy='right')
     """
     # Perform initial binning based on n_bins or custom bin edges
     if bin_width:
-        bins = np.arange(
-            start=df[x].min(), stop=df[x].max() + bin_width, step=bin_width
-        )
-    _bins = pd.cut(df[x], bins=bins, include_lowest=True)
-    dtype = df[
-        x
-    ].dtype  # Get the dtype of the column to maintain consistency in bin edges
+        bins = np.arange(start=x.min(), stop=x.max() + bin_width, step=bin_width)
+    _bins = pd.cut(x, bins=bins, include_lowest=True)
+    dtype = x.dtype  # Get the dtype of the column to maintain consistency in bin edges
 
     # Select the appropriate bin edges based on the strategy
+    cats = None
+    if hasattr(_bins, "categories"):
+        cats = _bins.categories
+    elif hasattr(_bins, "cat"):
+        cats = _bins.cat.categories
+    else:
+        raise ValueError("Input is not a pandas category or pandas series")
+
     match strategy:
         case "full":
-            bin_edges = _bins.cat.categories
+            bin_edges = cats
         case "right":
-            bin_edges = _bins.cat.categories.right.astype(dtype)
+            bin_edges = cats.right.astype(dtype)
         case "left":
-            bin_edges = _bins.cat.categories.left.astype(dtype)
+            bin_edges = cats.left.astype(dtype)
         case _:
-            bin_edges = (
-                (_bins.cat.categories.left + _bins.cat.categories.right) / 2
-            ).astype(dtype)
+            bin_edges = ((cats.left + cats.right) / 2).astype(dtype)
 
     # Apply the bin labels to the original data
-    return pd.cut(
-        df[x], bins=bins, include_lowest=True, labels=bin_edges
-    ).cat.remove_unused_categories()
+    binned = pd.cut(x, bins=bins, include_lowest=True, labels=bin_edges)
+    if hasattr(binned, "cat"):
+        return binned.cat.remove_unused_categories()
+    else:
+        return binned.remove_unused_categories()

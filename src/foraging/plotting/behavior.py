@@ -23,6 +23,7 @@ from foraging.config.constants import (
     PALETTE,
     PALETTE_DARK,
     SEED,
+    WINDOW_SIZE,
 )
 from foraging.plotting import (
     bp,
@@ -528,7 +529,7 @@ def plot_recent_rewards_vs_push_percentiles(
     )
     axes[0].set_title(title)
 
-    df_rate["push percentiles"] = bin_data(df_rate, "push percentiles", 10)
+    df_rate["push percentiles"] = bin_data(df_rate["push percentiles"], 10)
     # stacked_barplot(df=df_rate, x='percentiles', y=reward_label, hue='subject', ax=axes[1], **kwargs)
     sns.lineplot(
         df_rate,
@@ -730,7 +731,7 @@ def plot_session_onsets_vs_push_percentiles(df: pd.DataFrame, **kwargs):
     # Plot the onset of push in session
     fig_kwargs = kwargs_handler(kwargs, "fig_kwargs")
     fig, ax = plt.subplots(**fig_kwargs)
-    df_temp["push percentiles"] = bin_data(df_temp, "push percentiles")
+    df_temp["push percentiles"] = bin_data(df_temp["push percentiles"])
     sns.lineplot(df_temp, x="push percentiles", y="onset (s)", hue="subject", ax=ax)
     ax.set_title("Onset of push in session")
 
@@ -759,7 +760,7 @@ def plot_block_onsets_vs_push_percentiles(df: pd.DataFrame, **kwargs):
     # Plot the onset of push in block
     fig_kwargs = kwargs_handler(kwargs, "fig_kwargs")
     fig, ax = plt.subplots(**fig_kwargs)
-    df["push percentiles"] = bin_data(df, "push percentiles")
+    df["push percentiles"] = bin_data(df["push percentiles"])
     sns.lineplot(df, x="push percentiles", y="onset (s)", hue="subject", ax=ax)
     ax.set_title("Onset of push in block")
 
@@ -1617,7 +1618,9 @@ def plot_push_intervals_vs_reward_intervals(
             titler(
                 title=title + " for " + subj,
                 conds=conds,
-                title_override=title_override + " for " + subj,
+                title_override=(
+                    title_override + " for " + subj if title_override else None
+                ),
             )
         )
         fig.tight_layout()
@@ -1724,7 +1727,7 @@ def plot_stay_probabilities(
 
     # Track whether the push was rewarded and whether the subject stayed or switched after each push
     df["rewarded"] = df["reward outcomes"].map({True: "yes", False: "no"})
-    df["time"] = bin_data(df, "push intervals", bin_width=bin_width)
+    df["time"] = bin_data(df["push intervals"], bin_width=bin_width)
     df["P(stay)"] = df["stay/switch"].shift(-1).map({"stay": 1, "switch": 0})
 
     fig_kwargs = kwargs_handler(kwargs, "fig_kwargs", {"sharey": True, "sharex": True})
@@ -1760,9 +1763,9 @@ def plot_reward_rates_across_block(
     df: pd.DataFrame,
     stim_reliabilities: dict = KAPPA_LEVELS,
     palette: dict = PALETTE,
-    window: int = 5,
     by_box: bool = False,
-    average_blocks: bool = False,
+    show_traces: bool = False,
+    smooth: bool = False,
     **kwargs,
 ):
     """
@@ -1774,43 +1777,49 @@ def plot_reward_rates_across_block(
         palette: A dictionary mapping box schedules to colors.
         window: The window size for smoothing the reward rate.
         by_box: If True, separate the reward rates by box.
-        average_blocks: If True, average the reward rates across blocks.
+        show_traces: If True, show each block's trace instead of averaging over blocks.
+        smooth: If True, smooth the reward rate as specified by `window_kwargs`.
         **kwargs: Additional keyword arguments.
-          - bin_kwargs: Dictionary to specify binning properties for time (passed to `bin_data`).
-          - fig_kwargs: Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
-
+            - bin_kwargs: Dictionary to specify binning properties for time (passed to `bin_data`).
+            - fig_kwargs: Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
+            - window_kwargs: Dictionary to specify window properties for smoothing the reward rate (passed to `pd.rolling`).
     Returns:
         None
     """
-
     # Bin time
-    x_bins = "time"
+    x = "time"
     df = df.copy()
     bin_kwargs = kwargs_handler(
         kwargs, "bin_kwargs", dict(bin_width=BIN_WIDTH, strategy="full")
     )
-    df[x_bins] = bin_data(df, "push times", **bin_kwargs)
+    df[x] = bin_data(df["push times"], **bin_kwargs)
 
     # Aggregate rewards by box or across boxes
     groupers = (
-        ["stimulus reliability", "block_id", "time", "box"]
+        ["stimulus reliability", "block_id", x, "box"]
         if by_box
-        else ["stimulus reliability", "block_id", "time"]
+        else ["stimulus reliability", "block_id", x]
     )
     df_grouped = get_blocks(df, groupers)
     rr = df_grouped["reward outcomes"].sum().to_frame().reset_index()
 
     # Calculate reward rate
-    rr["reward rate"] = rr["reward outcomes"] / rr["time"].apply(lambda x: x.length)
+    rr["reward rate"] = rr["reward outcomes"] / rr[x].apply(lambda x: x.length)
 
     # Smooth the curve of each block's data
-    groupers = ["box"] if by_box else []
-    rr["reward rate"] = get_blocks(rr, groupers)["reward rate"].transform(
-        lambda x: x.rolling(window=window, min_periods=1).mean()
-    )
-    rr["time"] = rr["time"].apply(lambda x: float(x.left))
+    if smooth:
+        window_kwargs = kwargs_handler(
+            kwargs, "window_kwargs", dict(window=WINDOW_SIZE, center=True)
+        )
+        groupers = ["box"] if by_box else []
+        rr["reward rate"] = get_blocks(rr, groupers)["reward rate"].transform(
+            lambda x: x.rolling(**window_kwargs).mean()
+        )
+    rr[x] = rr[x].apply(lambda x: float(x.left))
+
+    # Plot reward rates
     fig_kwargs = kwargs_handler(kwargs, "fig_kwargs", {"sharey": True, "sharex": True})
-    base_params = {"x": "time", "y": "reward rate", "x_unit": "s", **kwargs}
+    base_params = {"x": x, "y": "reward rate", "x_unit": "s", **kwargs}
 
     if by_box:
         base_params.update({"hue": "box", "palette": palette})
@@ -1833,7 +1842,7 @@ def plot_reward_rates_across_block(
                 }
             )
             plot_block_average_or_traces(
-                rr_subj, average_blocks=average_blocks, params=base_params
+                rr_subj, show_traces=show_traces, params=base_params
             )
         fig.suptitle(f"Reward rate for {subj}")
         fig.tight_layout()
@@ -1920,7 +1929,7 @@ def plot_push_rates_across_block(
                 }
             )
             plot_block_average_or_traces(
-                rr_subj, average_blocks=average_blocks, params=base_params
+                rr_subj, show_traces=average_blocks, params=base_params
             )
         fig.suptitle(f"Push rate for {subj}")
         fig.tight_layout()
@@ -2086,7 +2095,7 @@ def plot_reward_per_push_across_block(
                 }
             )
             plot_block_average_or_traces(
-                rr_subj, average_blocks=average_blocks, params=base_params
+                rr_subj, show_traces=average_blocks, params=base_params
             )
             if i == 0:
                 ax[i].set_ylabel(r"$\frac{\text{# rewards}}{\text{# pushes}}$")
