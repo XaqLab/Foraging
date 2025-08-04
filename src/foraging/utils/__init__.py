@@ -1,5 +1,5 @@
 # Set names of index
-# Subject to change but always keep minimal index set needed to uniquely identify a push at the beginning and the rest such as experiment parameters at the end
+# Subject to change but always keep minimal index set needed to uniquely identify a row at the beginning and the rest, such as experiment parameters, at the end
 from ._base import discrete_time, flatten, kwargs_handler
 
 INDEX = (

@@ -280,7 +280,7 @@ plot_reward_rates_across_block(
 # ### Push Rate
 
 # %%
-plot_push_rates_across_block(df, by_box=True, min_obs=20, average_blocks=True)
+plot_push_rates_across_block(df, by_box=True, min_obs=20, show_traces=True)
 
 
 # %% [markdown]

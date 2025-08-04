@@ -49,7 +49,16 @@ from foraging.plotting.behavior import (
     plot_stay_probabilities,
     plot_stay_switch_pushes,
 )
-from foraging.utils.data import display_df, exclusion_criteria, filter_df, make_df
+
+# Create a new x-axis with regular intervals
+from foraging.utils.data import (
+    bin_data,
+    display_df,
+    exclusion_criteria,
+    filter_df,
+    get_blocks,
+    make_df,
+)
 
 # Filter out annoying matplotlib logs
 mlogger = logging.getLogger("matplotlib")
@@ -63,6 +72,8 @@ FIGURES_DIR = "../figures"
 
 # %%
 # TODO: TOC like in data cleaning
+# TODO: generate per block figures
+# TODO: prove not much variation across sessions, that's why that dimension is neglected
 
 # %% [markdown]
 # # Load Data
@@ -245,6 +256,7 @@ plot_push_intervals_by_sessions(df)
 
 # %%
 df = filter_df(df, {"shape": 10})
+df = df[df["push times"] <= 900]
 
 # %% [markdown]
 # Here are the distributions of push intervals at each box as a function of stimulus reliability.
@@ -364,13 +376,80 @@ bp(sns.violinplot)(
 # ### Reward Rate
 
 # %%
-plot_reward_rates_across_block(df, min_obs=10, show_traces=True, smooth=True)
+plot_reward_rates_across_block(df, show_traces=True, smooth=True)
+
+# %%
+
+x_col = "push times"
+y_col = "reward outcomes"
+
+# Assign y values to bins
+bin_width = 0.5
+bins = bin_data(df[x_col], bin_width=bin_width)
+df["time"] = bins
+
+
+def foo(x):
+    return x[y_col].sum()
+
+
+def bar(x):
+    return x.size()
+
+
+# binned_data = get_blocks(df, groupers = ['box']).apply(lambda x: x.groupby('time', observed=True).size().reindex(bins.cat.categories, fill_value=np.nan).reset_index(), include_groups=False)
+binned_data = get_blocks(df, groupers=["box"]).apply(
+    lambda x: bar(x.groupby("time", observed=True))
+    .reindex(bins.cat.categories, fill_value=np.nan)
+    .reset_index(),
+    include_groups=False,
+)
+window_size = 60
+n_pts = int(window_size / bin_width)
+step = 20
+# TODO: double check iloc logic is skipping the right number of rows
+rolled_data = (
+    get_blocks(binned_data, groupers=["box"])
+    .apply(
+        lambda x: x.set_index("index")
+        .rolling(window=n_pts, step=step, min_periods=1)
+        .sum()
+        .iloc[int(n_pts / step) :]
+    )
+    .reset_index(level="index")
+)
+rolled_data = rolled_data.rename(
+    columns={0: "reward outcomes", "index": "time"}
+).set_index("time", append=True)
+rolled_data[y_col] /= window_size
+# # groups = []
+# # cunt = 0
+# # for name, group in binned_data:
+# #     print(name)
+# #     cunt += 1
+# #     if cunt > 3:
+# #         break
+# #     groups.append(group.groupby('x_bin', observed=False).size().reindex(new_x[:-1], fill_value=0).reset_index())
+
+# binned_data = binned_data.rename(columns={'time': x_col})
+
+# conds['block'] = 3
+# sns.lineplot(x = x_col, y = 'reward outcomes', data = filter_df(binned_data, conds = conds))
+
+
+# %%
+b = filter_df(rolled_data, conds=conds)
+
+# %%
+sns.lineplot(x="time", y=y_col, data=b, hue="box")
 
 # %% [markdown]
 # Reward rate increases as subjects gain more experience in the block. As reliablity increases, the total reward rate combined across all boxes also increases. Next, we decompose the reward rate into different boxes.
 
 # %%
-plot_reward_rates_across_block(df, by_box=True, min_obs=10, show_traces=True)
+plot_reward_rates_across_block(
+    df, by_box=True, min_obs=10, show_traces=True, smooth=True
+)
 
 # %% [markdown]
 # Clearly, the reward rates are ordered the way we would expect them, fast > medium > slow.
@@ -379,7 +458,7 @@ plot_reward_rates_across_block(df, by_box=True, min_obs=10, show_traces=True)
 # ### Push Rate
 
 # %%
-plot_push_rates_across_block(df, by_box=True, min_obs=10, average_blocks=True)
+plot_push_rates_across_block(df, by_box=True, min_obs=10, show_traces=True, smooth=True)
 
 
 # %% [markdown]
@@ -390,6 +469,7 @@ plot_push_rates_across_block(df, by_box=True, min_obs=10, average_blocks=True)
 
 
 # %%
+# %%capture --no-display
 def _auxiliary_plot(
     df: pd.DataFrame,
     conds: dict = None,
@@ -410,7 +490,12 @@ def _auxiliary_plot(
 
 
 plot_quantity_across_block(
-    df, y="push intervals", auxiliary_plot=_auxiliary_plot, min_obs=10
+    df,
+    y="push intervals",
+    auxiliary_plot=_auxiliary_plot,
+    min_obs=10,
+    by_box=True,
+    errorbar="se",
 )
 
 # %% [markdown]
@@ -419,7 +504,9 @@ plot_quantity_across_block(
 # ### Reward-per-push
 
 # %%
-plot_reward_per_push_across_block(df, min_obs=10, by_box=True, average_blocks=True)
+rr = plot_reward_per_push_across_block(
+    df, min_obs=10, by_box=True, smooth=True, errorbar="se"
+)
 
 # %% [markdown]
 # The reward-per-push start off low but increase over time in the block. As reliability increases, they start off higher.

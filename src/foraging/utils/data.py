@@ -359,7 +359,7 @@ def make_df(
         "stay"  # Count first push of each block as 'stay' push, so that stay pushes are a subset of same-box push intervals
     )
 
-    # Finally, drop all push intervals with value 0 as these are bad data
+    # Drop all push intervals with value 0 as these are bad data
     df = df[df["consecutive push intervals"] > 0]
 
     # Categorize stimulus reliabilities
@@ -1022,7 +1022,9 @@ def bin_data(
     x: ArrayLike | pd.Series,
     bins: int | list[float] = 10,
     bin_width: float = None,
-    strategy: str = "center",
+    include_lowest: bool = True,
+    strategy: str = "right",
+    **kwargs,
 ) -> pd.Series:
     """
     Bins data in the specified column of the DataFrame, with support for different binning strategies. This function
@@ -1041,7 +1043,7 @@ def bin_data(
             - 'left': Labels the bins using only the left edge.
             - 'right': Labels the bins using only the right edge.
             - 'center': Labels the bins using the center of the bin.
-            Defaults to 'left'.
+            Defaults to 'right'.
 
     Returns:
         A pandas Series containing the binned data.
@@ -1053,18 +1055,20 @@ def bin_data(
     # Perform initial binning based on n_bins or custom bin edges
     if bin_width:
         bins = np.arange(start=x.min(), stop=x.max() + bin_width, step=bin_width)
-    _bins = pd.cut(x, bins=bins, include_lowest=True)
-    dtype = x.dtype  # Get the dtype of the column to maintain consistency in bin edges
+    binned = pd.cut(x, bins=bins, include_lowest=include_lowest, **kwargs)
+    if len(binned) == 2:
+        binned, bins = binned
+    dtype = x.dtype  # Get the dtype of the column to maintain consistency in bin labels
 
-    # Select the appropriate bin edges based on the strategy
     cats = None
-    if hasattr(_bins, "categories"):
-        cats = _bins.categories
-    elif hasattr(_bins, "cat"):
-        cats = _bins.cat.categories
+    if hasattr(binned, "categories"):
+        cats = binned.categories
+    elif hasattr(binned, "cat"):
+        cats = binned.cat.categories
     else:
-        raise ValueError("Input is not a pandas category or pandas series")
+        raise ValueError("Input is not a numpy array or pandas series")
 
+    # Select the appropriate bin labels based on the strategy
     match strategy:
         case "full":
             bin_edges = cats
@@ -1076,8 +1080,19 @@ def bin_data(
             bin_edges = ((cats.left + cats.right) / 2).astype(dtype)
 
     # Apply the bin labels to the original data
-    binned = pd.cut(x, bins=bins, include_lowest=True, labels=bin_edges)
+    binned = pd.cut(
+        x, bins=bins, include_lowest=include_lowest, labels=bin_edges, **kwargs
+    )
+    ret_bins = None
+    if len(binned) == 2:
+        binned, ret_bins = binned
+
     if hasattr(binned, "cat"):
-        return binned.cat.remove_unused_categories()
+        binned = binned.cat.remove_unused_categories()
     else:
-        return binned.remove_unused_categories()
+        binned = binned.remove_unused_categories()
+
+    if ret_bins is not None:
+        return binned, ret_bins
+    else:
+        return binned

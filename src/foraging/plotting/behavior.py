@@ -1842,7 +1842,7 @@ def plot_reward_rates_across_block(
                 }
             )
             plot_block_average_or_traces(
-                rr_subj, show_traces=show_traces, params=base_params
+                rr_subj, show_traces=show_traces, **base_params
             )
         fig.suptitle(f"Reward rate for {subj}")
         fig.tight_layout()
@@ -1856,13 +1856,12 @@ def plot_push_rates_across_block(
     df: pd.DataFrame,
     stim_reliabilities: dict = KAPPA_LEVELS,
     palette: dict = PALETTE,
-    window: int = 10,
     by_box: bool = False,
-    average_blocks: bool = False,
+    show_traces: bool = False,
+    smooth: bool = False,
     **kwargs,
 ):
     """
-    Plot the push rates across different blocks, optionally by box.
     This function calculates and visualizes the push rates across different blocks, smoothing the data over a specified window and optionally separating the data by box.
 
     Args:
@@ -1871,10 +1870,12 @@ def plot_push_rates_across_block(
         palette: A dictionary mapping box schedules to colors.
         window: The window size for smoothing the push rate.
         by_box: If True, separate the push rates by box.
-        average_blocks: If True, average the push rates across blocks.
+        show_traces: If True, average the push rates across blocks.
+        smooth: If True, smooth the push rate as specified by `window_kwargs`.
         **kwargs: Additional keyword arguments.
           - bin_kwargs: Dictionary to specify binning properties for time (passed to `bin_data`).
           - fig_kwargs: Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
+          - window_kwargs: Dictionary to specify window properties for smoothing the push rate (passed to `pd.rolling`).
 
     Returns:
         None
@@ -1886,7 +1887,7 @@ def plot_push_rates_across_block(
     bin_kwargs = kwargs_handler(
         kwargs, "bin_kwargs", dict(bin_width=BIN_WIDTH, strategy="full")
     )
-    df[x_bins] = bin_data(df, "push times", **bin_kwargs)
+    df[x_bins] = bin_data(df["push times"], **bin_kwargs)
 
     # Aggregate pushes by box or across boxes
     groupers = (
@@ -1899,10 +1900,14 @@ def plot_push_rates_across_block(
     rr["push rate"] = rr[0] / rr["time"].apply(lambda x: x.length)
 
     # Smooth the curve
-    groupers = ["box"] if by_box else []
-    rr["push rate"] = get_blocks(rr, groupers)["push rate"].transform(
-        lambda x: x.rolling(window=window, min_periods=1).mean()
-    )
+    if smooth:
+        window_kwargs = kwargs_handler(
+            kwargs, "window_kwargs", dict(window=WINDOW_SIZE, center=True)
+        )
+        groupers = ["box"] if by_box else []
+        rr["push rate"] = get_blocks(rr, groupers)["push rate"].transform(
+            lambda x: x.rolling(**window_kwargs).mean()
+        )
     rr["time"] = rr["time"].apply(lambda x: float(x.left))
 
     fig_kwargs = kwargs_handler(kwargs, "fig_kwargs", {"sharey": True, "sharex": True})
@@ -1929,7 +1934,7 @@ def plot_push_rates_across_block(
                 }
             )
             plot_block_average_or_traces(
-                rr_subj, show_traces=average_blocks, params=base_params
+                rr_subj, show_traces=show_traces, **base_params
             )
         fig.suptitle(f"Push rate for {subj}")
         fig.tight_layout()
@@ -1944,12 +1949,13 @@ def plot_quantity_across_block(
     y: str = None,
     stim_reliabilities: list = KAPPA_LEVELS,
     palette: dict = PALETTE,
-    window: int = 10,
+    by_box: bool = False,
+    show_traces: bool = False,
+    smooth: bool = False,
     auxiliary_plot: Callable = None,
     **kwargs,
 ):
     """
-    Plot a specified quantity across different blocks, with optional auxiliary plots.
     This function calculates and visualizes a specified quantity across different blocks, smoothing the data over a specified window and optionally including auxiliary plots for additional insights.
 
     Args:
@@ -1957,11 +1963,14 @@ def plot_quantity_across_block(
         y: The name of the quantity to plot.
         stim_reliabilities: A list of stimulus reliability levels for each subject.
         palette: A dictionary mapping box schedules to colors.
-        window: The window size for smoothing the quantity.
+        by_box: If True, separate the quantity by box.
+        show_traces: If True, show the traces of the quantity.
+        smooth: If True, smooth the quantity as specified by `window_kwargs`.
         auxiliary_plot: A callable for generating auxiliary plots.
         **kwargs: Additional keyword arguments.
           - bin_kwargs: Dictionary to specify binning properties for time (passed to `bin_data`).
           - fig_kwargs: Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
+          - window_kwargs: Dictionary to specify window properties for smoothing the quantity (passed to `pd.rolling`).
 
     Returns:
         None
@@ -1971,19 +1980,34 @@ def plot_quantity_across_block(
     x_bins = "time"
     df.copy()
     bin_kwargs = kwargs_handler(kwargs, "bin_kwargs", dict(bin_width=BIN_WIDTH))
-    df[x_bins] = bin_data(df, "push times", **bin_kwargs)
-    groupers = ["stimulus reliability", "block_id", "time", "box"]
+    df[x_bins] = bin_data(df["push times"], **bin_kwargs)
+
+    # Aggregate pushes by box or across boxes
+    groupers = (
+        ["stimulus reliability", "block_id", "time", "box"]
+        if by_box
+        else ["stimulus reliability", "block_id", "time"]
+    )
     df_grouped = get_blocks(df, groupers)
     df_average = df_grouped[y].mean().to_frame().reset_index()
 
     # Smooth the curve
-    if window:
-        df_average[y] = get_blocks(df_average, groupers=["box"])[y].transform(
-            lambda x: x.rolling(window=window, min_periods=1).mean()
+    if smooth:
+        window_kwargs = kwargs_handler(
+            kwargs, "window_kwargs", dict(window=WINDOW_SIZE, center=True)
         )
-
+        groupers = ["box"] if by_box else []
+        df_average["push rate"] = get_blocks(df_average, groupers)[
+            "push rate"
+        ].transform(lambda x: x.rolling(**window_kwargs).mean())
     # Plot quantity of interest over time in the block
     fig_kwargs = kwargs_handler(kwargs, "fig_kwargs", {"sharey": True, "sharex": True})
+    base_params = {"x": "time", "y": y, "x_unit": "s", **kwargs}
+
+    if by_box:
+        base_params.update({"hue": "box", "palette": palette})
+    else:
+        base_params.update({"color": "black"})
 
     @legend_handler
     def _plot(i, subj, **kwargs):
@@ -1992,25 +2016,30 @@ def plot_quantity_across_block(
         fig_kwargs["ncols"] = len(kappas)
         fig, ax = fig_init(**fig_kwargs)
         for i, kappa in enumerate(kappas):
-            bp(sns.lineplot)(
-                df_subj,
-                conds={"stimulus reliability": kappa},
-                x="time",
-                y=y,
-                hue="box",
-                x_unit="s",
-                palette=palette,
-                ax=ax[i],
-                legend=i == len(kappas) - 1,
-                **kwargs,
+            base_params.update(
+                {
+                    "conds": {"stimulus reliability": kappa},
+                    "ax": ax[i],
+                    "legend": i == len(kappas) - 1,
+                    **kwargs,
+                }
             )
+
+            plot_block_average_or_traces(
+                df_subj,
+                show_traces=show_traces,
+                **base_params,
+            )
+
             if auxiliary_plot:
+                base_params.update(
+                    {
+                        "conds": {"stimulus reliability": kappa, "subject": subj},
+                    }
+                )
                 auxiliary_plot(
                     df,
-                    conds={"stimulus reliability": kappa, "subject": subj},
-                    palette=palette,
-                    ax=ax[i],
-                    **kwargs,
+                    **base_params,
                 )
         fig.suptitle(f"{y} for {subj}")
         fig.tight_layout()
@@ -2024,23 +2053,25 @@ def plot_reward_per_push_across_block(
     df: pd.DataFrame,
     stim_reliabilities: list = KAPPA_LEVELS,
     palette: dict = PALETTE,
-    window: int = 10,
     by_box: bool = False,
-    average_blocks: bool = False,
+    show_traces: bool = False,
+    smooth: bool = False,
     **kwargs,
 ):
     """
-    Plot the accuracy of push intervals across different blocks.
     This function calculates and visualizes the accuracy of push intervals across different blocks, smoothing the data over a specified window to highlight trends.
 
     Args:
         df: A DataFrame containing push data.
         stim_reliabilities: A list of stimulus reliability levels for each subject.
         palette: A dictionary mapping box schedules to colors.
-        window: The window size for smoothing the accuracy data.
+        by_box: If True, separate the quantity by box.
+        show_traces: If True, show the traces of the quantity.
+        smooth: If True, smooth the quantity as specified by `window_kwargs`.
         **kwargs: Additional keyword arguments.
           - bin_kwargs: Dictionary to specify binning properties for time (passed to `bin_data`).
           - fig_kwargs: Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
+          - window_kwargs: Dictionary to specify window properties for smoothing the quantity (passed to `pd.rolling`).
 
     Returns:
         None
@@ -2048,8 +2079,8 @@ def plot_reward_per_push_across_block(
 
     x_bins = "time"
     df = df.copy()
-    bin_kwargs = kwargs_handler(kwargs, "bin_kwargs", dict(bin_width=60))
-    df[x_bins] = bin_data(df, "push times", **bin_kwargs)
+    bin_kwargs = kwargs_handler(kwargs, "bin_kwargs", dict(bin_width=BIN_WIDTH))
+    df[x_bins] = bin_data(df["push times"], **bin_kwargs)
     groupers = (
         ["stimulus reliability", "block_id", "time", "box"]
         if by_box
@@ -2061,15 +2092,14 @@ def plot_reward_per_push_across_block(
     rr["reward per push"] = rr["reward outcomes"] / rr["push rate"]
 
     # Smooth the curve
-    if window:
-        if by_box:
-            rr["reward per push"] = get_blocks(rr, groupers=["box"])[
-                "reward per push"
-            ].transform(lambda x: x.rolling(window=window, min_periods=1).mean())
-        else:
-            rr["reward per push"] = get_blocks(rr)["reward per push"].transform(
-                lambda x: x.rolling(window=window, min_periods=1).mean()
-            )
+    if smooth:
+        window_kwargs = kwargs_handler(
+            kwargs, "window_kwargs", dict(window=WINDOW_SIZE, center=True)
+        )
+        groupers = ["box"] if by_box else []
+        rr["reward per push"] = get_blocks(rr, groupers)["reward per push"].transform(
+            lambda x: x.rolling(**window_kwargs).mean()
+        )
 
     fig_kwargs = kwargs_handler(kwargs, "fig_kwargs", {"sharey": True, "sharex": True})
     base_params = {"x": "time", "y": "reward per push", "x_unit": "s", **kwargs}
@@ -2095,7 +2125,7 @@ def plot_reward_per_push_across_block(
                 }
             )
             plot_block_average_or_traces(
-                rr_subj, show_traces=average_blocks, params=base_params
+                rr_subj, show_traces=show_traces, **base_params
             )
             if i == 0:
                 ax[i].set_ylabel(r"$\frac{\text{# rewards}}{\text{# pushes}}$")

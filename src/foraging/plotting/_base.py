@@ -147,6 +147,7 @@ def bp(func: Callable):
         conds: dict = None,
         single_block: bool = False,
         title: str = "",
+        title_override: str = None,
         legend: Any = "auto",
         x_unit: str = None,
         y_unit: str = None,
@@ -166,6 +167,7 @@ def bp(func: Callable):
             conds: Dictionary mapping level keys to values to be used to filter `df`.
             single_block: True indicates `df` should be treated as a single block.
             title: Title for figure.
+            title_override: Override title for figure.
             legend: If True, display figure.
             x_unit: Unit of the x-axis. If None, then ignored.
             y_unit: Unit of the y-axis. If None, then ignored.
@@ -275,7 +277,7 @@ def bp(func: Callable):
             [_ax.set_xticks(range(len(xticks)), xticks) for _ax in flatten(ax)]
 
         # Set title (if multiple axes, this does the first one)
-        title = titler(title=title, conds=conds)
+        title = titler(title=title, conds=conds, title_override=title_override)
         _ax = np.atleast_1d(ax)
         if title:
             _ax[0].set_title(title, **title_kwargs)
@@ -678,40 +680,41 @@ def plot_block_average_or_traces(
     df: pd.DataFrame,
     show_traces: bool,
     units: str = "block_id",
-    params: dict = {},
+    **kwargs,
 ):
-    params = params.copy()
+    kwargs = kwargs.copy()
     if show_traces:
-        legend_flag = "legend" in params
-        params["legend"] = False
+        legend_flag = True
+        if "legend" in kwargs:
+            legend_flag = kwargs["legend"]
+        kwargs["legend"] = False
 
         # Traces
         bp(sns.lineplot)(
             df,
-            **params,
+            **kwargs,
             units=units,
             estimator=None,
             errorbar=None,
             alpha=0.2,
         )
 
-        if "x_unit" in params:
-            params.pop("x_unit")
-        if "y_unit" in params:
-            params.pop("y_unit")
-        if legend_flag:
-            params["legend"] = True
+        if "x_unit" in kwargs:
+            kwargs.pop("x_unit")
+        if "y_unit" in kwargs:
+            kwargs.pop("y_unit")
+        kwargs["legend"] = legend_flag
 
         # Average
         bp(sns.lineplot)(
             df,
-            **params,
+            **kwargs,
             errorbar=None,
             lw=5,
         )
 
     else:
-        bp(sns.lineplot)(df, **params)
+        bp(sns.lineplot)(df, **kwargs)
 
 
 # Credit to https://stackoverflow.com/questions/22852244/how-to-get-the-numerical-fitting-results-when-plotting-a-regression-in-seaborn
