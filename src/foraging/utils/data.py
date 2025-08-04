@@ -1024,6 +1024,7 @@ def bin_data(
     bin_width: float = None,
     include_lowest: bool = True,
     strategy: str = "right",
+    remove_unused_categories: bool = True,
     **kwargs,
 ) -> pd.Series:
     """
@@ -1087,10 +1088,11 @@ def bin_data(
     if len(binned) == 2:
         binned, ret_bins = binned
 
-    if hasattr(binned, "cat"):
-        binned = binned.cat.remove_unused_categories()
-    else:
-        binned = binned.remove_unused_categories()
+    if remove_unused_categories:
+        if hasattr(binned, "cat"):
+            binned = binned.cat.remove_unused_categories()
+        else:
+            binned = binned.remove_unused_categories()
 
     if ret_bins is not None:
         return binned, ret_bins

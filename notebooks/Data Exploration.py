@@ -256,7 +256,7 @@ plot_push_intervals_by_sessions(df)
 
 # %%
 df = filter_df(df, {"shape": 10})
-df = df[df["push times"] <= 900]
+# df = df[df["push times"] <= 900]
 
 # %% [markdown]
 # Here are the distributions of push intervals at each box as a function of stimulus reliability.
@@ -379,69 +379,51 @@ bp(sns.violinplot)(
 plot_reward_rates_across_block(df, show_traces=True, smooth=True)
 
 # %%
-
-x_col = "push times"
-y_col = "reward outcomes"
-
-# Assign y values to bins
-bin_width = 0.5
-bins = bin_data(df[x_col], bin_width=bin_width)
-df["time"] = bins
-
+from foraging.utils.stats import moving_average
 
 def foo(x):
-    return x[y_col].sum()
-
+    return x['reward outcomes'].sum()
 
 def bar(x):
     return x.size()
 
+ma = moving_average(df, x_col = "push times", y_col = "reward outcomes", y_name = "push rate", agg_func = bar, groupers = ["block_id", 'stimulus reliability', 'box'], window_size = 30, step = 10, min_periods = 1, bin_width = 0.5)
 
-# binned_data = get_blocks(df, groupers = ['box']).apply(lambda x: x.groupby('time', observed=True).size().reindex(bins.cat.categories, fill_value=np.nan).reset_index(), include_groups=False)
-binned_data = get_blocks(df, groupers=["box"]).apply(
-    lambda x: bar(x.groupby("time", observed=True))
-    .reindex(bins.cat.categories, fill_value=np.nan)
-    .reset_index(),
-    include_groups=False,
-)
-window_size = 60
-n_pts = int(window_size / bin_width)
-step = 20
-# TODO: double check iloc logic is skipping the right number of rows
-rolled_data = (
-    get_blocks(binned_data, groupers=["box"])
-    .apply(
-        lambda x: x.set_index("index")
-        .rolling(window=n_pts, step=step, min_periods=1)
-        .sum()
-        .iloc[int(n_pts / step) :]
-    )
-    .reset_index(level="index")
-)
-rolled_data = rolled_data.rename(
-    columns={0: "reward outcomes", "index": "time"}
-).set_index("time", append=True)
-rolled_data[y_col] /= window_size
-# # groups = []
-# # cunt = 0
-# # for name, group in binned_data:
-# #     print(name)
-# #     cunt += 1
-# #     if cunt > 3:
-# #         break
-# #     groups.append(group.groupby('x_bin', observed=False).size().reindex(new_x[:-1], fill_value=0).reset_index())
 
-# binned_data = binned_data.rename(columns={'time': x_col})
+# %%
+from foraging.plotting import plot_block_average_or_traces
+plot_block_average_or_traces(ma, show_traces= True, x = 'time', y = 'push rate', hue = 'box')
 
-# conds['block'] = 3
-# sns.lineplot(x = x_col, y = 'reward outcomes', data = filter_df(binned_data, conds = conds))
+# %%
+x = "time"
+df2 = df.copy()
+bin_kwargs = dict(bin_width=window_size, strategy="full")
 
+df2[x] = bin_data(df2["push times"], **bin_kwargs)
+
+# Aggregate rewards by box or across boxes
+df_grouped = get_blocks(df2, groupers = groupers + [x])
+rr = df_grouped["reward outcomes"].sum().to_frame().reset_index()
+
+# # Calculate reward rate
+rr["reward rate"] = rr["reward outcomes"] / rr[x].apply(lambda x: x.length)
+
+# %%
+rr.head(10)
+
+# %%
+binned_data.head(50)
+
+# %%
+a = filter_df(df2, conds = dict(zip(('subject', 'session', 'block'), ('humans', 1, 1))))
+mask = (a['push times'] > 91.361) & (a['push times'] < 121.361)
+a.loc[mask, ['push times', 'reward outcomes', 'box']]
 
 # %%
 b = filter_df(rolled_data, conds=conds)
 
 # %%
-sns.lineplot(x="time", y=y_col, data=b, hue="box")
+sns.lineplot(x="time", y=y_col, data=filter_df(rolled_data[rolled_data.index.get_level_values('time') < 900], {'subject': 'viktor', 'stimulus reliability': 'low'}), alpha=0.5)
 
 # %% [markdown]
 # Reward rate increases as subjects gain more experience in the block. As reliablity increases, the total reward rate combined across all boxes also increases. Next, we decompose the reward rate into different boxes.

@@ -5,8 +5,44 @@ from scipy.special import beta, betainc
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 
-from foraging.utils.data import bin_data, extend_df, process_block_safely
+from foraging.utils.data import bin_data, extend_df, process_block_safely, get_blocks
+from foraging.config.constants import WINDOW_SIZE, BIN_WIDTH
 
+def moving_average(df, x_col, y_col, y_name, groupers, agg_func, window_size=WINDOW_SIZE, step = 1, min_periods = 1, bin_width = BIN_WIDTH):
+
+    # Create time bins
+    df = df.copy()
+    bins = bin_data(df[x_col], bin_width=bin_width, remove_unused_categories=False)
+    df["time"] = bins
+
+    # Assign data to full grid of time bins-- time bins should be fine enough to "binarize" the time series
+    # groupers = ["block_id", 'stimulus reliability', 'box']
+    binned_data = get_blocks(df, groupers=groupers).apply(
+        lambda x: agg_func(x.groupby("time", observed=True))
+        .reindex(bins.cat.categories, fill_value=np.nan)
+        .reset_index(),
+        include_groups=False,
+    )
+
+    # Smooth the time series by calculating the moving average
+    n_pts = int(window_size / bin_width)
+    step = int(step / bin_width)
+    rolled_data = (
+        get_blocks(binned_data, groupers=groupers)
+        .apply(
+            lambda x: x.set_index("index")
+            .rolling(window=n_pts, step=step, min_periods=min_periods)
+            .sum()
+            .iloc[int(n_pts / step) :]
+        )
+        .reset_index(level="index")
+    )
+
+    rolled_data = rolled_data.rename(
+        columns={0: y_col, "index": "time"}
+    ).set_index("time", append=True)
+    rolled_data[y_name] = rolled_data[y_col] / window_size
+    return rolled_data
 
 def mcfadden_pseudo_rsquared(mdl, X, y):
     # 2. **Log-Likelihood**: Compute log-likelihood using sklearn's model

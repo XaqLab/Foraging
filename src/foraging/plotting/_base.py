@@ -680,6 +680,7 @@ def plot_block_average_or_traces(
     df: pd.DataFrame,
     show_traces: bool,
     units: str = "block_id",
+    alpha: float = 0.1,
     **kwargs,
 ):
     kwargs = kwargs.copy()
@@ -690,13 +691,13 @@ def plot_block_average_or_traces(
         kwargs["legend"] = False
 
         # Traces
-        bp(sns.lineplot)(
+        ax = bp(sns.lineplot)(
             df,
             **kwargs,
             units=units,
             estimator=None,
             errorbar=None,
-            alpha=0.2,
+            alpha=alpha,
         )
 
         if "x_unit" in kwargs:
@@ -711,6 +712,7 @@ def plot_block_average_or_traces(
             **kwargs,
             errorbar=None,
             lw=5,
+            ax = ax
         )
 
     else:
