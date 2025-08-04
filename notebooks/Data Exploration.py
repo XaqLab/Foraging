@@ -32,7 +32,7 @@ import pandas as pd
 import seaborn as sns
 
 from foraging.config.constants import MULTIPLOT_FIGSIZE, PALETTE, PALETTE_DARK, SEED
-from foraging.plotting import bp, enhanced_violinplot
+from foraging.plotting import bp, enhanced_violinplot, plot_block_average_or_traces
 from foraging.plotting.behavior import (
     plot_experiment_overview,
     plot_matching_law,
@@ -59,6 +59,7 @@ from foraging.utils.data import (
     get_blocks,
     make_df,
 )
+from foraging.utils.stats import moving_average
 
 # Filter out annoying matplotlib logs
 mlogger = logging.getLogger("matplotlib")
@@ -379,20 +380,45 @@ bp(sns.violinplot)(
 plot_reward_rates_across_block(df, show_traces=True, smooth=True)
 
 # %%
-from foraging.utils.stats import moving_average
+
 
 def foo(x):
-    return x['reward outcomes'].sum()
+    return x["reward outcomes"].sum()
+
 
 def bar(x):
     return x.size()
 
-ma = moving_average(df, x_col = "push times", y_col = "reward outcomes", y_name = "push rate", agg_func = bar, groupers = ["block_id", 'stimulus reliability', 'box'], window_size = 30, step = 10, min_periods = 1, bin_width = 0.5)
+
+ma = moving_average(
+    df,
+    x_col="push times",
+    y_col="reward outcomes",
+    y_name="push rate",
+    agg_func=foo,
+    groupers=["block_id", "stimulus reliability"],
+    window_size=30,
+    step=10,
+    min_periods=1,
+    bin_width=0.5,
+)
 
 
 # %%
-from foraging.plotting import plot_block_average_or_traces
-plot_block_average_or_traces(ma, show_traces= True, x = 'time', y = 'push rate', hue = 'box')
+plot_block_average_or_traces(
+    filter_df(ma, {"stimulus reliability": "low"}),
+    show_traces=True,
+    x="time",
+    y="push rate",
+)
+
+# %%
+plot_block_average_or_traces(
+    filter_df(ma, {"stimulus reliability": "high"}),
+    show_traces=True,
+    x="time",
+    y="push rate",
+)
 
 # %%
 x = "time"
@@ -402,7 +428,7 @@ bin_kwargs = dict(bin_width=window_size, strategy="full")
 df2[x] = bin_data(df2["push times"], **bin_kwargs)
 
 # Aggregate rewards by box or across boxes
-df_grouped = get_blocks(df2, groupers = groupers + [x])
+df_grouped = get_blocks(df2, groupers=groupers + [x])
 rr = df_grouped["reward outcomes"].sum().to_frame().reset_index()
 
 # # Calculate reward rate
@@ -415,15 +441,23 @@ rr.head(10)
 binned_data.head(50)
 
 # %%
-a = filter_df(df2, conds = dict(zip(('subject', 'session', 'block'), ('humans', 1, 1))))
-mask = (a['push times'] > 91.361) & (a['push times'] < 121.361)
-a.loc[mask, ['push times', 'reward outcomes', 'box']]
+a = filter_df(df2, conds=dict(zip(("subject", "session", "block"), ("humans", 1, 1))))
+mask = (a["push times"] > 91.361) & (a["push times"] < 121.361)
+a.loc[mask, ["push times", "reward outcomes", "box"]]
 
 # %%
 b = filter_df(rolled_data, conds=conds)
 
 # %%
-sns.lineplot(x="time", y=y_col, data=filter_df(rolled_data[rolled_data.index.get_level_values('time') < 900], {'subject': 'viktor', 'stimulus reliability': 'low'}), alpha=0.5)
+sns.lineplot(
+    x="time",
+    y=y_col,
+    data=filter_df(
+        rolled_data[rolled_data.index.get_level_values("time") < 900],
+        {"subject": "viktor", "stimulus reliability": "low"},
+    ),
+    alpha=0.5,
+)
 
 # %% [markdown]
 # Reward rate increases as subjects gain more experience in the block. As reliablity increases, the total reward rate combined across all boxes also increases. Next, we decompose the reward rate into different boxes.

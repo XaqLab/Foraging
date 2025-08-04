@@ -707,13 +707,7 @@ def plot_block_average_or_traces(
         kwargs["legend"] = legend_flag
 
         # Average
-        bp(sns.lineplot)(
-            df,
-            **kwargs,
-            errorbar=None,
-            lw=5,
-            ax = ax
-        )
+        bp(sns.lineplot)(df, **kwargs, errorbar=None, lw=5, ax=ax)
 
     else:
         bp(sns.lineplot)(df, **kwargs)

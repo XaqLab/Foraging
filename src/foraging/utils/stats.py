@@ -5,10 +5,22 @@ from scipy.special import beta, betainc
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 
-from foraging.utils.data import bin_data, extend_df, process_block_safely, get_blocks
-from foraging.config.constants import WINDOW_SIZE, BIN_WIDTH
+from foraging.config.constants import BIN_WIDTH, WINDOW_SIZE
+from foraging.utils.data import bin_data, extend_df, get_blocks, process_block_safely
 
-def moving_average(df, x_col, y_col, y_name, groupers, agg_func, window_size=WINDOW_SIZE, step = 1, min_periods = 1, bin_width = BIN_WIDTH):
+
+def moving_average(
+    df,
+    x_col,
+    y_col,
+    y_name,
+    groupers,
+    agg_func,
+    window_size=WINDOW_SIZE,
+    step=1,
+    min_periods=1,
+    bin_width=BIN_WIDTH,
+):
 
     # Create time bins
     df = df.copy()
@@ -38,11 +50,12 @@ def moving_average(df, x_col, y_col, y_name, groupers, agg_func, window_size=WIN
         .reset_index(level="index")
     )
 
-    rolled_data = rolled_data.rename(
-        columns={0: y_col, "index": "time"}
-    ).set_index("time", append=True)
+    rolled_data = rolled_data.rename(columns={0: y_col, "index": "time"}).set_index(
+        "time", append=True
+    )
     rolled_data[y_name] = rolled_data[y_col] / window_size
     return rolled_data
+
 
 def mcfadden_pseudo_rsquared(mdl, X, y):
     # 2. **Log-Likelihood**: Compute log-likelihood using sklearn's model
