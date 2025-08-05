@@ -5,7 +5,7 @@ from scipy.special import beta, betainc
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 
-from foraging.config.constants import BIN_WIDTH, WINDOW_SIZE
+from foraging.config.constants import BIN_WIDTH, STEP, WINDOW_SIZE
 from foraging.utils.data import bin_data, extend_df, get_blocks, process_block_safely
 
 
@@ -17,7 +17,7 @@ def moving_average(
     groupers,
     agg_func,
     window_size=WINDOW_SIZE,
-    step=1,
+    step=STEP,
     min_periods=1,
     bin_width=BIN_WIDTH,
     rate: bool = False,
@@ -40,17 +40,28 @@ def moving_average(
     # Smooth the time series by calculating the moving average
     n_pts = int(window_size / bin_width)
     step = int(step / bin_width)
-    rolled_data = (
-        get_blocks(binned_data, groupers=groupers)
-        .apply(
-            lambda x: x.set_index("index")
-            .rolling(window=n_pts, step=step, min_periods=min_periods)
-            .sum()
-            .iloc[int(n_pts / step) :]
+    if rate:
+        rolled_data = (
+            get_blocks(binned_data, groupers=groupers)
+            .apply(
+                lambda x: x.set_index("index")
+                .rolling(window=n_pts, step=step, min_periods=min_periods)
+                .sum()
+                .iloc[int(n_pts / step) :]
+            )
+            .reset_index(level="index")
         )
-        .reset_index(level="index")
-    )
-
+    else:
+        rolled_data = (
+            get_blocks(binned_data, groupers=groupers)
+            .apply(
+                lambda x: x.set_index("index")
+                .rolling(window=n_pts, step=step, min_periods=min_periods)
+                .mean()
+                .iloc[int(n_pts / step) :]
+            )
+            .reset_index(level="index")
+        )
     rolled_data = rolled_data.rename(columns={0: y_col, "index": "time"}).set_index(
         "time", append=True
     )

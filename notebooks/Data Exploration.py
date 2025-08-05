@@ -32,7 +32,7 @@ import pandas as pd
 import seaborn as sns
 
 from foraging.config.constants import MULTIPLOT_FIGSIZE, PALETTE, PALETTE_DARK, SEED
-from foraging.plotting import bp, enhanced_violinplot, plot_block_average_or_traces
+from foraging.plotting import bp, enhanced_violinplot, plot_quantity_across_block
 from foraging.plotting.behavior import (
     plot_experiment_overview,
     plot_matching_law,
@@ -42,7 +42,6 @@ from foraging.plotting.behavior import (
     plot_push_intervals_vs_reward_intervals,
     plot_push_rates_across_block,
     plot_pushes,
-    plot_quantity_across_block,
     plot_reward_per_push_across_block,
     plot_reward_rates_across_block,
     plot_runlengths,
@@ -59,7 +58,6 @@ from foraging.utils.data import (
     get_blocks,
     make_df,
 )
-from foraging.utils.stats import moving_average
 
 # Filter out annoying matplotlib logs
 mlogger = logging.getLogger("matplotlib")
@@ -392,7 +390,7 @@ plot_reward_rates_across_block(df, by_box=True, min_obs=10)
 # ### Push Rate
 
 # %%
-plot_push_rates_across_block(df, by_box=True, min_obs=10)
+plot_push_rates_across_block(df, by_box=True, min_obs=10, show_traces=True)
 
 
 # %% [markdown]
@@ -423,12 +421,7 @@ def _auxiliary_plot(
 
 
 plot_quantity_across_block(
-    df,
-    y="push intervals",
-    auxiliary_plot=_auxiliary_plot,
-    min_obs=10,
-    by_box=True,
-    errorbar="se",
+    df, y="push intervals", auxiliary_plot=_auxiliary_plot, min_obs=10, by_box=True
 )
 
 # %% [markdown]
@@ -437,9 +430,7 @@ plot_quantity_across_block(
 # ### Reward-per-push
 
 # %%
-rr = plot_reward_per_push_across_block(
-    df, min_obs=10, by_box=True, smooth=True, errorbar="se"
-)
+plot_reward_per_push_across_block(df, min_obs=10, by_box=True)
 
 # %% [markdown]
 # The reward-per-push start off low but increase over time in the block. As reliability increases, they start off higher.

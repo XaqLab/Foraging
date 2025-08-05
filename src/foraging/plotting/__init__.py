@@ -16,6 +16,7 @@ from ._base import (
     multiplot,
     per_block,
     plot_block_average_or_traces,
+    plot_quantity_across_block,
     plot_variable_subplots,
     subject_plotter,
     titler,

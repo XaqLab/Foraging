@@ -49,6 +49,7 @@ from foraging.utils.data import (
     exclusion_criteria,
     filter_df,
     make_df,
+    map_box_positions_to_ranks,
     process_blocks,
 )
 from foraging.utils.models import (
@@ -159,6 +160,20 @@ schedule_beliefs, _ = process_blocks(df, compute_posteriors, posterior_maker)
 conds = dict(subject="viktor", session=20230807, block=5)
 plot_schedule_beliefs_in_block(df, schedule_beliefs, conds=conds)
 
+# %%
+conds = dict(subject="viktor", session=20230807, block=5)
+df_block = filter_df(df, conds)
+
+# np.array(schedule_beliefs[('dylan', 20211206, 2)].features)
+
+# %%
+box_ranks = map_box_positions_to_ranks(df_block)
+
+# %%
+# accuracy = p(fast > medium & medium > slow)?
+schedules = df_block["schedule"].unique()
+schedules, box_ranks["box rank"]
+
 # %% [markdown]
 # Now we will aggregate posteriors over blocks and report the average summary statistics of those posteriors.
 
@@ -167,8 +182,9 @@ plot_schedule_beliefs_mean_and_std_across_blocks(
     df,
     schedule_beliefs,
     conds={"kappa": 0, "shape": 10},
-    x="push # by box",
+    x="push times",
     min_obs=5,
+    show_traces=True,
 )
 
 

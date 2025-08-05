@@ -36,6 +36,7 @@ from foraging.utils.data import (
     process_blocks,
 )
 from foraging.utils.models import AbstractBelief, BeliefModule
+from foraging.utils.stats import moving_average
 
 
 def likelihood_single_obs(
@@ -422,7 +423,7 @@ def plot_schedule_beliefs_mean_and_std_across_blocks(
     conds: dict[str, Any] = None,
     x: str = "push times",
     palette: dict = PALETTE,
-    average_blocks: bool = False,
+    show_traces: bool = False,
     **kwargs,
 ) -> plt.Axes:
     """
@@ -487,10 +488,32 @@ def plot_schedule_beliefs_mean_and_std_across_blocks(
     df_beliefs.index = pd.MultiIndex.from_tuples(
         df_beliefs.index, names=INDEX[:MIN_INDEX]
     )
-    # Bin pushes by time
+
+    # Average data over time
+    groupers = ["box", "block_id"]
     if x == "push times":
-        bin_kwargs = kwargs_handler(kwargs, "bin_kwargs", dict(bin_width=60))
-        df_beliefs[x] = bin_data(df_beliefs, x, **bin_kwargs).values
+        smooth_kwargs = kwargs_handler(kwargs, "smooth_kwargs")
+        ma_mean = moving_average(
+            df_beliefs,
+            x_col=x,
+            y_col="mean",
+            y_name="mean",
+            agg_func=lambda x: x["mean"].mean(),
+            groupers=groupers,
+            **smooth_kwargs,
+        )
+        ma_std = moving_average(
+            df_beliefs,
+            x_col=x,
+            y_col="standard deviation",
+            y_name="standard deviation",
+            agg_func=lambda x: x["standard deviation"].mean(),
+            groupers=groupers,
+            **smooth_kwargs,
+        )
+        df_beliefs = ma_mean
+        df_beliefs["standard deviation"] = ma_std["standard deviation"]
+        x = "time"
 
     fig_kwargs = kwargs_handler(
         kwargs, "fig_kwargs", {"nrows": 2, "ncols": 1, "figsize": (10, 10)}
@@ -502,7 +525,7 @@ def plot_schedule_beliefs_mean_and_std_across_blocks(
         conds = {"subject": subj}
         df_subj = filter_df(df_beliefs, conds=conds)
 
-        base_params = {
+        params = {
             "x": x,
             "y": "mean",
             "hue": "box",
@@ -510,9 +533,7 @@ def plot_schedule_beliefs_mean_and_std_across_blocks(
             "ax": ax[0],
             **kwargs,
         }
-        plot_block_average_or_traces(
-            df_subj, show_traces=average_blocks, params=base_params
-        )
+        plot_block_average_or_traces(df_subj, show_traces=show_traces, **params)
 
         # Plot schedules on top of means
         schedules = sorted(filter_df(df, conds=conds)["schedule"].unique())
@@ -534,16 +555,14 @@ def plot_schedule_beliefs_mean_and_std_across_blocks(
             ax[0].get_legend().remove()
             ax[0].legend(handles=all_handles, labels=all_labels)
 
-        base_params.update(
+        params.update(
             {
                 "y": "standard deviation",
                 "legend": False,
                 "ax": ax[1],
             }
         )
-        plot_block_average_or_traces(
-            df_subj, show_traces=average_blocks, params=base_params
-        )
+        plot_block_average_or_traces(df_subj, show_traces=show_traces, **params)
 
         fig.suptitle(titler(title="Beliefs about schedule", conds=conds))
         fig.tight_layout()
