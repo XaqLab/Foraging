@@ -257,7 +257,7 @@ plot_push_intervals_by_sessions(df)
 
 # %%
 df = filter_df(df, {"shape": 10})
-# df = df[df["push times"] <= 900]
+df = df[df["push times"] <= 900]
 
 # %% [markdown]
 # Here are the distributions of push intervals at each box as a function of stimulus reliability.
@@ -377,95 +377,13 @@ bp(sns.violinplot)(
 # ### Reward Rate
 
 # %%
-plot_reward_rates_across_block(df, show_traces=True, smooth=True)
-
-# %%
-
-
-def foo(x):
-    return x["reward outcomes"].sum()
-
-
-def bar(x):
-    return x.size()
-
-
-ma = moving_average(
-    df,
-    x_col="push times",
-    y_col="reward outcomes",
-    y_name="push rate",
-    agg_func=foo,
-    groupers=["block_id", "stimulus reliability"],
-    window_size=30,
-    step=10,
-    min_periods=1,
-    bin_width=0.5,
-)
-
-
-# %%
-plot_block_average_or_traces(
-    filter_df(ma, {"stimulus reliability": "low"}),
-    show_traces=True,
-    x="time",
-    y="push rate",
-)
-
-# %%
-plot_block_average_or_traces(
-    filter_df(ma, {"stimulus reliability": "high"}),
-    show_traces=True,
-    x="time",
-    y="push rate",
-)
-
-# %%
-x = "time"
-df2 = df.copy()
-bin_kwargs = dict(bin_width=window_size, strategy="full")
-
-df2[x] = bin_data(df2["push times"], **bin_kwargs)
-
-# Aggregate rewards by box or across boxes
-df_grouped = get_blocks(df2, groupers=groupers + [x])
-rr = df_grouped["reward outcomes"].sum().to_frame().reset_index()
-
-# # Calculate reward rate
-rr["reward rate"] = rr["reward outcomes"] / rr[x].apply(lambda x: x.length)
-
-# %%
-rr.head(10)
-
-# %%
-binned_data.head(50)
-
-# %%
-a = filter_df(df2, conds=dict(zip(("subject", "session", "block"), ("humans", 1, 1))))
-mask = (a["push times"] > 91.361) & (a["push times"] < 121.361)
-a.loc[mask, ["push times", "reward outcomes", "box"]]
-
-# %%
-b = filter_df(rolled_data, conds=conds)
-
-# %%
-sns.lineplot(
-    x="time",
-    y=y_col,
-    data=filter_df(
-        rolled_data[rolled_data.index.get_level_values("time") < 900],
-        {"subject": "viktor", "stimulus reliability": "low"},
-    ),
-    alpha=0.5,
-)
+plot_reward_rates_across_block(df, min_obs=10, show_traces=True)
 
 # %% [markdown]
 # Reward rate increases as subjects gain more experience in the block. As reliablity increases, the total reward rate combined across all boxes also increases. Next, we decompose the reward rate into different boxes.
 
 # %%
-plot_reward_rates_across_block(
-    df, by_box=True, min_obs=10, show_traces=True, smooth=True
-)
+plot_reward_rates_across_block(df, by_box=True, min_obs=10)
 
 # %% [markdown]
 # Clearly, the reward rates are ordered the way we would expect them, fast > medium > slow.
@@ -474,7 +392,7 @@ plot_reward_rates_across_block(
 # ### Push Rate
 
 # %%
-plot_push_rates_across_block(df, by_box=True, min_obs=10, show_traces=True, smooth=True)
+plot_push_rates_across_block(df, by_box=True, min_obs=10)
 
 
 # %% [markdown]
@@ -485,7 +403,6 @@ plot_push_rates_across_block(df, by_box=True, min_obs=10, show_traces=True, smoo
 
 
 # %%
-# %%capture --no-display
 def _auxiliary_plot(
     df: pd.DataFrame,
     conds: dict = None,

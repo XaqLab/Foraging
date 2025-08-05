@@ -20,6 +20,7 @@ def moving_average(
     step=1,
     min_periods=1,
     bin_width=BIN_WIDTH,
+    rate: bool = False,
 ):
 
     # Create time bins
@@ -53,7 +54,8 @@ def moving_average(
     rolled_data = rolled_data.rename(columns={0: y_col, "index": "time"}).set_index(
         "time", append=True
     )
-    rolled_data[y_name] = rolled_data[y_col] / window_size
+    if rate:
+        rolled_data[y_name] = rolled_data[y_col] / window_size
     return rolled_data
 
 
