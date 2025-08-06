@@ -14,6 +14,7 @@ from foraging.utils import INDEX, MIN_INDEX
 
 
 ## ABSTRACT CLASSES
+# TODO: consider adding sampling method
 class AbstractBelief(ABC):
 
     @abstractmethod
@@ -47,8 +48,6 @@ class IndexedBelief(AbstractBelief):
     This is useful for representing a belief that is indexed by a box number, for example.
     The update method is then called with the box number as the first argument.
     The query method is then called with the box number as the first argument.
-    The features method is then called with the box number as the first argument.
-    The support method is then called with the box number as the first argument.
     """
 
     @abstractmethod
@@ -57,6 +56,10 @@ class IndexedBelief(AbstractBelief):
 
     @abstractmethod
     def query(self, i: int, *args, **kwargs):
+        pass
+
+    @abstractmethod
+    def __len__(self):
         pass
 
 
@@ -214,7 +217,7 @@ class IndependentBoxesBelief(IndexedBelief):
         self.beliefs[i].update(*args, **kwargs)
 
     def query(self, i: int, *args, **kwargs):
-        return self.beliefs[i].query(*args, **kwargs)
+        return self.beliefs[i]
 
     def normalize(self, *args, **kwargs):
         for belief in self.beliefs:
@@ -246,6 +249,9 @@ class IndependentBoxesBelief(IndexedBelief):
     def features(self, features: ArrayLike):
         for i, belief in enumerate(self.beliefs):
             belief.features = features[i]
+
+    def __len__(self):
+        return self.n_boxes
 
 
 class IndependentGammaBoxesBelief(IndependentBoxesBelief):

@@ -402,7 +402,12 @@ def map_box_positions_to_ranks(df: pd.DataFrame) -> pd.DataFrame:
     """
     Map box positions to ranks.
     """
-    return df[["box position", "box rank"]].drop_duplicates().set_index("box position")
+    return (
+        df[["box position", "box rank"]]
+        .drop_duplicates()
+        .set_index("box position")
+        .sort_index()
+    )
 
 
 def filter_df(

@@ -29,7 +29,6 @@ from collections import defaultdict
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import scipy.stats
 import seaborn as sns
 from scipy.special import polygamma
 
@@ -37,13 +36,14 @@ from foraging import plotting, utils
 from foraging.config.constants import BOX_COLORS, BOX_LABELS, PALETTE, SEED
 from foraging.plotting import bp, format_yticks, per_block, titler
 from foraging.plotting.beliefs import (
+    plot_accuracy_across_block,
     plot_cramer_rao_lb,
     plot_fisher_info,
     plot_schedule_beliefs_in_block,
-    plot_schedule_beliefs_mean_and_std_across_blocks,
+    plot_schedule_beliefs_mean_and_std_across_block,
 )
 from foraging.utils import INDEX, MIN_INDEX
-from foraging.utils.beliefs import compute_posteriors
+from foraging.utils.beliefs import compute_accuracy, compute_posterior
 from foraging.utils.data import (
     display_df,
     exclusion_criteria,
@@ -144,41 +144,27 @@ plot_cramer_rao_lb(n=50, schedules=[7, 14, 21], alpha=10)
 
 
 # %%
-schedule_candidates = np.arange(30) + 1
-
-
-def posterior_maker(df, index):
-    block = df.loc[index]
-    shape = block.index.unique("shape")[0]
-    n_boxes = block["n boxes"].values[0]
-    return IndependentGammaBoxesBelief(
-        n_boxes, schedules=schedule_candidates, shape=shape
-    )
-
-
-schedule_beliefs, _ = process_blocks(df, compute_posteriors, posterior_maker)
-conds = dict(subject="viktor", session=20230807, block=5)
+# schedule_candidates = np.arange(30) + 1
+#
+# def posterior_maker(df, index):
+#     block = df.loc[index]
+#     shape = block.index.unique("shape")[0]
+#     n_boxes = block["n boxes"].values[0]
+#     return IndependentGammaBoxesBelief(
+#         n_boxes, schedules=schedule_candidates, shape=shape
+#     )
+#
+#
+# schedule_beliefs, _ = process_blocks(df, compute_posterior, posterior_maker)
+# conds = dict(subject="viktor", session=20230807, block=5)
+conds = dict(zip(INDEX[: MIN_INDEX - 1], ("viktor", 20230809, 4)))
 plot_schedule_beliefs_in_block(df, schedule_beliefs, conds=conds)
-
-# %%
-conds = dict(subject="viktor", session=20230807, block=5)
-df_block = filter_df(df, conds)
-
-# np.array(schedule_beliefs[('dylan', 20211206, 2)].features)
-
-# %%
-box_ranks = map_box_positions_to_ranks(df_block)
-
-# %%
-# accuracy = p(fast > medium & medium > slow)?
-schedules = df_block["schedule"].unique()
-schedules, box_ranks["box rank"]
 
 # %% [markdown]
 # Now we will aggregate posteriors over blocks and report the average summary statistics of those posteriors.
 
 # %%
-plot_schedule_beliefs_mean_and_std_across_blocks(
+plot_schedule_beliefs_mean_and_std_across_block(
     df,
     schedule_beliefs,
     conds={"kappa": 0, "shape": 10},
@@ -187,6 +173,22 @@ plot_schedule_beliefs_mean_and_std_across_blocks(
     show_traces=True,
 )
 
+
+# %%
+
+accuracies, _ = process_blocks(df, compute_accuracy, schedule_beliefs)
+
+# %%
+df["# observations"] = df.index.get_level_values("push #")
+plot_accuracy_across_block(
+    df,
+    accuracies,
+    conds={"kappa": 0, "shape": 10},
+    x="push times",
+    min_obs=5,
+    show_traces=True,
+    color="black",
+)
 
 # %% [markdown]
 # ## What if the hypothesis space is discrete and finite?
@@ -203,7 +205,7 @@ def posterior_maker(df, index):
 
 
 schedule_beliefs_permutations, _ = process_blocks(
-    df, compute_posteriors, posterior_maker, use_tqdm=True
+    df, compute_posterior, posterior_maker, use_tqdm=True
 )
 
 # %%

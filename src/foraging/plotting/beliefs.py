@@ -417,7 +417,7 @@ def plot_schedule_beliefs_in_block(
     return ax
 
 
-def plot_schedule_beliefs_mean_and_std_across_blocks(
+def plot_schedule_beliefs_mean_and_std_across_block(
     df: pd.DataFrame,
     beliefs: dict[tuple, BeliefModule],
     conds: dict[str, Any] = None,
@@ -565,6 +565,106 @@ def plot_schedule_beliefs_mean_and_std_across_blocks(
         plot_block_average_or_traces(df_subj, show_traces=show_traces, **params)
 
         fig.suptitle(titler(title="Beliefs about schedule", conds=conds))
+        fig.tight_layout()
+        return ax
+
+    subject_plotter(df.index.unique("subject"), _plot, **kwargs)
+
+
+def plot_accuracy_across_block(
+    df: pd.DataFrame,
+    accuracies: dict[tuple, ArrayLike],
+    conds: dict[str, Any] = None,
+    x: str = "push times",
+    palette: dict = PALETTE,
+    show_traces: bool = False,
+    **kwargs,
+) -> plt.Axes:
+    """
+    Plots the beliefs about the schedule for a specific block in the experiment, with uncertainty bands
+    and reward outcomes.
+
+    Args:
+        df: DataFrame containing session data.
+        index: Index of the block to analyze in the DataFrame.
+        x: The value from `df` used for the x-axis, typically 'push #' or 'push times'.
+        ax: Optional, existing matplotlib Axes object. If None, a new one will be created.
+
+        kwargs:
+            - 'fig_kwargs': Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
+            - 'plt_kwargs': Dictionary to specify additional plotting properties for the line plot (passed to `bp wrapper`).
+            - 'lgd_kwargs': Dictionary of keyword arguments for customizing the legend (passed to `plt.legend`).
+
+    Returns:
+        ax: The matplotlib Axes object with the plot.
+    """
+
+    df = filter_df(df, conds)
+
+    # Get beliefs of each block
+    def _inner(df: pd.DataFrame, index: tuple):
+        df_block = df.loc[index].reset_index()
+        accuracy = accuracies[index]
+
+        x_vals = df_block[x].values
+        block_id = df_block["block_id"].values[0]
+        res = {
+            (index + (i + 1,)): [
+                accuracy[i + 1],
+                x_vals[i],
+                block_id,
+            ]
+            for i in range(len(accuracy) - 1)
+        }
+
+        res[(index + (0,))] = [accuracy[0], 0, block_id]
+        return res
+
+    res, _ = process_blocks(df, _inner)
+    res = reduce(lambda x, y: {**x, **y}, list(res.values()), {})
+    df_beliefs = pd.DataFrame.from_dict(
+        res,
+        orient="index",
+        columns=["accuracy", x, "block_id"],
+    )
+
+    df_beliefs.index = pd.MultiIndex.from_tuples(
+        df_beliefs.index, names=INDEX[:MIN_INDEX]
+    )
+
+    # Average data over time
+    groupers = ["block_id"]
+    if x == "push times":
+        smooth_kwargs = kwargs_handler(kwargs, "smooth_kwargs")
+        df_beliefs = moving_average(
+            df_beliefs,
+            x_col=x,
+            y_col="accuracy",
+            y_name="accuracy",
+            agg_func=lambda x: x["accuracy"].mean(),
+            groupers=groupers,
+            **smooth_kwargs,
+        )
+        x = "time"
+
+    fig_kwargs = kwargs_handler(kwargs, "fig_kwargs")
+
+    @legend_handler
+    def _plot(i, subj, **kwargs):
+        fig, ax = fig_init(**fig_kwargs)
+        conds = {"subject": subj}
+        df_subj = filter_df(df_beliefs, conds=conds)
+
+        params = {
+            "x": x,
+            "y": "accuracy",
+            "palette": palette,
+            "ax": ax,
+            **kwargs,
+        }
+        plot_block_average_or_traces(df_subj, show_traces=show_traces, **params)
+
+        fig.suptitle(titler(title="Theoretical accuracy", conds=conds))
         fig.tight_layout()
         return ax
 

@@ -9,7 +9,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.utils.class_weight import compute_sample_weight
 
 from foraging.utils import discrete_time
-from foraging.utils.data import process_block_safely
+from foraging.utils.data import map_box_positions_to_ranks, process_block_safely
 from foraging.utils.models import BeliefModule, EventID, IndexedBelief
 from foraging.utils.stats import mcfadden_pseudo_rsquared, permutation_test_logistic
 
@@ -38,7 +38,8 @@ def fisher_info_reward_observations(t, schedule, alpha):
 
 
 @process_block_safely
-def compute_posteriors(
+# TODO: make filtering block consistent with rest of code
+def compute_posterior(
     df: pd.DataFrame,
     index: tuple,
     posterior_maker: Callable[Any, IndexedBelief],
@@ -51,10 +52,8 @@ def compute_posteriors(
     Args:
         df: DataFrame containing session data.
         index: Multi-index selector for retrieving block-specific data.
-        posterior_class: Class of the posterior belief.
-        schedule_candidates: Array of possible reward rates forming the support of the beliefs.
-        shape: Shape parameter for the gamma distribution.
-
+        posterior_maker: Function that instantiates the posterior.
+        *args, **kwargs: Additional arguments to pass to the posterior_maker.
     Returns:
         BeliefModule: the computed beliefs about reward schedules.
     """
@@ -80,6 +79,58 @@ def compute_posteriors(
             (reward_outcomes[i], push_intervals[i]),
         )
     return posterior
+
+
+@process_block_safely
+def compute_accuracy(
+    df: pd.DataFrame,
+    index: tuple,
+    schedule_beliefs: BeliefModule,
+    *args,
+    seed: int = 42,
+    n_samples: int = 100,
+    **kwargs,
+) -> ArrayLike:
+    """
+    Computes the posterior belief over reward schedules for each box, updating after each push.
+
+    Args:
+        df: DataFrame containing session data.
+        index: Multi-index selector for retrieving block-specific data.
+        schedule_beliefs: BeliefModule containing the schedule beliefs.
+        seed: Random seed for reproducibility.
+        n_samples: Number of samples to draw for Monte Carlo estimation.
+
+    Returns:
+        BeliefModule: the computed beliefs about reward schedules.
+    """
+    # Extract data corresponding to the given index
+    df_block = df.loc[index]
+    box_ranks = map_box_positions_to_ranks(df_block)
+    belief_block = schedule_beliefs[index]
+    n_steps = len(belief_block)
+    n_boxes = len(belief_block.prior)
+    samples = np.zeros((n_steps, n_boxes, n_samples))
+    rng = np.random.default_rng(seed)
+
+    # Estimate accuracy via Monte Carlo sampling
+    for i in range(n_steps):
+        belief = belief_block.query(i).content
+        for j in range(n_boxes):
+            belief_box = belief.query(j)
+            p_vec = belief_box.features
+            schedule_candidates = belief_box.support
+
+            samples[i, j, :] = rng.choice(schedule_candidates, p=p_vec, size=n_samples)
+
+    # Count the fraction of samples that match the true order
+    sampled_orders = np.argsort(np.argsort(samples, axis=1), axis=1)
+    true_order = box_ranks["box rank"].values
+    return (
+        (sampled_orders == true_order[np.newaxis, :, np.newaxis])
+        .all(axis=1)
+        .mean(axis=1)
+    )
 
 
 # @process_block_safely
