@@ -19,8 +19,6 @@
 # This notebook provides a descriptive analysis of behavior and walks through observations that contextualize later analysis. As in the `Data Cleaning` notebook, the emphasis will be on the pushes instead of the continuous variables, like gaze and position.
 
 # %%
-# %load_ext autoreload
-# %autoreload 2
 # %matplotlib inline
 
 import logging
@@ -37,6 +35,7 @@ from foraging.plotting import (
     enhanced_violinplot,
     plot_block_average_or_traces,
     plot_quantity_across_block,
+    toggle_plot,
 )
 from foraging.plotting.behavior import (
     plot_experiment_overview,
@@ -53,6 +52,7 @@ from foraging.plotting.behavior import (
     plot_stay_probabilities,
     plot_stay_switch_pushes,
 )
+from foraging.utils.autoreload import setup_auto_reload
 
 # Create a new x-axis with regular intervals
 from foraging.utils.data import (
@@ -64,6 +64,8 @@ from foraging.utils.data import (
     make_df,
 )
 from foraging.utils.stats import moving_average
+
+setup_auto_reload()
 
 # Filter out annoying matplotlib logs
 mlogger = logging.getLogger("matplotlib")
@@ -381,7 +383,19 @@ bp(sns.violinplot)(
 # ### Push Rate
 
 # %%
-plot_push_rates_across_block(df, by_box=True, min_obs=10)
+
+toggle_plot(
+    plot_push_rates_across_block,
+    plot_push_rates_across_block,
+    button_labels=("Full block", "Zoomed in"),
+    kwargs1={"df": df, "by_box": True, "min_obs": 10},
+    kwargs2={
+        "df": df[df["push times"] < 120],
+        "by_box": True,
+        "min_obs": 10,
+        "smooth_kwargs": {"window_size": 10, "step": 5},
+    },
+)
 
 # %% [markdown]
 # When the stimulus reliability is low, the subjects initially struggle to distinguish the boxes. As time goes on in the block, they learn.

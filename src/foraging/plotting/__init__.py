@@ -20,6 +20,7 @@ from ._base import (
     plot_quantity_across_block,
     plot_variable_subplots,
     titler,
+    toggle_plot,
     unitler,
 )
 

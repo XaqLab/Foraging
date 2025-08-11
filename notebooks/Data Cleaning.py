@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.16.7
+#       jupytext_version: 1.17.2
 #   kernelspec:
 #     display_name: xaqlab2
 #     language: python
@@ -20,9 +20,6 @@
 
 # %%
 # %matplotlib inline
-# %load_ext autoreload
-# %autoreload 2
-
 import logging
 import os
 
@@ -43,7 +40,11 @@ from foraging.plotting.behavior import (
     plot_vertical_position_in_block,
     plot_vertical_position_vs_push_percentiles,
 )
+from foraging.utils.autoreload import setup_auto_reload
 from foraging.utils.data import display_df, exclusion_criteria, make_df
+
+setup_auto_reload()
+
 
 pd.options.mode.copy_on_write = True
 
@@ -58,16 +59,16 @@ SEED = 42
 
 # %% [markdown]
 # # Table of Contents
-# - [Load Data](#load-data)
-#   - [Data Overview](#data-overview)
-# - [Analyze Outliers](#analyze-outliers)
-#   - [Example Blocks](#example-blocks)
-#   - [Block Initiation](#block-initiation)
-#   - [Reward](#reward)
-#   - [Time](#time)
-#   - [Space](#space)
-#   - [HMM Policy Identification](#hmm-policy-identification)
-# - [Clean Data](#clean-data)
+# - [Load Data](#Load-Data)
+#   - [Data Overview](#Data-Overview)
+# - [Analyze Outliers](#Analyze-Outliers)
+#   - [Example Blocks](#Example-Blocks)
+#   - [Block Initiation](#Block-Initiation)
+#   - [Reward](#Reward)
+#   - [Time](#Time)
+#   - [Space](#Space)
+#   - [HMM Policy Identification](#Hmm-Policy-Identification)
+# - [Clean Data](#Clean-Data)
 
 # %% [markdown]
 # # Load Data

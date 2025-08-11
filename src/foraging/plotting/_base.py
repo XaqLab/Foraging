@@ -7,10 +7,12 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+import ipywidgets as widgets
 import numpy as np
 import pandas as pd
 import seaborn as sns
 import statsmodels.api as sm
+from IPython.display import clear_output, display
 from kneed import KneeLocator
 from matplotlib import pyplot as plt
 from matplotlib.collections import PolyCollection
@@ -40,6 +42,15 @@ def fig_init(ax: plt.Axes = None, **kwargs):
     if ax is None:
         return plt.subplots(**kwargs)
     return ax.get_figure(), ax
+
+
+def get_figure_from_axes(
+    axes: plt.Axes | list[plt.Axes] | tuple[plt.Axes] | np.ndarray[plt.Axes],
+):
+    figs = set()
+    for ax in flatten(axes):
+        figs.add(ax.figure)
+    return figs
 
 
 def titler(title: str = None, conds: dict = None, title_override: str = None):
@@ -1070,3 +1081,107 @@ def stacked_barplot(
 
     ax.legend(handles=legend_content, title=hue)
     return ax
+
+
+def toggle_plot(
+    plot_func1: Callable,
+    plot_func2: Callable,
+    kwargs1: dict = None,
+    kwargs2: dict = None,
+    default_plot: int = 1,
+    button_labels: tuple = ("Show Plot 1", "Show Plot 2"),
+):
+    """
+    Create a toggle widget to switch between two plotting functions.
+
+    Parameters
+    ----------
+    plot_func1 : callable
+        First plotting function to display (should return axes object or list of axes)
+    plot_func2 : callable
+        Second plotting function to display (should return axes object or list of axes)
+    kwargs1 : dict, optional
+        Keyword arguments for the first plotting function
+    kwargs2 : dict, optional
+        Keyword arguments for the second plotting function
+    default_plot : int, default=1
+        Which plot to show by default (1 or 2)
+    button_labels : tuple of str, default=("Show Plot 1", "Show Plot 2")
+        Labels for the toggle button (label alternates between these two)
+
+    Returns
+    -------
+    widget
+        Jupyter widget with toggle functionality
+
+    Examples
+    --------
+    >>> def plot1(data, color='blue'):
+    ...     fig, ax = plt.subplots()
+    ...     ax.scatter(data['x'], data['y'], color=color)
+    ...     ax.set_title('Plot 1')
+    ...     return ax
+    >>> def plot2(data, bins=20):
+    ...     fig, ax = plt.subplots()
+    ...     ax.hist(data['x'], bins=bins)
+    ...     ax.set_title('Plot 2')
+    ...     return ax
+    >>> toggle_plot(plot1, plot2,
+    ...             kwargs1={'data': df, 'color': 'red'},
+    ...             kwargs2={'data': df, 'bins': 30},
+    ...             button_labels=("Show Plot 1", "Show Plot 2"))
+    """
+
+    kwargs1 = kwargs1 or {}
+    kwargs2 = kwargs2 or {}
+
+    output = widgets.Output()
+    current_plot = 1 if default_plot == 1 else 2
+
+    def show_plot(plot_func, kwargs):
+        # Create the plot and display the figure only in the widget output
+        axes = plot_func(**kwargs)
+        figs = get_figure_from_axes(axes)
+        if figs is not None:
+            for fig in flatten(figs):
+                display(fig)
+                plt.close(fig)
+        return axes
+
+    # Set initial button label
+    if not button_labels or len(button_labels) != 2:
+        button_labels = ("Show Plot 1", "Show Plot 2")
+    label_map = {1: button_labels[0], 2: button_labels[1]}
+
+    toggle_button = widgets.Button(
+        description=label_map[current_plot],
+        disabled=False,
+        button_style="info",
+        tooltip="Click to switch between plots",
+        icon="refresh",
+    )
+
+    def on_button_click(b):
+        nonlocal current_plot
+        with output:
+            output.clear_output(wait=True)
+            if current_plot == 1:
+                show_plot(plot_func2, kwargs2)
+                current_plot = 2
+            else:
+                show_plot(plot_func1, kwargs1)
+                current_plot = 1
+        toggle_button.description = label_map[current_plot]
+
+    toggle_button.on_click(on_button_click)
+    container = widgets.VBox([toggle_button, output])
+
+    # Initial plot
+    with output:
+        output.clear_output(wait=True)
+        if current_plot == 1:
+            show_plot(plot_func1, kwargs1)
+        else:
+            show_plot(plot_func2, kwargs2)
+
+    return container

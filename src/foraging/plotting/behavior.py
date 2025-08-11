@@ -233,7 +233,7 @@ def plot_push_percentiles(df: pd.DataFrame, percentiles: dict = None, **kwargs):
             )
             ax.legend(loc="upper right")
 
-    across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
+    return across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
 def plot_long_push_blocks(
@@ -276,7 +276,7 @@ def plot_long_push_blocks(
         fig.suptitle(subj)
         fig.tight_layout()
 
-    across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
+    return across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
 def plot_pushes(
@@ -635,7 +635,7 @@ def plot_previous_push_interval_vs_push_interval(
         fig.tight_layout()
         return ax
 
-    across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
+    return across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
 @legend_handler
@@ -809,6 +809,7 @@ def plot_vertical_position_in_block(df: pd.DataFrame, conds: dict, data_dir: str
     ax.set_xlabel("time (s)")
     ax.set_ylabel("vertical position (mm)")
     ax.set_title("Vertical position in block")
+    return ax
 
 
 @multiplot
@@ -890,7 +891,7 @@ def plot_vertical_position_vs_push_percentiles(
         return axes[i]
 
     # Plot each subject's vertical position distribution
-    across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
+    return across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
 # TODO: visualize xy-position in block in 2d and super-impose block activity
@@ -967,7 +968,7 @@ def plot_xy_velocity_long_vs_medium_pushes(
         fig.tight_layout()
 
     # Plot each subject's vertical position distribution
-    across_conditions_plotter(df.index.unique("subject"), _plot)
+    return across_conditions_plotter(df.index.unique("subject"), _plot)
 
 
 @legend_handler(bbox=(1.1, 1))
@@ -1221,7 +1222,7 @@ def plot_push_intervals_by_sessions(
         fig.suptitle(f"Push intervals for {subj}")
         fig.tight_layout()
 
-    across_conditions_plotter(monkey_subjects, _plot, **kwargs)
+    return across_conditions_plotter(monkey_subjects, _plot, **kwargs)
 
 
 @multiplot
@@ -1285,7 +1286,7 @@ def plot_push_intervals(
         fig.suptitle(f"Push intervals for {subj}")
         fig.tight_layout()
 
-    across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
+    return across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
 def plot_stay_switch_pushes(
@@ -1399,7 +1400,7 @@ def plot_stay_switch_pushes(
         fig.text(0.0, 0.5, "FROM", va="center", rotation="vertical")
         fig.tight_layout()
 
-    across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
+    return across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
 @multiplot
@@ -1534,7 +1535,7 @@ def plot_runlengths(
         fig.tight_layout()
         return ax
 
-    across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
+    return across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
 @multiplot
@@ -1628,7 +1629,7 @@ def plot_push_intervals_vs_reward_intervals(
         fig.tight_layout()
         return axes
 
-    across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
+    return across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
 def plot_next_push_surprise(
@@ -1700,7 +1701,7 @@ def plot_next_push_surprise(
         fig.tight_layout()
         return axes
 
-    across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
+    return across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
 @multiplot
@@ -1757,7 +1758,7 @@ def plot_stay_probabilities(
         fig.tight_layout()
         return ax
 
-    across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
+    return across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
 @multiplot
@@ -1826,7 +1827,87 @@ def plot_quantity_across_block(
         fig.tight_layout()
         return axes
 
-    across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
+    return across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
+
+
+@multiplot
+def plot_push_rates_across_block(
+    df: pd.DataFrame,
+    stim_reliabilities: dict = KAPPA_LEVELS,
+    palette: dict = PALETTE,
+    by_box: bool = False,
+    show_traces: bool = False,
+    **kwargs,
+):
+    """
+    This function calculates and visualizes the reward rates across different blocks, smoothing the data over a specified window and optionally separating the data by box.
+
+    Args:
+        df: A DataFrame containing push data.
+        stim_reliabilities: A dictionary mapping subjects to their stimulus reliability levels.
+        palette: A dictionary mapping box schedules to colors.
+        by_box: If True, separate the reward rates by box.
+        show_traces: If True, show each block's trace instead of averaging over blocks.
+        **kwargs: Additional keyword arguments.
+            - bin_kwargs: Dictionary to specify binning properties for time (passed to `bin_data`).
+            - fig_kwargs: Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
+            - smooth_kwargs: Dictionary to specify window properties for smoothing the reward rate (passed to `moving_average`).
+    Returns:
+        None
+    """
+
+    # Average data over time
+    groupers = ["stimulus reliability", "block_id"]
+    if by_box:
+        groupers.append("box")
+
+    smooth_kwargs = kwargs_handler(
+        kwargs,
+        "smooth_kwargs",
+        {"rate": True},
+    )
+    ma = moving_average(
+        df,
+        x_col="push times",
+        y_col="reward outcomes",
+        y_name="push rate",
+        agg_func=lambda x: x.size(),
+        groupers=groupers,
+        **smooth_kwargs,
+    )
+
+    # Plot push rates
+    fig_kwargs = kwargs_handler(kwargs, "fig_kwargs", {"sharey": True, "sharex": True})
+    base_params = {"x": "time", "y": "push rate", "x_unit": "s", **kwargs}
+
+    if by_box:
+        base_params.update({"hue": "box", "palette": palette})
+    else:
+        base_params.update({"color": "black"})
+
+    @legend_handler
+    def _plot(i, subj, **kwargs):
+        rr_subj = filter_df(ma, {"subject": subj})
+        kappas = stim_reliabilities[subj].keys()
+        fig_kwargs["ncols"] = len(kappas)
+        fig, ax = fig_init(**fig_kwargs)
+        for i, kappa in enumerate(kappas):
+            base_params.update(
+                {
+                    "conds": {"stimulus reliability": kappa},
+                    "ax": ax[i],
+                    "legend": i == len(kappas) - 1,
+                    **kwargs,
+                }
+            )
+            plot_block_average_or_traces(
+                rr_subj, show_traces=show_traces, **base_params
+            )
+        fig.suptitle(f"Push rate for {subj}")
+        fig.tight_layout()
+        return ax
+
+    return across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
 @multiplot
@@ -1910,87 +1991,7 @@ def plot_reward_rates_across_block(
         fig.tight_layout()
         return axes
 
-    across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
-
-
-@multiplot
-def plot_push_rates_across_block(
-    df: pd.DataFrame,
-    stim_reliabilities: dict = KAPPA_LEVELS,
-    palette: dict = PALETTE,
-    by_box: bool = False,
-    show_traces: bool = False,
-    **kwargs,
-):
-    """
-    This function calculates and visualizes the reward rates across different blocks, smoothing the data over a specified window and optionally separating the data by box.
-
-    Args:
-        df: A DataFrame containing push data.
-        stim_reliabilities: A dictionary mapping subjects to their stimulus reliability levels.
-        palette: A dictionary mapping box schedules to colors.
-        by_box: If True, separate the reward rates by box.
-        show_traces: If True, show each block's trace instead of averaging over blocks.
-        **kwargs: Additional keyword arguments.
-            - bin_kwargs: Dictionary to specify binning properties for time (passed to `bin_data`).
-            - fig_kwargs: Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
-            - smooth_kwargs: Dictionary to specify window properties for smoothing the reward rate (passed to `moving_average`).
-    Returns:
-        None
-    """
-
-    # Average data over time
-    groupers = ["stimulus reliability", "block_id"]
-    if by_box:
-        groupers.append("box")
-
-    smooth_kwargs = kwargs_handler(
-        kwargs,
-        "smooth_kwargs",
-        {"rate": True},
-    )
-    ma = moving_average(
-        df,
-        x_col="push times",
-        y_col="reward outcomes",
-        y_name="push rate",
-        agg_func=lambda x: x.size(),
-        groupers=groupers,
-        **smooth_kwargs,
-    )
-
-    # Plot push rates
-    fig_kwargs = kwargs_handler(kwargs, "fig_kwargs", {"sharey": True, "sharex": True})
-    base_params = {"x": "time", "y": "push rate", "x_unit": "s", **kwargs}
-
-    if by_box:
-        base_params.update({"hue": "box", "palette": palette})
-    else:
-        base_params.update({"color": "black"})
-
-    @legend_handler
-    def _plot(i, subj, **kwargs):
-        rr_subj = filter_df(ma, {"subject": subj})
-        kappas = stim_reliabilities[subj].keys()
-        fig_kwargs["ncols"] = len(kappas)
-        fig, ax = fig_init(**fig_kwargs)
-        for i, kappa in enumerate(kappas):
-            base_params.update(
-                {
-                    "conds": {"stimulus reliability": kappa},
-                    "ax": ax[i],
-                    "legend": i == len(kappas) - 1,
-                    **kwargs,
-                }
-            )
-            plot_block_average_or_traces(
-                rr_subj, show_traces=show_traces, **base_params
-            )
-        fig.suptitle(f"Push rate for {subj}")
-        fig.tight_layout()
-        return ax
-
-    across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
+    return across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
 @multiplot

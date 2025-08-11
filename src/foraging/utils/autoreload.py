@@ -102,13 +102,6 @@ def reload_package(package_name: str, **kwargs):
         print(f"❌ Could not reload {package_name}: {e}")
 
 
-def reload_hexarena(**kwargs):
-    """
-    Convenience function to reload hex-arena package.
-    """
-    reload_package("hexarena", **kwargs)
-
-
 # Quick setup for hex-arena
 def setup_hexarena(path: str = "D:/Documents/hex-arena", **kwargs):
     """
