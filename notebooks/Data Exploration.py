@@ -32,7 +32,12 @@ import pandas as pd
 import seaborn as sns
 
 from foraging.config.constants import MULTIPLOT_FIGSIZE, PALETTE, PALETTE_DARK, SEED
-from foraging.plotting import bp, enhanced_violinplot, plot_quantity_across_block
+from foraging.plotting import (
+    bp,
+    enhanced_violinplot,
+    plot_block_average_or_traces,
+    plot_quantity_across_block,
+)
 from foraging.plotting.behavior import (
     plot_experiment_overview,
     plot_matching_law,
@@ -58,6 +63,7 @@ from foraging.utils.data import (
     get_blocks,
     make_df,
 )
+from foraging.utils.stats import moving_average
 
 # Filter out annoying matplotlib logs
 mlogger = logging.getLogger("matplotlib")
@@ -372,29 +378,29 @@ bp(sns.violinplot)(
 # %% [markdown]
 # Looks like a bin size of 20-30 seconds should be big enough to prevent accidentally creating artifical transients in the first bin of each block. If we make the bin size too small, then we will be capturing trivial failures in the beginning of the block that aren't really reflective of anything important.
 #
+# ### Push Rate
+
+# %%
+plot_push_rates_across_block(df, by_box=True, min_obs=10)
+
+# %% [markdown]
+# When the stimulus reliability is low, the subjects initially struggle to distinguish the boxes. As time goes on in the block, they learn.
+
+# %% [markdown]
 # ### Reward Rate
 
 # %%
 plot_reward_rates_across_block(df, min_obs=10, show_traces=True)
+# TODO: explore changing bin sizes for initial period of blocks in moving average function
 
 # %% [markdown]
 # Reward rate increases as subjects gain more experience in the block. As reliablity increases, the total reward rate combined across all boxes also increases. Next, we decompose the reward rate into different boxes.
 
 # %%
-plot_reward_rates_across_block(df, by_box=True, min_obs=10)
+plot_reward_rates_across_block(df, by_box=True, min_obs=10, show_traces=True)
 
 # %% [markdown]
 # Clearly, the reward rates are ordered the way we would expect them, fast > medium > slow.
-
-# %% [markdown]
-# ### Push Rate
-
-# %%
-plot_push_rates_across_block(df, by_box=True, min_obs=10, show_traces=True)
-
-
-# %% [markdown]
-# When the stimulus reliability is low, the subjects initially struggle to distinguish the boxes. As time goes on in the block, they learn.
 
 # %% [markdown]
 # ### Push Intervals
@@ -421,7 +427,12 @@ def _auxiliary_plot(
 
 
 plot_quantity_across_block(
-    df, y="push intervals", auxiliary_plot=_auxiliary_plot, min_obs=10, by_box=True
+    df,
+    y="push intervals",
+    auxiliary_plot=_auxiliary_plot,
+    min_obs=10,
+    by_box=True,
+    errorbar="se",
 )
 
 # %% [markdown]
@@ -430,7 +441,7 @@ plot_quantity_across_block(
 # ### Reward-per-push
 
 # %%
-plot_reward_per_push_across_block(df, min_obs=10, by_box=True)
+rr = plot_reward_per_push_across_block(df, min_obs=10, by_box=True, errorbar="se")
 
 # %% [markdown]
 # The reward-per-push start off low but increase over time in the block. As reliability increases, they start off higher.

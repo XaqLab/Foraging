@@ -19,7 +19,10 @@ from foraging.plotting import (
     multiplot,
     titler,
 )
-from foraging.plotting._base import plot_block_average_or_traces, subject_plotter
+from foraging.plotting._base import (
+    across_conditions_plotter,
+    plot_block_average_or_traces,
+)
 from foraging.utils import INDEX, MIN_INDEX
 from foraging.utils._base import kwargs_handler
 from foraging.utils.beliefs import (
@@ -568,7 +571,7 @@ def plot_schedule_beliefs_mean_and_std_across_block(
         fig.tight_layout()
         return ax
 
-    subject_plotter(df.index.unique("subject"), _plot, **kwargs)
+    across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
 def plot_accuracy_across_block(
@@ -668,7 +671,7 @@ def plot_accuracy_across_block(
         fig.tight_layout()
         return ax
 
-    subject_plotter(df.index.unique("subject"), _plot, **kwargs)
+    across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
 def plot_schedule_beliefs_entropy_across_blocks(
@@ -764,4 +767,4 @@ def plot_schedule_beliefs_entropy_across_blocks(
         fig.tight_layout()
         return ax
 
-    subject_plotter(df.index.unique("subject"), _plot, **kwargs)
+    across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)

@@ -27,12 +27,12 @@ from foraging.config.constants import (
     WINDOW_SIZE,
 )
 from foraging.plotting import (
+    across_conditions_plotter,
     bp,
     enhanced_violinplot,
     fig_init,
     legend_handler,
     multiplot,
-    subject_plotter,
     titler,
     unitler,
 )
@@ -233,7 +233,7 @@ def plot_push_percentiles(df: pd.DataFrame, percentiles: dict = None, **kwargs):
             )
             ax.legend(loc="upper right")
 
-    subject_plotter(df.index.unique("subject"), _plot, **kwargs)
+    across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
 def plot_long_push_blocks(
@@ -276,7 +276,7 @@ def plot_long_push_blocks(
         fig.suptitle(subj)
         fig.tight_layout()
 
-    subject_plotter(df.index.unique("subject"), _plot, **kwargs)
+    across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
 def plot_pushes(
@@ -635,7 +635,7 @@ def plot_previous_push_interval_vs_push_interval(
         fig.tight_layout()
         return ax
 
-    subject_plotter(df.index.unique("subject"), _plot, **kwargs)
+    across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
 @legend_handler
@@ -890,7 +890,7 @@ def plot_vertical_position_vs_push_percentiles(
         return axes[i]
 
     # Plot each subject's vertical position distribution
-    subject_plotter(df.index.unique("subject"), _plot, **kwargs)
+    across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
 # TODO: visualize xy-position in block in 2d and super-impose block activity
@@ -967,7 +967,7 @@ def plot_xy_velocity_long_vs_medium_pushes(
         fig.tight_layout()
 
     # Plot each subject's vertical position distribution
-    subject_plotter(df.index.unique("subject"), _plot)
+    across_conditions_plotter(df.index.unique("subject"), _plot)
 
 
 @legend_handler(bbox=(1.1, 1))
@@ -1221,7 +1221,7 @@ def plot_push_intervals_by_sessions(
         fig.suptitle(f"Push intervals for {subj}")
         fig.tight_layout()
 
-    subject_plotter(monkey_subjects, _plot, **kwargs)
+    across_conditions_plotter(monkey_subjects, _plot, **kwargs)
 
 
 @multiplot
@@ -1285,7 +1285,7 @@ def plot_push_intervals(
         fig.suptitle(f"Push intervals for {subj}")
         fig.tight_layout()
 
-    subject_plotter(df.index.unique("subject"), _plot, **kwargs)
+    across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
 def plot_stay_switch_pushes(
@@ -1399,7 +1399,7 @@ def plot_stay_switch_pushes(
         fig.text(0.0, 0.5, "FROM", va="center", rotation="vertical")
         fig.tight_layout()
 
-    subject_plotter(df.index.unique("subject"), _plot, **kwargs)
+    across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
 @multiplot
@@ -1534,7 +1534,7 @@ def plot_runlengths(
         fig.tight_layout()
         return ax
 
-    subject_plotter(df.index.unique("subject"), _plot, **kwargs)
+    across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
 @multiplot
@@ -1628,7 +1628,7 @@ def plot_push_intervals_vs_reward_intervals(
         fig.tight_layout()
         return axes
 
-    subject_plotter(df.index.unique("subject"), _plot, **kwargs)
+    across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
 def plot_next_push_surprise(
@@ -1700,7 +1700,7 @@ def plot_next_push_surprise(
         fig.tight_layout()
         return axes
 
-    subject_plotter(df.index.unique("subject"), _plot, **kwargs)
+    across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
 @multiplot
@@ -1757,11 +1757,11 @@ def plot_stay_probabilities(
         fig.tight_layout()
         return ax
 
-    subject_plotter(df.index.unique("subject"), _plot, **kwargs)
+    across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
 @multiplot
-def plot_reward_rates_across_block(
+def plot_quantity_across_block(
     df: pd.DataFrame,
     stim_reliabilities: dict = KAPPA_LEVELS,
     palette: dict = PALETTE,
@@ -1769,22 +1769,7 @@ def plot_reward_rates_across_block(
     show_traces: bool = False,
     **kwargs,
 ):
-    """
-    This function calculates and visualizes the reward rates across different blocks, smoothing the data over a specified window and optionally separating the data by box.
-
-    Args:
-        df: A DataFrame containing push data.
-        stim_reliabilities: A dictionary mapping subjects to their stimulus reliability levels.
-        palette: A dictionary mapping box schedules to colors.
-        by_box: If True, separate the reward rates by box.
-        show_traces: If True, show each block's trace instead of averaging over blocks.
-        **kwargs: Additional keyword arguments.
-            - bin_kwargs: Dictionary to specify binning properties for time (passed to `bin_data`).
-            - fig_kwargs: Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
-            - smooth_kwargs: Dictionary to specify window properties for smoothing the reward rate (passed to `moving_average`).
-    Returns:
-        None
-    """
+    kwargs = kwargs.copy()
 
     # Average data over time
     groupers = ["stimulus reliability", "block_id"]
@@ -1808,36 +1793,124 @@ def plot_reward_rates_across_block(
 
     # Plot reward rates
     fig_kwargs = kwargs_handler(kwargs, "fig_kwargs", {"sharey": True, "sharex": True})
-    base_params = {"x": "time", "y": "reward rate", "x_unit": "s", **kwargs}
+    kwargs.update({"x": "time", "y": "reward rate", "x_unit": "s"})
 
     if by_box:
-        base_params.update({"hue": "box", "palette": palette})
+        kwargs.update({"hue": "box", "palette": palette})
     else:
-        base_params.update({"color": "black"})
+        kwargs.update({"color": "black"})
+
+    def _by_kappa(i: int, kappa: str, df: pd.DataFrame, axes: ArrayLike, **kwargs):
+        kwargs.update(
+            {
+                "conds": {"stimulus reliability": kappa},
+                "ax": axes[i],
+            }
+        )
+        plot_block_average_or_traces(df, show_traces=show_traces, **kwargs)
+        return axes[i]
 
     @legend_handler
     def _plot(i, subj, **kwargs):
         rr_subj = filter_df(ma, {"subject": subj})
         kappas = stim_reliabilities[subj].keys()
         fig_kwargs["ncols"] = len(kappas)
-        fig, ax = fig_init(**fig_kwargs)
-        for i, kappa in enumerate(kappas):
-            base_params.update(
-                {
-                    "conds": {"stimulus reliability": kappa},
-                    "ax": ax[i],
-                    "legend": i == len(kappas) - 1,
-                    **kwargs,
-                }
-            )
-            plot_block_average_or_traces(
-                rr_subj, show_traces=show_traces, **base_params
-            )
+        fig, axes = fig_init(**fig_kwargs)
+        legend = {
+            kappa: {"legend": i == len(kappas) - 1} for i, kappa in enumerate(kappas)
+        }
+        across_conditions_plotter(
+            kappas, _by_kappa, df=rr_subj, axes=axes, cond_kwargs=legend, **kwargs
+        )
         fig.suptitle(f"Reward rate for {subj}")
         fig.tight_layout()
-        return ax
+        return axes
 
-    subject_plotter(df.index.unique("subject"), _plot, **kwargs)
+    across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
+
+
+@multiplot
+def plot_reward_rates_across_block(
+    df: pd.DataFrame,
+    stim_reliabilities: dict = KAPPA_LEVELS,
+    palette: dict = PALETTE,
+    by_box: bool = False,
+    show_traces: bool = False,
+    **kwargs,
+):
+    """
+    This function calculates and visualizes the reward rates across different blocks, smoothing the data over a specified window and optionally separating the data by box.
+
+    Args:
+        df: A DataFrame containing push data.
+        stim_reliabilities: A dictionary mapping subjects to their stimulus reliability levels.
+        palette: A dictionary mapping box schedules to colors.
+        by_box: If True, separate the reward rates by box.
+        show_traces: If True, show each block's trace instead of averaging over blocks.
+        **kwargs: Additional keyword arguments.
+            - fig_kwargs: Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
+            - smooth_kwargs: Dictionary to specify window properties for smoothing the reward rate (passed to `moving_average`).
+    Returns:
+        None
+    """
+    kwargs = kwargs.copy()
+
+    # Average data over time
+    groupers = ["stimulus reliability", "block_id"]
+    if by_box:
+        groupers.append("box")
+
+    smooth_kwargs = kwargs_handler(
+        kwargs,
+        "smooth_kwargs",
+        {"rate": True},
+    )
+    ma = moving_average(
+        df,
+        x_col="push times",
+        y_col="reward outcomes",
+        y_name="reward rate",
+        agg_func=lambda x: x["reward outcomes"].sum(),
+        groupers=groupers,
+        **smooth_kwargs,
+    )
+
+    # Plot reward rates
+    fig_kwargs = kwargs_handler(kwargs, "fig_kwargs", {"sharey": True, "sharex": True})
+    kwargs.update({"x": "time", "y": "reward rate", "x_unit": "s"})
+
+    if by_box:
+        kwargs.update({"hue": "box", "palette": palette})
+    else:
+        kwargs.update({"color": "black"})
+
+    def _by_kappa(i: int, kappa: str, df: pd.DataFrame, axes: ArrayLike, **kwargs):
+        kwargs.update(
+            {
+                "conds": {"stimulus reliability": kappa},
+                "ax": axes[i],
+            }
+        )
+        plot_block_average_or_traces(df, show_traces=show_traces, **kwargs)
+        return axes[i]
+
+    @legend_handler
+    def _plot(i, subj, **kwargs):
+        rr_subj = filter_df(ma, {"subject": subj})
+        kappas = stim_reliabilities[subj].keys()
+        fig_kwargs["ncols"] = len(kappas)
+        fig, axes = fig_init(**fig_kwargs)
+        legend = {
+            kappa: {"legend": i == len(kappas) - 1} for i, kappa in enumerate(kappas)
+        }
+        across_conditions_plotter(
+            kappas, _by_kappa, df=rr_subj, axes=axes, cond_kwargs=legend, **kwargs
+        )
+        fig.suptitle(f"Reward rate for {subj}")
+        fig.tight_layout()
+        return axes
+
+    across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
 @multiplot
@@ -1917,7 +1990,7 @@ def plot_push_rates_across_block(
         fig.tight_layout()
         return ax
 
-    subject_plotter(df.index.unique("subject"), _plot, **kwargs)
+    across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
 @multiplot
@@ -2010,7 +2083,7 @@ def plot_reward_per_push_across_block(
         fig.tight_layout()
         return ax
 
-    subject_plotter(df.index.unique("subject"), _plot, **kwargs)
+    across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
 @multiplot
@@ -2124,7 +2197,7 @@ def plot_matching_law(
         fig.tight_layout()
         return ax
 
-    subject_plotter(rr["subject"].unique(), _plot, **kwargs)
+    across_conditions_plotter(rr["subject"].unique(), _plot, **kwargs)
 
 
 @multiplot
@@ -2250,7 +2323,7 @@ def plot_matching_law_coefficients(
         fig.tight_layout()
         return ax
 
-    subject_plotter(merged_df["subject"].unique(), _plot, **kwargs)
+    across_conditions_plotter(merged_df["subject"].unique(), _plot, **kwargs)
 
 
 @multiplot
@@ -2394,7 +2467,7 @@ def plot_matching_law_coefficients_across_block(
         fig.tight_layout()
         return ax
 
-    subject_plotter(merged_df["subject"].unique(), _plot, **kwargs)
+    across_conditions_plotter(merged_df["subject"].unique(), _plot, **kwargs)
 
 
 def plot_frequencies_over_experiment(
@@ -2844,3 +2917,99 @@ def plot_continuous2d_df(
         axis.set_ticks([])
 
     return ax, p
+
+
+def inset(
+    plot_func,
+    inset_func,
+    add_inset: bool = True,
+    inset_bounds: tuple = (0.6, 0.6, 0.35, 0.35),
+    inset_xlim: tuple = (0, 60),
+    inset_title: str = "Zoom",
+    **inset_kwargs,
+):
+    """
+    Adds an inset to any plotting function.
+
+    Args:
+        plot_func: The main plotting function
+        inset_func: The function to call for the inset
+        add_inset: whether to add inset (default True)
+        inset_bounds: [left, bottom, width, height] for inset position
+        inset_xlim: x-axis limits for inset
+        inset_ylim: y-axis limits for inset
+        inset_title: title for inset
+
+    Returns:
+        A new function that creates the original plot with an inset
+    """
+
+    def plot_with_inset(*args, **kwargs):
+
+        # Call the main plotting function
+        result = plot_func(*args, **kwargs)
+
+        # Only add inset if requested
+        if not add_inset:
+            return result
+
+        # Handle different return types from plotting functions
+        axes_to_modify = []
+
+        if hasattr(result, "__iter__") and not isinstance(result, str):
+            if hasattr(result, "shape"):  # numpy array of axes
+                axes_to_modify = list(result.flat)
+            else:  # list or tuple of axes
+                axes_to_modify = list(result)
+        else:
+            # Single axis or other return type
+            if hasattr(result, "plot"):  # matplotlib axes
+                axes_to_modify = [result]
+            else:
+                # If we can't determine axes, try to get current axes
+                axes_to_modify = [plt.gca()]
+
+        # Add inset to each axis
+        for ax in axes_to_modify:
+            if hasattr(ax, "inset_axes"):
+                # Create inset axes
+                inset_ax = ax.inset_axes(inset_params["inset_bounds"])
+
+                # Call the inset plotting function with the inset axes
+                inset_result = inset_func(*args, ax=inset_ax, **kwargs)
+
+                # Set inset limits if provided
+                if "inset_xlim" in inset_params:
+                    inset_ax.set_xlim(inset_params["inset_xlim"])
+                if "inset_ylim" in inset_params:
+                    inset_ax.set_ylim(inset_params["inset_ylim"])
+                if "inset_title" in inset_params:
+                    inset_ax.set_title(inset_params["inset_title"])
+
+        return result
+
+    return plot_with_inset
+
+
+# Example usage:
+#
+# # Create a version of plot_reward_rates_across_block with first-minute inset
+# plot_reward_rates_with_inset = with_first_minute_inset(plot_reward_rates_across_block)
+#
+# # Or use the more flexible add_inset_to_plot function
+# plot_reward_rates_with_custom_inset = add_inset_to_plot(
+#     plot_reward_rates_across_block,
+#     inset_xlim=(0, 30),  # First 30 seconds
+#     inset_title='First 30s',
+#     inset_bounds=[0.7, 0.7, 0.25, 0.25]
+# )
+#
+# # Usage:
+# plot_reward_rates_with_inset(df, stim_reliabilities, palette)
+#
+# # To disable inset for a specific call:
+# plot_reward_rates_with_inset(df, stim_reliabilities, palette, add_inset=False)
+#
+# # You can also pass inset parameters directly:
+# plot_reward_rates_with_inset(df, stim_reliabilities, palette,
+#                             inset_xlim=(0, 45), inset_title='First 45s')

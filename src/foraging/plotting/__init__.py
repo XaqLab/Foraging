@@ -8,6 +8,7 @@ from foraging.config.constants import BOX_COLORS, BOX_COLORS_DARK, BOX_LABELS
 
 from ._base import (
     across_blocks,
+    across_conditions_plotter,
     bp,
     enhanced_violinplot,
     fig_init,
@@ -18,7 +19,6 @@ from ._base import (
     plot_block_average_or_traces,
     plot_quantity_across_block,
     plot_variable_subplots,
-    subject_plotter,
     titler,
     unitler,
 )

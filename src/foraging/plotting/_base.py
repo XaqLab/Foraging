@@ -14,6 +14,7 @@ import statsmodels.api as sm
 from kneed import KneeLocator
 from matplotlib import pyplot as plt
 from matplotlib.collections import PolyCollection
+from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 from matplotlib.ticker import FuncFormatter
 from numpy.typing import ArrayLike
@@ -373,6 +374,24 @@ def legend_handler(_func=None, loc="upper left", bbox=(1, 1)):
     return _inner
 
 
+def update_legend(ax: plt.Axes, elements: list):
+    # Get existing legend handles and labels
+    existing_legend = ax.get_legend()
+    if existing_legend is not None:
+        existing_handles = existing_legend.legend_handles
+        existing_labels = [text.get_text() for text in existing_legend.get_texts()]
+        # Combine existing and new handles/labels
+        all_handles = existing_handles + elements
+        all_labels = existing_labels + [e.get_label() for e in elements]
+
+        # Remove existing legend and add combined one
+        existing_legend.remove()
+        ax.legend(handles=all_handles, labels=all_labels)
+    else:
+        # No existing legend, just add the new one
+        ax.legend(handles=elements)
+
+
 def _figure_handler(**kwargs):
     """
     Decorator for creating and closing figures. Use this to avoid memory leaks when creating multiple plots that can be drawn on the same figure object
@@ -552,26 +571,26 @@ def across_blocks(
     _inner()
 
 
-def subject_plotter(subjects, plot_func, **kwargs):
+def across_conditions_plotter(conditions, plot_func, **kwargs):
     """
     Generates plots for each subject
 
     Args:
-        subjects: iterable of subjects
+        conditions: iterable of conditions
         plot_func: plotting function
         **kwargs: keyword arguments to `plot_func`
-            - if a dictionary containing subject names as keys, then the value of each key is a dictionary of keyword arguments to `plot_func`
+            - if a dictionary containing conditions as keys, then the value of each key is a dictionary of keyword arguments to `plot_func`
 
     Returns:
         list of any returned output from `plot_func`
     """
-    subj_kwargs = kwargs_handler(kwargs, "subj_kwargs")
+    cond_kwargs = kwargs_handler(kwargs, "cond_kwargs")
     returns = []
-    for i, subj in enumerate(subjects):
-        if subj in subj_kwargs:
-            ret = plot_func(i, subj, **(subj_kwargs[subj] | kwargs))
+    for i, cond in enumerate(conditions):
+        if cond in cond_kwargs:
+            ret = plot_func(i, cond, **(cond_kwargs[cond] | kwargs))
         else:
-            ret = plot_func(i, subj, **kwargs)
+            ret = plot_func(i, cond, **kwargs)
         returns.append(ret)
     return returns
 
@@ -775,7 +794,7 @@ def plot_quantity_across_block(
         fig.tight_layout()
         return ax
 
-    subject_plotter(df.index.unique("subject"), _plot, **kwargs)
+    across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
 def plot_block_average_or_traces(
@@ -783,6 +802,7 @@ def plot_block_average_or_traces(
     show_traces: bool,
     units: str = "block_id",
     alpha: float = 0.1,
+    linewidth: float = 5,
     **kwargs,
 ):
     kwargs = kwargs.copy()
@@ -810,7 +830,30 @@ def plot_block_average_or_traces(
         kwargs["ax"] = ax
 
         # Average
-        bp(sns.lineplot)(df, **kwargs, errorbar=None, lw=5)
+        bp(sns.lineplot)(df, **kwargs, errorbar=None, lw=linewidth)
+
+        # Update legend to include traces and average
+        if legend_flag:
+            update_legend(
+                ax,
+                [
+                    Line2D(
+                        [0],
+                        [0],
+                        color="black",
+                        alpha=alpha,
+                        linewidth=1,
+                        label="individual blocks",
+                    ),
+                    Line2D(
+                        [0],
+                        [0],
+                        color="black",
+                        linewidth=linewidth,
+                        label="average over blocks",
+                    ),
+                ],
+            )
 
     else:
         bp(sns.lineplot)(df, **kwargs)
