@@ -1787,7 +1787,7 @@ def plot_quantity_across_block(
         x_col="push times",
         y_col="reward outcomes",
         y_name="reward rate",
-        agg_func=lambda x: x["reward outcomes"].sum(),
+        bin_func=lambda x: x["reward outcomes"].sum(),
         groupers=groupers,
         **smooth_kwargs,
     )
@@ -1855,6 +1855,7 @@ def plot_push_rates_across_block(
     Returns:
         None
     """
+    kwargs = kwargs.copy()
 
     # Average data over time
     groupers = ["stimulus reliability", "block_id"]
@@ -1871,7 +1872,7 @@ def plot_push_rates_across_block(
         x_col="push times",
         y_col="reward outcomes",
         y_name="push rate",
-        agg_func=lambda x: x.size(),
+        bin_func=lambda x: x.size(),
         groupers=groupers,
         **smooth_kwargs,
     )
@@ -1951,7 +1952,7 @@ def plot_reward_rates_across_block(
         x_col="push times",
         y_col="reward outcomes",
         y_name="reward rate",
-        agg_func=lambda x: x["reward outcomes"].sum(),
+        bin_func=lambda x: x["reward outcomes"].sum(),
         groupers=groupers,
         **smooth_kwargs,
     )
@@ -2036,7 +2037,7 @@ def plot_reward_per_push_across_block(
         x_col="push times",
         y_col="reward outcomes",
         y_name="push rate",
-        agg_func=lambda x: x.size(),
+        bin_func=lambda x: x.size(),
         groupers=groupers,
         **smooth_kwargs,
     )
@@ -2046,7 +2047,7 @@ def plot_reward_per_push_across_block(
         x_col="push times",
         y_col="reward outcomes",
         y_name="reward rate",
-        agg_func=lambda x: x["reward outcomes"].sum(),
+        bin_func=lambda x: x["reward outcomes"].sum(),
         groupers=groupers,
         **smooth_kwargs,
     )

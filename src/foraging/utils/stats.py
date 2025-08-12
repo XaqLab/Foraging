@@ -6,6 +6,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 
 from foraging.config.constants import BIN_WIDTH, STEP, WINDOW_SIZE
+from foraging.utils import kwargs_handler
 from foraging.utils.data import bin_data, extend_df, get_blocks, process_block_safely
 
 
@@ -14,14 +15,23 @@ def moving_average(
     x_col,
     y_col,
     y_name,
-    groupers,
-    agg_func,
-    window_size=WINDOW_SIZE,
-    step=STEP,
-    min_periods=1,
+    bin_func,
     bin_width=BIN_WIDTH,
+    groupers=None,
     rate: bool = False,
+    **kwargs,
 ):
+
+    rolling_kwargs = kwargs_handler(
+        kwargs,
+        "rolling_kwargs",
+        dict(
+            window=WINDOW_SIZE,
+            step=STEP,
+            min_periods=1,
+        ),
+    )
+    agg_kwargs = kwargs_handler(kwargs, "agg_kwargs", {})
 
     # Create time bins
     df = df.copy()
@@ -29,24 +39,28 @@ def moving_average(
     df["time"] = bins
 
     # Assign data to full grid of time bins-- time bins should be fine enough to "binarize" the time series
-    # groupers = ["block_id", 'stimulus reliability', 'box']
     binned_data = get_blocks(df, groupers=groupers).apply(
-        lambda x: agg_func(x.groupby("time", observed=True))
+        lambda x: bin_func(x.groupby("time", observed=True))
         .reindex(bins.cat.categories, fill_value=np.nan)
         .reset_index(),
         include_groups=False,
     )
 
     # Smooth the time series by calculating the moving average
-    n_pts = int(window_size / bin_width)
-    step = int(step / bin_width)
+    n_pts = int(rolling_kwargs["window"] / bin_width)
+    step = int(rolling_kwargs["step"] / bin_width)
+    window_size = rolling_kwargs["window"]
+
+    # Convert temporal parameters to units of bins
+    rolling_kwargs["window"] = n_pts
+    rolling_kwargs["step"] = step
     if rate:
         rolled_data = (
             get_blocks(binned_data, groupers=groupers)
             .apply(
                 lambda x: x.set_index("index")
-                .rolling(window=n_pts, step=step, min_periods=min_periods)
-                .sum()
+                .rolling(**rolling_kwargs)
+                .sum(**agg_kwargs)
                 .iloc[int(n_pts / step) :]
             )
             .reset_index(level="index")
@@ -56,8 +70,8 @@ def moving_average(
             get_blocks(binned_data, groupers=groupers)
             .apply(
                 lambda x: x.set_index("index")
-                .rolling(window=n_pts, step=step, min_periods=min_periods)
-                .mean()
+                .rolling(**rolling_kwargs)
+                .mean(**agg_kwargs)
                 .iloc[int(n_pts / step) :]
             )
             .reset_index(level="index")
@@ -65,8 +79,9 @@ def moving_average(
     rolled_data = rolled_data.rename(columns={0: y_col, "index": "time"}).set_index(
         "time", append=True
     )
+    rolled_data[y_name] = rolled_data[y_col]
     if rate:
-        rolled_data[y_name] = rolled_data[y_col] / window_size
+        rolled_data[y_name] /= window_size
     return rolled_data
 
 

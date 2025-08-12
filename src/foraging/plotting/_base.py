@@ -1,4 +1,3 @@
-import gc
 import logging
 import math
 import os
@@ -755,7 +754,7 @@ def plot_quantity_across_block(
         x_col="push times",
         y_col=y,
         y_name=y,
-        agg_func=lambda x: x[y].mean(),
+        bin_func=lambda x: x[y].mean(),
         groupers=groupers,
         **smooth_kwargs,
     )
@@ -1168,7 +1167,7 @@ def toggle_plot(
                 for fig in flatten(figs):
                     display(fig)
                     plt.close(fig)
-        return axes
+            return axes
 
     # Set initial button label
     if not button_labels or len(button_labels) != 2:

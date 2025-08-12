@@ -501,7 +501,7 @@ def plot_schedule_beliefs_mean_and_std_across_block(
             x_col=x,
             y_col="mean",
             y_name="mean",
-            agg_func=lambda x: x["mean"].mean(),
+            bin_func=lambda x: x["mean"].mean(),
             groupers=groupers,
             **smooth_kwargs,
         )
@@ -510,7 +510,7 @@ def plot_schedule_beliefs_mean_and_std_across_block(
             x_col=x,
             y_col="standard deviation",
             y_name="standard deviation",
-            agg_func=lambda x: x["standard deviation"].mean(),
+            bin_func=lambda x: x["standard deviation"].mean(),
             groupers=groupers,
             **smooth_kwargs,
         )
@@ -644,7 +644,7 @@ def plot_accuracy_across_block(
             x_col=x,
             y_col="accuracy",
             y_name="accuracy",
-            agg_func=lambda x: x["accuracy"].mean(),
+            bin_func=lambda x: x["accuracy"].mean(),
             groupers=groupers,
             **smooth_kwargs,
         )
