@@ -1090,9 +1090,10 @@ def toggle_plot(
     kwargs2: dict = None,
     default_plot: int = 1,
     button_labels: tuple = ("Show Plot 1", "Show Plot 2"),
+    inline: bool = False,
 ):
     """
-    Create a toggle widget to switch between two plotting functions.
+    Create a toggle widget to switch between two plotting functions, or render as inline figure.
 
     Parameters
     ----------
@@ -1108,11 +1109,15 @@ def toggle_plot(
         Which plot to show by default (1 or 2)
     button_labels : tuple of str, default=("Show Plot 1", "Show Plot 2")
         Labels for the toggle button (label alternates between these two)
+    inline : bool, default=False
+        If True, renders the default plot as a normal inline figure without widget behavior.
+        Useful for converting notebooks to static HTML.
 
     Returns
     -------
-    widget
-        Jupyter widget with toggle functionality
+    widget or axes
+        Jupyter widget with toggle functionality if inline=False,
+        or axes object if inline=True
 
     Examples
     --------
@@ -1126,26 +1131,43 @@ def toggle_plot(
     ...     ax.hist(data['x'], bins=bins)
     ...     ax.set_title('Plot 2')
     ...     return ax
+    >>> # Interactive widget
     >>> toggle_plot(plot1, plot2,
     ...             kwargs1={'data': df, 'color': 'red'},
     ...             kwargs2={'data': df, 'bins': 30},
     ...             button_labels=("Show Plot 1", "Show Plot 2"))
+    >>> # Static inline figure
+    >>> toggle_plot(plot1, plot2,
+    ...             kwargs1={'data': df, 'color': 'red'},
+    ...             kwargs2={'data': df, 'bins': 30},
+    ...             inline=True)
     """
 
     kwargs1 = kwargs1 or {}
     kwargs2 = kwargs2 or {}
 
+    # If inline mode is requested, just return the default plot as a normal figure
+    if inline:
+        if default_plot == 1:
+            plot_func1(**kwargs1)
+        else:
+            plot_func2(**kwargs2)
+        return
+
+    # Otherwise, create the interactive widget
     output = widgets.Output()
     current_plot = 1 if default_plot == 1 else 2
 
     def show_plot(plot_func, kwargs):
         # Create the plot and display the figure only in the widget output
-        axes = plot_func(**kwargs)
-        figs = get_figure_from_axes(axes)
-        if figs is not None:
-            for fig in flatten(figs):
-                display(fig)
-                plt.close(fig)
+        with output:
+            output.clear_output(wait=True)
+            axes = plot_func(**kwargs)
+            figs = get_figure_from_axes(axes)
+            if figs is not None:
+                for fig in flatten(figs):
+                    display(fig)
+                    plt.close(fig)
         return axes
 
     # Set initial button label
@@ -1163,25 +1185,21 @@ def toggle_plot(
 
     def on_button_click(b):
         nonlocal current_plot
-        with output:
-            output.clear_output(wait=True)
-            if current_plot == 1:
-                show_plot(plot_func2, kwargs2)
-                current_plot = 2
-            else:
-                show_plot(plot_func1, kwargs1)
-                current_plot = 1
+        if current_plot == 1:
+            show_plot(plot_func2, kwargs2)
+            current_plot = 2
+        else:
+            show_plot(plot_func1, kwargs1)
+            current_plot = 1
         toggle_button.description = label_map[current_plot]
 
     toggle_button.on_click(on_button_click)
     container = widgets.VBox([toggle_button, output])
 
     # Initial plot
-    with output:
-        output.clear_output(wait=True)
-        if current_plot == 1:
-            show_plot(plot_func1, kwargs1)
-        else:
-            show_plot(plot_func2, kwargs2)
+    if current_plot == 1:
+        show_plot(plot_func1, kwargs1)
+    else:
+        show_plot(plot_func2, kwargs2)
 
     return container

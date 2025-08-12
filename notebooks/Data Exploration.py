@@ -76,6 +76,7 @@ RNG = np.random.default_rng(SEED)
 DATA_DIR = "../data"
 EXPERIMENT_DIR = os.path.join(DATA_DIR, "experiments")
 FIGURES_DIR = "../figures"
+TO_HTML = False  # Change this to True when rendering HTML
 
 # %%
 # TODO: TOC like in data cleaning
@@ -383,7 +384,6 @@ bp(sns.violinplot)(
 # ### Push Rate
 
 # %%
-
 toggle_plot(
     plot_push_rates_across_block,
     plot_push_rates_across_block,
@@ -395,6 +395,7 @@ toggle_plot(
         "min_obs": 10,
         "smooth_kwargs": {"window_size": 10, "step": 5},
     },
+    inline=TO_HTML,
 )
 
 # %% [markdown]
@@ -404,14 +405,39 @@ toggle_plot(
 # ### Reward Rate
 
 # %%
-plot_reward_rates_across_block(df, min_obs=10, show_traces=True)
-# TODO: explore changing bin sizes for initial period of blocks in moving average function
+toggle_plot(
+    plot_reward_rates_across_block,
+    plot_reward_rates_across_block,
+    button_labels=("Full block", "Zoomed in"),
+    kwargs1={"df": df, "min_obs": 10, "show_traces": True},
+    kwargs2={
+        "df": df[df["push times"] < 120],
+        "min_obs": 10,
+        "show_traces": True,
+        "smooth_kwargs": {"window_size": 10, "step": 5},
+    },
+    inline=TO_HTML,
+)
+# TODO: change toggle to slider over zoom, with pre-generated plots that are persisted somewhere so that slider can be used in html
 
 # %% [markdown]
 # Reward rate increases as subjects gain more experience in the block. As reliablity increases, the total reward rate combined across all boxes also increases. Next, we decompose the reward rate into different boxes.
 
 # %%
-plot_reward_rates_across_block(df, by_box=True, min_obs=10, show_traces=True)
+toggle_plot(
+    plot_reward_rates_across_block,
+    plot_reward_rates_across_block,
+    button_labels=("Full block", "Zoomed in"),
+    kwargs1={"df": df, "min_obs": 10, "show_traces": True, "by_box": True},
+    kwargs2={
+        "df": df[df["push times"] < 120],
+        "min_obs": 10,
+        "show_traces": True,
+        "by_box": True,
+        "smooth_kwargs": {"window_size": 10, "step": 5},
+    },
+    inline=TO_HTML,
+)
 
 # %% [markdown]
 # Clearly, the reward rates are ordered the way we would expect them, fast > medium > slow.
@@ -455,7 +481,7 @@ plot_quantity_across_block(
 # ### Reward-per-push
 
 # %%
-rr = plot_reward_per_push_across_block(df, min_obs=10, by_box=True, errorbar="se")
+plot_reward_per_push_across_block(df, min_obs=10, by_box=True)
 
 # %% [markdown]
 # The reward-per-push start off low but increase over time in the block. As reliability increases, they start off higher.
