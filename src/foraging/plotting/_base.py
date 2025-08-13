@@ -1090,6 +1090,7 @@ def toggle_plot(
     default_plot: int = 1,
     button_labels: tuple = ("Show Plot 1", "Show Plot 2"),
     inline: bool = False,
+    cache_plots: bool = False,
 ):
     """
     Create a toggle widget to switch between two plotting functions, or render as inline figure.
@@ -1111,6 +1112,10 @@ def toggle_plot(
     inline : bool, default=False
         If True, renders the default plot as a normal inline figure without widget behavior.
         Useful for converting notebooks to static HTML.
+    cache_plots : bool, default=False
+        #TODO: fix this
+        If True, cache the rendered figures and redisplay them instead of re-rendering.
+        This improves performance and ensures consistent ordering.
 
     Returns
     -------
@@ -1157,17 +1162,54 @@ def toggle_plot(
     output = widgets.Output()
     current_plot = 1 if default_plot == 1 else 2
 
-    def show_plot(plot_func, kwargs):
-        # Create the plot and display the figure only in the widget output
-        with output:
-            output.clear_output(wait=True)
+    # Cache for storing display outputs
+    cached_outputs = {1: None, 2: None}
+
+    def render_and_cache_plot(plot_func, kwargs, plot_num):
+        """Render a plot and cache the display output"""
+        # Create a temporary output to capture the display
+        temp_output = widgets.Output()
+        with temp_output:
             axes = plot_func(**kwargs)
             figs = get_figure_from_axes(axes)
             if figs is not None:
                 for fig in flatten(figs):
                     display(fig)
                     plt.close(fig)
-            return axes
+
+        # Store the captured output
+        cached_outputs[plot_num] = temp_output
+        return axes
+
+    def show_cached_plot(plot_num):
+        """Display cached output without re-rendering"""
+        with output:
+            output.clear_output(wait=True)
+            if cached_outputs[plot_num] is not None:
+                # Display the cached output
+                display(cached_outputs[plot_num])
+            else:
+                # Fallback: render if not cached
+                if plot_num == 1:
+                    render_and_cache_plot(plot_func1, kwargs1, 1)
+                else:
+                    render_and_cache_plot(plot_func2, kwargs2, 2)
+
+    def show_plot(plot_func, kwargs, plot_num):
+        """Show plot with optional caching"""
+        if cache_plots:
+            show_cached_plot(plot_num)
+        else:
+            # Original behavior: render fresh each time
+            with output:
+                output.clear_output(wait=True)
+                axes = plot_func(**kwargs)
+                figs = get_figure_from_axes(axes)
+                if figs is not None:
+                    for fig in flatten(figs):
+                        display(fig)
+                        plt.close(fig)
+                return axes
 
     # Set initial button label
     if not button_labels or len(button_labels) != 2:
@@ -1185,10 +1227,10 @@ def toggle_plot(
     def on_button_click(b):
         nonlocal current_plot
         if current_plot == 1:
-            show_plot(plot_func2, kwargs2)
+            show_plot(plot_func2, kwargs2, 2)
             current_plot = 2
         else:
-            show_plot(plot_func1, kwargs1)
+            show_plot(plot_func1, kwargs1, 1)
             current_plot = 1
         toggle_button.description = label_map[current_plot]
 
@@ -1197,8 +1239,8 @@ def toggle_plot(
 
     # Initial plot
     if current_plot == 1:
-        show_plot(plot_func1, kwargs1)
+        show_plot(plot_func1, kwargs1, 1)
     else:
-        show_plot(plot_func2, kwargs2)
+        show_plot(plot_func2, kwargs2, 2)
 
     return container

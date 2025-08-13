@@ -77,6 +77,10 @@ DATA_DIR = "../data"
 EXPERIMENT_DIR = os.path.join(DATA_DIR, "experiments")
 FIGURES_DIR = "../figures"
 TO_HTML = False  # Change this to True when rendering HTML
+ZOOM_KWARGS = {  # Convenience settings for zoomed in plots
+    "show_traces": True,
+    "smooth_kwargs": {"win_type": "gaussian", "window_size": 30, "step": 5},
+}
 
 # %%
 # TODO: TOC like in data cleaning
@@ -392,91 +396,11 @@ toggle_plot(
         "df": df,
         "by_box": True,
         "min_obs": 10,
-        "show_traces": True,
-        "smooth_kwargs": {
-            "rolling_kwargs": {"win_type": "gaussian", "center": True},
-            "agg_kwargs": {"std": 50},
-        },
+        "smooth_kwargs": {"win_type": "gaussian"},
     },
-    kwargs2={
-        "df": df[df["push times"] < 120],
-        "by_box": True,
-        "min_obs": 10,
-        "show_traces": True,
-        "smooth_kwargs": {
-            "window_size": 10,
-            "step": 5,
-            "rolling_kwargs": {"win_type": "gaussian", "center": True},
-            "agg_kwargs": {"std": 50},
-        },
-    },
+    kwargs2={"df": df[df["push times"] < 120], "by_box": True, **ZOOM_KWARGS},
     inline=TO_HTML,
 )
-
-# %%
-
-# Set random seed for reproducibility
-np.random.seed(42)
-
-# Generate spike times using Poisson process with fixed rate
-rate = 5  # spikes per unit time
-duration = 1000  # time units
-n_spikes = np.random.poisson(rate * duration)  # random number of spikes
-
-# Generate inter-spike intervals from exponential distribution
-isi = np.random.gamma(10, scale=1 / rate, size=n_spikes)
-spike_times = np.cumsum(isi)
-
-# Ensure we don't exceed the duration
-spike_times = spike_times[spike_times <= duration]
-
-# Generate binary outcomes (0 or 1) for each spike
-# Let's say outcome 1 occurs with 60% probability
-binary_outcomes = np.random.choice([0, 1], size=len(spike_times), p=[0.0, 1.0])
-
-# Generate dummy variables
-subjects = np.random.choice(["subject_A"], size=len(spike_times))
-sessions = np.random.choice([1], size=len(spike_times))
-blocks = np.random.choice([1], size=len(spike_times))
-
-# Create DataFrame
-spike_df = (
-    pd.DataFrame(
-        {
-            "spike_time": spike_times,
-            "outcome": binary_outcomes,
-            "subject": subjects,
-            "session": sessions,
-            "block": blocks,
-        }
-    )
-    .set_index(["subject", "session", "block"])
-    .sort_values(["spike_time"])
-    .sort_index()
-)
-
-spike_df.head(30)
-
-# %%
-ma = moving_average(
-    spike_df,
-    x_col="spike_time",
-    y_col="outcome",
-    y_name="rate",
-    bin_func=lambda x: x.sum(),
-    bin_width=0.05,
-    rate=True,
-    rolling_kwargs={"window": 20, "step": 1, "win_type": "gaussian", "center": True},
-    agg_kwargs={"std": 120},
-)
-ma.head(30)
-
-
-# %%
-plt.hist(isi)
-
-# %%
-sns.histplot(ma, y="rate")
 
 # %% [markdown]
 # When the stimulus reliability is low, the subjects initially struggle to distinguish the boxes. As time goes on in the block, they learn.
@@ -485,30 +409,14 @@ sns.histplot(ma, y="rate")
 # ### Reward Rate
 
 # %%
+# zoom_kwargs = ZOOM_KWARGS.copy()
+# zoom_kwargs["smooth_kwargs"].update({"agg_kwargs": {"std": 50}})
 toggle_plot(
     plot_reward_rates_across_block,
     plot_reward_rates_across_block,
     button_labels=("Full block", "Zoomed in"),
-    kwargs1={
-        "df": df,
-        "min_obs": 10,
-        "show_traces": True,
-        "rolling_kwargs": {"win_type": "gaussian", "center": True},
-        "agg_kwargs": {"std": 2},
-    },
-    kwargs2={
-        "df": df[df["push times"] < 120],
-        "min_obs": 10,
-        "show_traces": True,
-        "smooth_kwargs": {
-            "window_size": 10,
-            "step": 5,
-            "win_type": "gaussian",
-            "center": True,
-            "rolling_kwargs": {"win_type": "gaussian", "center": True},
-            "agg_kwargs": {"std": 2},
-        },
-    },
+    kwargs1={"df": df, "min_obs": 10, "smooth_kwargs": {"win_type": "gaussian"}},
+    kwargs2={"df": df[df["push times"] < 120], **ZOOM_KWARGS},
     inline=TO_HTML,
 )
 
@@ -520,14 +428,13 @@ toggle_plot(
     plot_reward_rates_across_block,
     plot_reward_rates_across_block,
     button_labels=("Full block", "Zoomed in"),
-    kwargs1={"df": df, "min_obs": 10, "show_traces": True, "by_box": True},
-    kwargs2={
-        "df": df[df["push times"] < 120],
-        "min_obs": 10,
-        "show_traces": True,
+    kwargs1={
+        "df": df,
         "by_box": True,
-        "smooth_kwargs": {"window_size": 10, "step": 5},
+        "min_obs": 10,
+        "smooth_kwargs": {"win_type": "gaussian"},
     },
+    kwargs2={"df": df[df["push times"] < 120], "by_box": True, **ZOOM_KWARGS},
     inline=TO_HTML,
 )
 

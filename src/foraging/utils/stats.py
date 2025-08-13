@@ -33,77 +33,63 @@ def compute_gaussian_correction_factor(window_size, std, bin_width=BIN_WIDTH):
 
 
 def moving_average(
-    df,
-    x_col,
-    y_col,
-    y_name,
-    bin_func,
-    bin_width=BIN_WIDTH,
-    groupers=None,
+    df: pd.DataFrame,
+    x_col: str,
+    y_col: str,
+    y_name: str,
+    x_name: str = None,
+    groupers: list = None,
+    bin_func: callable = None,
+    bin_width: float = BIN_WIDTH,
+    window_size: float = WINDOW_SIZE,
+    win_type: str = None,
+    step: float = STEP,
+    center: bool = True,
     rate: bool = False,
     **kwargs,
 ):
+    if bin_func is None:
+        bin_func = lambda x: x.mean()
+    if x_name is None:
+        x_name = "time"
 
-    rolling_kwargs = kwargs_handler(
-        kwargs,
-        "rolling_kwargs",
-        dict(
-            window=WINDOW_SIZE,
-            step=STEP,
-            min_periods=1,
-        ),
-    )
-    agg_kwargs = kwargs_handler(kwargs, "agg_kwargs", {})
+    agg_kwargs = kwargs_handler(kwargs, "agg_kwargs")
+    window = int(window_size / bin_width)
+    step = int(step / bin_width)
+    if win_type == "gaussian":
+        agg_kwargs["std"] = agg_kwargs.pop("std", window) / 2
 
     # Create time bins
     df = df.copy()
     bins = bin_data(df[x_col], bin_width=bin_width, remove_unused_categories=False)
-    df["time"] = bins
+    df[x_name] = bins
 
     # Assign data to full grid of time bins-- time bins should be fine enough to "binarize" the time series
     binned_data = get_blocks(df, groupers=groupers).apply(
-        lambda x: bin_func(x.groupby("time", observed=True))
-        .reindex(bins.cat.categories, fill_value=np.nan)
+        lambda x: bin_func(x.groupby(x_name, observed=True))
+        .reindex(bins.cat.categories, fill_value=0)
         .reset_index(),
         include_groups=False,
     )
 
     # Smooth the time series by calculating the moving average
-    n_pts = int(rolling_kwargs["window"] / bin_width)
-    step = int(rolling_kwargs["step"] / bin_width)
-    window_size = rolling_kwargs["window"]
-
-    # Convert temporal parameters to units of bins
-    rolling_kwargs["window"] = n_pts
-    rolling_kwargs["step"] = step
-    if rate:
-        rolled_data = (
-            get_blocks(binned_data, groupers=groupers)
-            .apply(
-                lambda x: x.set_index("index")
-                .rolling(**rolling_kwargs)
-                .sum(**agg_kwargs)
-                .iloc[int(n_pts / step) :]
+    rolled_data = (
+        get_blocks(binned_data, groupers=groupers)
+        .apply(
+            lambda x: x.set_index("index")
+            .rolling(
+                window=window, step=step, win_type=win_type, center=center, **kwargs
             )
-            .reset_index(level="index")
+            .mean(**agg_kwargs)
         )
-    else:
-        rolled_data = (
-            get_blocks(binned_data, groupers=groupers)
-            .apply(
-                lambda x: x.set_index("index")
-                .rolling(**rolling_kwargs)
-                .mean(**agg_kwargs)
-                .iloc[int(n_pts / step) :]
-            )
-            .reset_index(level="index")
-        )
-    rolled_data = rolled_data.rename(columns={0: y_col, "index": "time"}).set_index(
-        "time", append=True
+        .reset_index(level="index")
+    )
+    rolled_data = rolled_data.rename(columns={0: y_col, "index": x_name}).set_index(
+        x_name, append=True
     )
     rolled_data[y_name] = rolled_data[y_col]
     if rate:
-        rolled_data[y_name] /= window_size
+        rolled_data[y_name] /= bin_width
         # if 'win_type' in rolling_kwargs and rolling_kwargs['win_type'] == 'gaussian':
         #     rolled_data[y_name] *= compute_gaussian_correction_factor(window_size, agg_kwargs['std'], bin_width=bin_width)
     return rolled_data
