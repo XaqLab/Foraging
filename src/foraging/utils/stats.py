@@ -10,6 +10,28 @@ from foraging.utils import kwargs_handler
 from foraging.utils.data import bin_data, extend_df, get_blocks, process_block_safely
 
 
+def compute_gaussian_correction_factor(window_size, std, bin_width=BIN_WIDTH):
+    """
+    Compute the correction factor for Gaussian window weighting.
+
+    Args:
+        window_size: Window size in seconds
+        std: Standard deviation of Gaussian in bins
+        bin_width: Width of each bin in seconds
+
+    Returns:
+        Correction factor to multiply Gaussian-windowed results
+    """
+    n_bins = int(window_size / bin_width)
+    # Sum of weights
+    sum_weights = std * np.sqrt(2 * np.pi)
+
+    # Correction factor
+    correction_factor = n_bins / sum_weights
+
+    return correction_factor
+
+
 def moving_average(
     df,
     x_col,
@@ -82,6 +104,8 @@ def moving_average(
     rolled_data[y_name] = rolled_data[y_col]
     if rate:
         rolled_data[y_name] /= window_size
+        # if 'win_type' in rolling_kwargs and rolling_kwargs['win_type'] == 'gaussian':
+        #     rolled_data[y_name] *= compute_gaussian_correction_factor(window_size, agg_kwargs['std'], bin_width=bin_width)
     return rolled_data
 
 
