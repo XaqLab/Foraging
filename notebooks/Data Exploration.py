@@ -33,6 +33,7 @@ from foraging.config.constants import MULTIPLOT_FIGSIZE, PALETTE, PALETTE_DARK, 
 from foraging.plotting import (
     bp,
     enhanced_violinplot,
+    plot_block_average_or_traces,
     plot_quantity_across_block,
     toggle_plot,
 )
@@ -80,10 +81,6 @@ ZOOM_KWARGS = {  # Convenience settings for zoomed in plots
     "show_traces": True,
     "smooth_kwargs": {"win_type": "gaussian", "window_size": 30, "step": 5},
 }
-FULL_BLOCK_KWARGS = {
-    "min_obs": 10,
-    "smooth_kwargs": {"win_type": "gaussian"},
-}
 
 # %%
 # TODO: TOC like in data cleaning
@@ -99,7 +96,7 @@ FULL_BLOCK_KWARGS = {
 
 # %%
 # %%capture --no-display
-df = make_df(EXPERIMENT_DIR)
+df = make_df(os.path.join(DATA_DIR, "experiments"))
 df = exclusion_criteria(df, EXPERIMENT_DIR)
 display_df(df, ["box", "push times", "reward outcomes"])
 
@@ -271,9 +268,7 @@ plot_push_intervals_by_sessions(df)
 
 # %%
 df = filter_df(df, {"shape": 10})
-viktor_index = filter_df(df[df["push times"] <= 900], {"subject": "viktor"}).index
-human_index = filter_df(df[df["push times"] <= 400], {"subject": "humans"}).index
-df = df.loc[viktor_index.append(human_index)]
+df = df[df["push times"] <= 900]
 
 # %% [markdown]
 # Here are the distributions of push intervals at each box as a function of stimulus reliability.
@@ -400,7 +395,8 @@ toggle_plot(
     kwargs1={
         "df": df,
         "by_box": True,
-        **FULL_BLOCK_KWARGS,
+        "min_obs": 10,
+        "smooth_kwargs": {"win_type": "gaussian"},
     },
     kwargs2={"df": df[df["push times"] < 120], "by_box": True, **ZOOM_KWARGS},
     inline=TO_HTML,
@@ -413,11 +409,13 @@ toggle_plot(
 # ### Reward Rate
 
 # %%
+# zoom_kwargs = ZOOM_KWARGS.copy()
+# zoom_kwargs["smooth_kwargs"].update({"agg_kwargs": {"std": 50}})
 toggle_plot(
     plot_reward_rates_across_block,
     plot_reward_rates_across_block,
     button_labels=("Full block", "Zoomed in"),
-    kwargs1={"df": df, **FULL_BLOCK_KWARGS},
+    kwargs1={"df": df, "min_obs": 10, "smooth_kwargs": {"win_type": "gaussian"}},
     kwargs2={"df": df[df["push times"] < 120], **ZOOM_KWARGS},
     inline=TO_HTML,
 )
@@ -433,7 +431,8 @@ toggle_plot(
     kwargs1={
         "df": df,
         "by_box": True,
-        **FULL_BLOCK_KWARGS,
+        "min_obs": 10,
+        "smooth_kwargs": {"win_type": "gaussian"},
     },
     kwargs2={"df": df[df["push times"] < 120], "by_box": True, **ZOOM_KWARGS},
     inline=TO_HTML,
@@ -469,15 +468,10 @@ def _auxiliary_plot(
 plot_quantity_across_block(
     df,
     y="push intervals",
-    x="push times",
     auxiliary_plot=_auxiliary_plot,
     min_obs=10,
     by_box=True,
-    smooth_kwargs=dict(
-        fill_value=np.nan,
-        min_periods=1,
-    ),
-    fig_title="Push intervals",
+    errorbar="se",
 )
 
 # %% [markdown]

@@ -64,7 +64,13 @@ In the box foraging task, subjects aim to maximize their reward over time by int
 Some useful tricks and tips for this project are detailed here.
 
 ## Generating HTML from notebook
-After running the `percent .py` notebooks, you can use `jupytext` to convert them to whatever you like, including HTML. Personally, I like keeping a local `.ipynb` notebook that is paired with a `percent.py` notebook and converting the `.ipynb` to HTML without code by running
+After running the `percent .py` notebooks, you can use `jupytext` to convert them to whatever you like, including HTML. Personally, I like keeping a local `.ipynb` notebook that is paired with a `percent.py` notebook. To generate a `.ipynb` notebook from a `percent py` notebook, run:
+
+```
+jupytext --sync <notebook>.py
+```
+
+and convert the `.ipynb` to HTML without code by running:
 
 ```
 jupyter nbconvert --to html <notebook>.ipynb --TemplateExporter.exclude_input=True

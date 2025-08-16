@@ -1649,18 +1649,19 @@ def plot_next_push_surprise(
         palette_dark: Dictionary mapping box schedules to darkened colors
         **kwargs: Additional keyword arguments
     """
-
     df = df.copy()
 
+    # First, identify consecutive pushes for each box
+    push_deltas = get_blocks(df, groupers=["box"])
+    df.loc[:, "consecutive wait"] = push_deltas["push # by box"].diff().fillna(1)
+    df = df.loc[df["consecutive wait"] == 1].copy()
+
     # Calculate the change in push interval
-    push_deltas = df.groupby(["subject", "session", "block", "box"])
-    df["consecutive wait"] = push_deltas["push # by box"].diff().fillna(1)
-    df = df.loc[df["consecutive wait"] == 1]
-    df["change in next push interval"] = -push_deltas["push intervals"].diff(-1)
-    df["rewarded"] = df["reward outcomes"].map({True: "yes", False: "no"})
+    df.loc[:, "change in next push interval"] = -push_deltas["push intervals"].diff(-1)
+    df.loc[:, "rewarded"] = df["reward outcomes"].map({True: "yes", False: "no"})
 
     # Track whether the subject stayed or switched after each push
-    df["stay/switch"] = df["stay/switch"].shift(-1)
+    df.loc[:, "stay/switch"] = df["stay/switch"].shift(-1)
 
     fig_kwargs = kwargs_handler(
         kwargs,
@@ -1944,7 +1945,7 @@ def plot_reward_per_push_across_block(
         fig.tight_layout()
         return axes
 
-    across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
+    return across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
 @multiplot
