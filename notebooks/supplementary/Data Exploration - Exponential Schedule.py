@@ -19,8 +19,6 @@
 # This notebook provides a descriptive analysis of behavior under the abandoned exponential schedule and walks through observations that contextualize later analysis. As in the `Data Cleaning` notebook, the emphasis will be on the pushes instead of the continuous variables.
 
 # %%
-# %load_ext autoreload
-# %autoreload 2
 # %matplotlib inline
 
 import logging
@@ -31,8 +29,19 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
-from foraging.config.constants import KAPPA_LEVELS, PALETTE, PALETTE_DARK, SEED
-from foraging.plotting import bp, enhanced_violinplot
+from foraging.config.constants import (
+    KAPPA_LEVELS,
+    MULTIPLOT_FIGSIZE,
+    PALETTE,
+    PALETTE_DARK,
+    SEED,
+)
+from foraging.plotting import (
+    bp,
+    enhanced_violinplot,
+    plot_quantity_across_block,
+    toggle_plot,
+)
 from foraging.plotting.behavior import (
     plot_experiment_overview,
     plot_matching_law,
@@ -42,20 +51,26 @@ from foraging.plotting.behavior import (
     plot_push_intervals_vs_reward_intervals,
     plot_push_rates_across_block,
     plot_pushes,
-    plot_quantity_across_block,
     plot_reward_per_push_across_block,
     plot_reward_rates_across_block,
     plot_runlengths,
     plot_stay_probabilities,
     plot_stay_switch_pushes,
 )
+from foraging.utils.autoreload import setup_auto_reload
+
+# Create a new x-axis with regular intervals
 from foraging.utils.data import (
+    bin_data,
     display_df,
     exclusion_criteria,
     filter_df,
     get_blocks,
     make_df,
 )
+from foraging.utils.stats import moving_average
+
+setup_auto_reload()
 
 # Filter out annoying matplotlib logs
 mlogger = logging.getLogger("matplotlib")
@@ -66,6 +81,15 @@ RNG = np.random.default_rng(SEED)
 DATA_DIR = "../../data"
 EXPERIMENT_DIR = os.path.join(DATA_DIR, "experiments")
 FIGURES_DIR = "../../figures"
+TO_HTML = False  # Change this to True when rendering HTML
+ZOOM_KWARGS = {  # Convenience settings for zoomed in plots
+    "show_traces": True,
+    "smooth_kwargs": {"win_type": "gaussian", "window_size": 30, "step": 5},
+}
+FULL_BLOCK_KWARGS = {
+    "min_obs": 10,
+    "smooth_kwargs": {"win_type": "gaussian"},
+}
 
 # Modify the default kappa levels once
 KAPPA_LEVELS["viktor"] = {"low": [0.01], "high": [0.1, 0.2]}
@@ -80,15 +104,21 @@ KAPPA_LEVELS["viktor"] = {"low": [0.01], "high": [0.1, 0.2]}
 # %%
 # %%capture --no-display
 df = make_df(EXPERIMENT_DIR)
-df = df.xs(1, level="shape", drop_level=False)
+# df = df.xs(1, level="shape", drop_level=False)
 df = exclusion_criteria(df, EXPERIMENT_DIR)
 
 # Remove some unnecessary blocks
-df = df.drop(
-    get_blocks(df[(df["schedule"] == 30) | (df["schedule"] == 7)]).size().index
-)
-df = df.drop(df[(df["schedule"] == 15) & (df["box"] == "medium")].index)
+# df = df.drop(
+#     get_blocks(df[(df["schedule"] == 30) | (df["schedule"] == 7)]).size().index
+# )
+# df = df.drop(df[(df["schedule"] == 15) & (df["box"] == "medium")].index)
+
+# Finally, chop off time from blocks that don't have much data
+# df = df[df["push times"] < 1200]
 display_df(df, ["box", "push times", "reward outcomes"])
+# df = make_df(EXPERIMENT_DIR)
+# df = exclusion_criteria(df, EXPERIMENT_DIR)
+# display_df(df, ["box", "push times", "reward outcomes"])
 
 # %% [markdown]
 # ## Data Overview
@@ -138,7 +168,7 @@ plot_pushes(df, conds, fig_kwargs=dict(figsize=(30, 2.2)), legend=False)
 # Here is an overview of the statistics of the pushes for each subject.
 
 # %%
-fig, ax = plt.subplots()
+fig, ax = plt.subplots(figsize=MULTIPLOT_FIGSIZE)
 bp(sns.swarmplot)(
     df.groupby("subject").sample(10000, random_state=SEED, replace=True),
     x="subject",
@@ -157,7 +187,7 @@ bp(enhanced_violinplot)(
     y="push intervals",
     hue="box",
     palette=PALETTE,
-    title_prefix="Distribution of push intervals at each box",
+    title="Distribution of push intervals at each box",
     y_unit="s",
     cut=0,
     inner=None,
@@ -170,7 +200,7 @@ bp(enhanced_violinplot)(
 # Here are the distributions of wait times at each box as a function of stimulus reliability.
 
 # %%
-plot_push_intervals(df)
+plot_push_intervals(df, cond_kwargs={"viktor": {"swarm_kwargs": {"size": 0.25}}})
 
 # %% [markdown]
 # There is a striking bimodality in the wait time distributions that is preserved across subjects-- there is a fast mode and a slow mode.
@@ -201,7 +231,7 @@ plot_runlengths(df, stat="probability")
 
 # %%
 plot_push_intervals_vs_reward_intervals(
-    filter_df(df[(df["push intervals"] < 60) & (df["reward intervals"] < 60)]),
+    df[(df["push intervals"] < 60) & (df["reward intervals"] < 60)],
     annotate_reg=True,
 )
 
@@ -280,8 +310,22 @@ plot_reward_rates_across_block(
 # ### Push Rate
 
 # %%
-plot_push_rates_across_block(df, by_box=True, min_obs=20, show_traces=True)
+toggle_plot(
+    plot_push_rates_across_block,
+    plot_push_rates_across_block,
+    button_labels=("Full block", "Zoomed in"),
+    kwargs1={
+        "df": df,
+        "by_box": True,
+        **FULL_BLOCK_KWARGS,
+    },
+    kwargs2={"df": df[df["push times"] < 120], "by_box": True, **ZOOM_KWARGS},
+    inline=TO_HTML,
+)
 
+
+# %%
+plot_push_rates_across_block(df, by_box=True, **FULL_BLOCK_KWARGS)
 
 # %% [markdown]
 # Dylan's push rates don't differentiate in the low reliability, but appears to do so somewhat in the high reliability. Marco also weakly differentiates the fast box from the slower boxes. Viktor differentiates the three boxes most strongly.

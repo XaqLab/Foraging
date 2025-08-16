@@ -29,7 +29,13 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
-from foraging.config.constants import MULTIPLOT_FIGSIZE, PALETTE, PALETTE_DARK, SEED
+from foraging.config.constants import (
+    KAPPA_LEVELS,
+    MULTIPLOT_FIGSIZE,
+    PALETTE,
+    PALETTE_DARK,
+    SEED,
+)
 from foraging.plotting import (
     bp,
     enhanced_violinplot,
@@ -72,9 +78,9 @@ mlogger.setLevel(logging.WARNING)
 
 # Constants
 RNG = np.random.default_rng(SEED)
-DATA_DIR = "../data"
+DATA_DIR = "../../data"
 EXPERIMENT_DIR = os.path.join(DATA_DIR, "experiments")
-FIGURES_DIR = "../figures"
+FIGURES_DIR = "../../figures"
 TO_HTML = False  # Change this to True when rendering HTML
 ZOOM_KWARGS = {  # Convenience settings for zoomed in plots
     "show_traces": True,
@@ -84,6 +90,9 @@ FULL_BLOCK_KWARGS = {
     "min_obs": 10,
     "smooth_kwargs": {"win_type": "gaussian"},
 }
+
+# Modify the default kappa levels once
+KAPPA_LEVELS["viktor"] = {"low": [0.01], "high": [0.1, 0.2]}
 
 # %%
 # TODO: TOC like in data cleaning
@@ -100,7 +109,17 @@ FULL_BLOCK_KWARGS = {
 # %%
 # %%capture --no-display
 df = make_df(EXPERIMENT_DIR)
+df = df.xs(1, level="shape", drop_level=False)
 df = exclusion_criteria(df, EXPERIMENT_DIR)
+
+# Remove some unnecessary blocks
+df = df.drop(
+    get_blocks(df[(df["schedule"] == 30) | (df["schedule"] == 7)]).size().index
+)
+df = df.drop(df[(df["schedule"] == 15) & (df["box"] == "medium")].index)
+
+# Finally, chop off time from blocks that don't have much data
+df = df[df["push times"] < 1200]
 display_df(df, ["box", "push times", "reward outcomes"])
 
 # %% [markdown]

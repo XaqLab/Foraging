@@ -4,7 +4,7 @@ import os
 from copy import deepcopy
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Iterable
 
 import ipywidgets as widgets
 import numpy as np
@@ -137,7 +137,7 @@ def palette_handler(palette: dict | list, categories: list):
     )
 
 
-def bp(func: Callable):
+def bp(func: callable):
     """
     Wraps seaborn-style function with custom figure settings
 
@@ -451,7 +451,7 @@ def _figure_saver(fig: plt.Figure, ax: plt.Axes, figure_path: str):
 
 
 def per_block(
-    func: Callable,
+    func: callable,
     df: pd.DataFrame,
     figure_dir: str,
     filename_prefix: str,
@@ -524,7 +524,7 @@ def per_block(
 
 # todo: generalize iter_level to multiple levels listed in hierarchical order head first
 def across_blocks(
-    func: Callable,
+    func: callable,
     df: pd.DataFrame,
     figure_dir: str,
     filename_prefix: str,
@@ -581,20 +581,22 @@ def across_blocks(
     _inner()
 
 
-def across_conditions_plotter(conditions, plot_func, **kwargs):
+def across_conditions_plotter(conditions, plot_func, cond_kwargs=None, **kwargs):
     """
     Generates plots for each subject
 
     Args:
         conditions: iterable of conditions
         plot_func: plotting function
+        cond_kwargs: dictionary of keyword arguments to `plot_func` for each condition, where each key is a condition. Each condition-specific kwargs is merged with `kwargs`.
         **kwargs: keyword arguments to `plot_func`
             - if a dictionary containing conditions as keys, then the value of each key is a dictionary of keyword arguments to `plot_func`
 
     Returns:
         list of any returned output from `plot_func`
     """
-    cond_kwargs = kwargs_handler(kwargs, "cond_kwargs")
+    if cond_kwargs is None:
+        cond_kwargs = {}
     returns = []
     for i, cond in enumerate(conditions):
         if cond in cond_kwargs:
@@ -714,97 +716,87 @@ def enhanced_violinplot(
 @multiplot
 def plot_quantity_across_block(
     df: pd.DataFrame,
-    y: str = None,
+    x: str,
+    y: str,
+    y_name: str = None,
+    x_name: str = None,
+    fig_title: str = None,
     stim_reliabilities: dict = KAPPA_LEVELS,
     palette: dict = PALETTE,
     by_box: bool = False,
     show_traces: bool = False,
-    auxiliary_plot: Callable = None,
+    auxiliary_plot: callable = None,
     **kwargs,
-):
-    """
-    This function calculates and visualizes a specified quantity across different blocks, smoothing the data over a specified window and optionally including auxiliary plots for additional insights.
+) -> list[plt.Axes]:
+    kwargs = kwargs.copy()
+    if y_name is None:
+        y_name = "mean " + y
 
-    Args:
-        df: A DataFrame containing push data.
-        y: The name of the quantity to plot.
-        stim_reliabilities: A list of stimulus reliability levels for each subject.
-        palette: A dictionary mapping box schedules to colors.
-        by_box: If True, separate the quantity by box.
-        show_traces: If True, show the traces of the quantity.
-        smooth: If True, smooth the quantity as specified by `window_kwargs`.
-        auxiliary_plot: A callable for generating auxiliary plots.
-        **kwargs: Additional keyword arguments.
-          - bin_kwargs: Dictionary to specify binning properties for time (passed to `bin_data`).
-          - fig_kwargs: Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
-          - window_kwargs: Dictionary to specify window properties for smoothing the quantity (passed to `pd.rolling`).
-
-    Returns:
-        None
-    """
+    if x_name is None:
+        x_name = "time"
 
     # Average data over time
     groupers = ["stimulus reliability", "block_id"]
     if by_box:
         groupers.append("box")
 
-    smooth_kwargs = kwargs_handler(kwargs, "smooth_kwargs")
-    ma = moving_average(
-        df,
-        x_col="push times",
-        y_col=y,
-        y_name=y,
-        bin_func=lambda x: x[y].mean(),
-        groupers=groupers,
-        **smooth_kwargs,
-    )
-
-    # Plot quantity of interest over time in the block
+    # Plot reward rates
     fig_kwargs = kwargs_handler(kwargs, "fig_kwargs", {"sharey": True, "sharex": True})
-    base_params = {"x": "time", "y": y, "x_unit": "s", **kwargs}
+    kwargs.update({"x": x_name, "y": y_name, "x_unit": "s"})
 
     if by_box:
-        base_params.update({"hue": "box", "palette": palette})
+        kwargs.update({"hue": "box", "palette": palette})
     else:
-        base_params.update({"color": "black"})
+        kwargs.update({"color": "black"})
+
+    def _by_kappa(i: int, kappa: str, df2: pd.DataFrame, axes: ArrayLike, **kwargs):
+        kwargs.update(
+            {
+                "conds": {"stimulus reliability": kappa},
+                "ax": axes[i],
+            }
+        )
+        plot_block_average_or_traces(df2, show_traces=show_traces, **kwargs)
+        if auxiliary_plot:
+            auxiliary_plot(
+                df,
+                **kwargs,
+            )
+        return axes[i]
 
     @legend_handler
     def _plot(i, subj, **kwargs):
-        df_subj = filter_df(ma, {"subject": subj})
+        kwargs = kwargs.copy()
+        smooth_kwargs = kwargs_handler(
+            kwargs,
+            "smooth_kwargs",
+        )
+        df_subj = filter_df(df, {"subject": subj})
+        ma = moving_average(
+            df_subj,
+            x=x,
+            y=y,
+            y_name=y_name,
+            x_name=x_name,
+            groupers=groupers,
+            **smooth_kwargs,
+        )
+
         kappas = stim_reliabilities[subj].keys()
         fig_kwargs["ncols"] = len(kappas)
-        fig, ax = fig_init(**fig_kwargs)
-        for i, kappa in enumerate(kappas):
-            base_params.update(
-                {
-                    "conds": {"stimulus reliability": kappa},
-                    "ax": ax[i],
-                    "legend": i == len(kappas) - 1,
-                    **kwargs,
-                }
-            )
-
-            plot_block_average_or_traces(
-                df_subj,
-                show_traces=show_traces,
-                **base_params,
-            )
-
-            if auxiliary_plot:
-                base_params.update(
-                    {
-                        "conds": {"stimulus reliability": kappa, "subject": subj},
-                    }
-                )
-                auxiliary_plot(
-                    df,
-                    **base_params,
-                )
-        fig.suptitle(f"{y} for {subj}")
+        fig, axes = fig_init(**fig_kwargs)
+        legend = {
+            kappa: {"legend": i == len(kappas) - 1} for i, kappa in enumerate(kappas)
+        }
+        across_conditions_plotter(
+            kappas, _by_kappa, df2=ma, axes=axes, cond_kwargs=legend, **kwargs
+        )
+        if fig_title:
+            fig.suptitle(f"{fig_title} for {subj}")
         fig.tight_layout()
-        return ax
+        return axes
 
-    across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
+    return across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
 def plot_block_average_or_traces(
@@ -935,7 +927,7 @@ def regplot(
 
 def plot_variable_subplots(
     df: pd.DataFrame,
-    func: Callable,
+    func: callable,
     row_cond: str,
     col_cond: str,
     axes: Iterable[plt.Axes] = None,
@@ -1083,8 +1075,8 @@ def stacked_barplot(
 
 
 def toggle_plot(
-    plot_func1: Callable,
-    plot_func2: Callable,
+    plot_func1: callable,
+    plot_func2: callable,
     kwargs1: dict = None,
     kwargs2: dict = None,
     default_plot: int = 1,

@@ -498,8 +498,8 @@ def plot_schedule_beliefs_mean_and_std_across_block(
         smooth_kwargs = kwargs_handler(kwargs, "smooth_kwargs")
         ma_mean = moving_average(
             df_beliefs,
-            x_col=x,
-            y_col="mean",
+            x=x,
+            y="mean",
             y_name="mean",
             bin_func=lambda x: x["mean"].mean(),
             groupers=groupers,
@@ -507,8 +507,8 @@ def plot_schedule_beliefs_mean_and_std_across_block(
         )
         ma_std = moving_average(
             df_beliefs,
-            x_col=x,
-            y_col="standard deviation",
+            x=x,
+            y="standard deviation",
             y_name="standard deviation",
             bin_func=lambda x: x["standard deviation"].mean(),
             groupers=groupers,
@@ -641,8 +641,8 @@ def plot_accuracy_across_block(
         smooth_kwargs = kwargs_handler(kwargs, "smooth_kwargs")
         df_beliefs = moving_average(
             df_beliefs,
-            x_col=x,
-            y_col="accuracy",
+            x=x,
+            y="accuracy",
             y_name="accuracy",
             bin_func=lambda x: x["accuracy"].mean(),
             groupers=groupers,

@@ -34,9 +34,9 @@ def compute_gaussian_correction_factor(window_size, std, bin_width=BIN_WIDTH):
 
 def moving_average(
     df: pd.DataFrame,
-    x_col: str,
-    y_col: str,
-    y_name: str,
+    x: str,
+    y: str,
+    y_name: str = None,
     x_name: str = None,
     groupers: list = None,
     bin_func: callable = None,
@@ -46,10 +46,15 @@ def moving_average(
     step: float = STEP,
     center: bool = True,
     rate: bool = False,
+    fill_value: float = 0,
     **kwargs,
 ):
     if bin_func is None:
-        bin_func = lambda x: x.mean()
+        bin_func = lambda x: x[y].mean()
+
+    if y_name is None:
+        y_name = "mean " + y
+
     if x_name is None:
         x_name = "time"
 
@@ -61,13 +66,13 @@ def moving_average(
 
     # Create time bins
     df = df.copy()
-    bins = bin_data(df[x_col], bin_width=bin_width, remove_unused_categories=False)
+    bins = bin_data(df[x], bin_width=bin_width, remove_unused_categories=False)
     df[x_name] = bins
 
     # Assign data to full grid of time bins-- time bins should be fine enough to "binarize" the time series
     binned_data = get_blocks(df, groupers=groupers).apply(
         lambda x: bin_func(x.groupby(x_name, observed=True))
-        .reindex(bins.cat.categories, fill_value=0)
+        .reindex(bins.cat.categories, fill_value=fill_value)
         .reset_index(),
         include_groups=False,
     )
@@ -84,10 +89,10 @@ def moving_average(
         )
         .reset_index(level="index")
     )
-    rolled_data = rolled_data.rename(columns={0: y_col, "index": x_name}).set_index(
+    rolled_data = rolled_data.rename(columns={0: y, "index": x_name}).set_index(
         x_name, append=True
     )
-    rolled_data[y_name] = rolled_data[y_col]
+    rolled_data[y_name] = rolled_data[y]
     if rate:
         rolled_data[y_name] /= bin_width
         # if 'win_type' in rolling_kwargs and rolling_kwargs['win_type'] == 'gaussian':

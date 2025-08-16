@@ -40,6 +40,7 @@ from foraging.plotting._base import (
     get_bar_heights,
     palette_handler,
     plot_block_average_or_traces,
+    plot_quantity_across_block,
     regplot,
 )
 from foraging.utils import INDEX, MIN_INDEX, kwargs_handler
@@ -1762,85 +1763,6 @@ def plot_stay_probabilities(
 
 
 @multiplot
-def plot_quantity_across_block(
-    df: pd.DataFrame,
-    x_col: str,
-    y_col: str,
-    y_name: str = None,
-    x_name: str = None,
-    fig_title: str = None,
-    stim_reliabilities: dict = KAPPA_LEVELS,
-    palette: dict = PALETTE,
-    by_box: bool = False,
-    show_traces: bool = False,
-    **kwargs,
-) -> list[plt.Axes]:
-    kwargs = kwargs.copy()
-
-    if y_name is None:
-        y_name = "mean " + y_col
-
-    if x_name is None:
-        x_name = "time"
-
-    # Average data over time
-    groupers = ["stimulus reliability", "block_id"]
-    if by_box:
-        groupers.append("box")
-
-    smooth_kwargs = kwargs_handler(
-        kwargs,
-        "smooth_kwargs",
-    )
-    ma = moving_average(
-        df,
-        x_col=x_col,
-        y_col=y_col,
-        y_name=y_name,
-        groupers=groupers,
-        **smooth_kwargs,
-    )
-
-    # Plot reward rates
-    fig_kwargs = kwargs_handler(kwargs, "fig_kwargs", {"sharey": True, "sharex": True})
-    kwargs.update({"x": x_name, "y": y_name, "x_unit": "s"})
-
-    if by_box:
-        kwargs.update({"hue": "box", "palette": palette})
-    else:
-        kwargs.update({"color": "black"})
-
-    def _by_kappa(i: int, kappa: str, df: pd.DataFrame, axes: ArrayLike, **kwargs):
-        kwargs.update(
-            {
-                "conds": {"stimulus reliability": kappa},
-                "ax": axes[i],
-            }
-        )
-        plot_block_average_or_traces(df, show_traces=show_traces, **kwargs)
-        return axes[i]
-
-    @legend_handler
-    def _plot(i, subj, **kwargs):
-        df_subj = filter_df(ma, {"subject": subj})
-        kappas = stim_reliabilities[subj].keys()
-        fig_kwargs["ncols"] = len(kappas)
-        fig, axes = fig_init(**fig_kwargs)
-        legend = {
-            kappa: {"legend": i == len(kappas) - 1} for i, kappa in enumerate(kappas)
-        }
-        across_conditions_plotter(
-            kappas, _by_kappa, df=df_subj, axes=axes, cond_kwargs=legend, **kwargs
-        )
-        if fig_title:
-            fig.suptitle(f"{fig_title} for {subj}")
-        fig.tight_layout()
-        return axes
-
-    return across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
-
-
-@multiplot
 def plot_push_rates_across_block(
     df: pd.DataFrame,
     stim_reliabilities: dict = KAPPA_LEVELS,
@@ -1875,8 +1797,8 @@ def plot_push_rates_across_block(
         palette=palette,
         by_box=by_box,
         show_traces=show_traces,
-        x_col="push times",
-        y_col="reward outcomes",
+        x="push times",
+        y="reward outcomes",
         y_name="push rate",
         fig_title="Push rate",
         smooth_kwargs=smooth_kwargs,
@@ -1919,8 +1841,8 @@ def plot_reward_rates_across_block(
         palette=palette,
         by_box=by_box,
         show_traces=show_traces,
-        x_col="push times",
-        y_col="reward outcomes",
+        x="push times",
+        y="reward outcomes",
         y_name="reward rate",
         fig_title="Reward rate",
         smooth_kwargs=smooth_kwargs,
@@ -1935,6 +1857,7 @@ def plot_reward_per_push_across_block(
     palette: dict = PALETTE,
     by_box: bool = False,
     show_traces: bool = False,
+    fig_title: str = "Reward-per-push",
     **kwargs,
 ):
     """
@@ -1953,70 +1876,73 @@ def plot_reward_per_push_across_block(
     Returns:
         None
     """
-
-    # Average data over time
-    groupers = ["stimulus reliability", "block_id"]
-    if by_box:
-        groupers.append("box")
-
+    kwargs = kwargs.copy()
     smooth_kwargs = kwargs_handler(
         kwargs,
         "smooth_kwargs",
         {"rate": True},
     )
 
-    ma_push = moving_average(
-        df,
-        x_col="push times",
-        y_col="reward outcomes",
-        y_name="push rate",
-        bin_func=lambda x: x.size(),
-        groupers=groupers,
-        **smooth_kwargs,
-    )
+    # Average data over time
+    groupers = ["stimulus reliability", "block_id"]
+    if by_box:
+        groupers.append("box")
 
-    ma_rew = moving_average(
-        df,
-        x_col="push times",
-        y_col="reward outcomes",
-        y_name="reward rate",
-        bin_func=lambda x: x["reward outcomes"].sum(),
-        groupers=groupers,
-        **smooth_kwargs,
-    )
-
-    ma_rew["reward-per-push"] = ma_rew["reward rate"] / ma_push["push rate"]
-
-    # Plot push rates
     fig_kwargs = kwargs_handler(kwargs, "fig_kwargs", {"sharey": True, "sharex": True})
-    base_params = {"x": "time", "y": "reward-per-push", "x_unit": "s", **kwargs}
+    kwargs.update({"x": "time", "y": "reward-per-push", "x_unit": "s"})
 
     if by_box:
-        base_params.update({"hue": "box", "palette": palette})
+        kwargs.update({"hue": "box", "palette": palette})
     else:
-        base_params.update({"color": "black"})
+        kwargs.update({"color": "black"})
+
+    def _by_kappa(i: int, kappa: str, df2: pd.DataFrame, axes: ArrayLike, **kwargs):
+        kwargs.update(
+            {
+                "conds": {"stimulus reliability": kappa},
+                "ax": axes[i],
+            }
+        )
+        plot_block_average_or_traces(df2, show_traces=show_traces, **kwargs)
+        return axes[i]
 
     @legend_handler
     def _plot(i, subj, **kwargs):
-        rr_subj = filter_df(ma_rew, {"subject": subj})
+        df_subj = filter_df(df, {"subject": subj})
+        ma_push = moving_average(
+            df_subj,
+            x="push times",
+            y="reward outcomes",
+            y_name="push rate",
+            bin_func=lambda x: x.size(),
+            groupers=groupers,
+            **smooth_kwargs,
+        )
+
+        ma_rew = moving_average(
+            df_subj,
+            x="push times",
+            y="reward outcomes",
+            y_name="reward rate",
+            bin_func=lambda x: x["reward outcomes"].sum(),
+            groupers=groupers,
+            **smooth_kwargs,
+        )
+
+        ma_rew["reward-per-push"] = ma_rew["reward rate"] / ma_push["push rate"]
         kappas = stim_reliabilities[subj].keys()
         fig_kwargs["ncols"] = len(kappas)
-        fig, ax = fig_init(**fig_kwargs)
-        for i, kappa in enumerate(kappas):
-            base_params.update(
-                {
-                    "conds": {"stimulus reliability": kappa},
-                    "ax": ax[i],
-                    "legend": i == len(kappas) - 1,
-                    **kwargs,
-                }
-            )
-            plot_block_average_or_traces(
-                rr_subj, show_traces=show_traces, **base_params
-            )
-        fig.suptitle(f"Reward-per-push for {subj}")
+        fig, axes = fig_init(**fig_kwargs)
+        legend = {
+            kappa: {"legend": i == len(kappas) - 1} for i, kappa in enumerate(kappas)
+        }
+        across_conditions_plotter(
+            kappas, _by_kappa, df2=ma_rew, axes=axes, cond_kwargs=legend, **kwargs
+        )
+        if fig_title:
+            fig.suptitle(f"{fig_title} for {subj}")
         fig.tight_layout()
-        return ax
+        return axes
 
     across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
 
