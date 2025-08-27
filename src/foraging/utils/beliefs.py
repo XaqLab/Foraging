@@ -16,6 +16,7 @@ from foraging.utils.models import (
     BoxesBeliefContainer,
     EventID,
     Posterior,
+    UpdatesByBox,
 )
 from foraging.utils.stats import mcfadden_pseudo_rsquared, permutation_test_logistic
 
@@ -71,7 +72,7 @@ def sync_beliefs_in_block(df: pd.DataFrame, index: tuple, beliefs: BeliefCollect
 def compute_posterior(
     df: pd.DataFrame,
     index: tuple,
-    posterior_maker: Callable[Any, BoxesBeliefContainer],
+    posterior_maker: Callable[Any, UpdatesByBox],
     postprocessing: Callable[Any, BoxesBeliefContainer] = None,
     *args,
     **kwargs,

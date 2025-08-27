@@ -15,6 +15,8 @@ from foraging.utils import INDEX, MIN_INDEX, flatten
 ## TYPES
 O = TypeVar("O")
 X = TypeVar("X")
+ID = TypeVar("ID")
+R = TypeVar("R")
 
 
 @dataclass
@@ -51,7 +53,26 @@ class PossibleSchedules:
         return iter(self.schedule)
 
 
-## INTERFACES
+## INTERFACES AND ABSTRACTIONS
+
+
+# tests
+class Uniform:
+    def __init__(self, support: Iterable[X]):
+        self.support = support
+        self._support = np.asarray(support)  # for indexing
+        self._representation = np.ones(len(support)) / len(support)
+
+    def representation(self) -> ArrayLike:
+        return self._representation
+
+    def sample(self, n: int = 1) -> Iterable[X]:
+        return np.random.choice(self._support, size=n, p=self.representation())
+
+    def query(self, x: X) -> float:
+        return self.representation()[np.argwhere(self._support == x)[0][0]]
+
+
 class Belief(Protocol[X]):
     """
     Interface for a belief.
@@ -62,12 +83,36 @@ class Belief(Protocol[X]):
     @property
     def representation(self) -> Any: ...
 
-    @representation.setter
-    def representation(self, value: Any): ...
-
     def sample(self, n: int = 1) -> Iterable[X]: ...
 
     def query(self, x: X) -> float: ...
+
+
+class BeliefCollection(Protocol[X]):
+    """Convenience class for a collection of beliefs."""
+
+    def __init__(self, n: int, belief_cls: Type[Belief[X]], *args, **kwargs):
+        self.belief_cls = belief_cls
+        self.beliefs = [belief_cls(*args, **kwargs) for _ in range(n)]
+
+    def __getitem__(self, i: int) -> Belief[X]:
+        return self.beliefs[i]
+
+    def __setitem__(self, i: int, belief: Belief[X]):
+        self.beliefs[i] = belief
+
+    @property
+    def representation(self) -> Iterable[Any]:
+        return [belief.representation() for belief in self.beliefs]
+
+    def sample(self, n: int = 1) -> Iterable[X]:
+        return [belief.sample(n) for belief in self.beliefs]
+
+    def query(self, x: Iterable[X]) -> Iterable[float]:
+        return [belief.query(_x) for belief, _x in zip(self.beliefs, x)]
+
+    def query_by_index(self, i: int, x: X) -> float:
+        return self.beliefs[i].query(x)
 
 
 class Likelihood(Protocol[X, O]):
@@ -80,21 +125,16 @@ class Likelihood(Protocol[X, O]):
 
 class BeliefUpdate(Protocol[X, O]):
     """
-    Encapsulates the belief update rule ie. Bayesian, variational approximation, etc.
+    Encapsulates the belief update rule ie. Bayesian, online variational methods, neural networks, etc.
     """
 
     def __call__(self, prior: Belief[X], o: O) -> Belief[X]: ...
 
 
-class Posterior(Protocol[X, O]):
-    """
-    Interface for a posterior.
-    Updates belief with data.
-    """
+class UpdatesByBox(Protocol[O, ID]):
+    """Convenience protocol for updating beliefs with a box-specific observation."""
 
-    prior: Belief[X]
-
-    def update(self, o: O) -> Belief[X]: ...
+    def update(self, box_position: int, id: ID, o: O): ...
 
 
 ## IMPLEMENTATIONS
@@ -132,12 +172,13 @@ class Probabilities:
         return len(self.support)
 
 
-class ExactBayesianUpdate:
+class ExactBayesianUpdateOnProbabilities:
     """
     Exact Bayesian update on Probabilities.
     """
 
-    def __init__(self, likelihood: Likelihood[X, O], vectorized: bool = True):
+    def __init__(self, likelihood: Likelihood[X, O], vectorized: bool = False):
+        """Set vectorized to True to vectorize likelihood over the parameters."""
         self.likelihood = likelihood
         self.vectorized = vectorized
 
@@ -158,6 +199,211 @@ class ExactBayesianUpdate:
         # Normalize
         posterior_probs = posterior_probs / np.sum(posterior_probs)
         return Probabilities(prior.support, posterior_probs)
+
+
+class RecordKeeper(Protocol[ID, R]):
+
+    def __init__(self, init_id: ID = None, init_record: R = None):
+        self._records = {}
+        if init_record and init_id:
+            self._records[init_id] = init_record
+
+    def id(self, i: int) -> ID:
+        if i < 0:
+            i = len(self) + i
+        return list(self._records.keys())[i]
+
+    def __getitem__(self, id: ID) -> R:
+        return self._records[id]
+
+    def __setitem__(self, id: ID, record: R):
+        self._records[id] = record
+
+    @property
+    def records(self) -> dict[ID, R]:
+        return self._records
+
+    @records.setter
+    def records(self, records: dict[ID, R]):
+        self._records = records
+
+    def delete(self, id: ID) -> R:
+        return self.records.pop(id, None)
+
+    def __len__(self):
+        return len(self.records)
+
+    def sort(self):
+        self.records = dict(sorted(self.records.items()))
+
+
+class Posterior(RecordKeeper[ID, Belief[X]]):
+    def __init__(self, init_id: ID, prior: Belief[X], update: BeliefUpdate[X, O]):
+        super().__init__(init_id, prior)
+        self.update = update
+
+    def prior(self) -> Belief[X]:
+        return self[self.id(0)]
+
+    def representation(self):
+        return [self[id].representation() for id in self.records.keys()]
+
+    def update(self, id: ID, o: O):
+        self[id] = self.update(self[self.id(-1)], o)
+
+    def query(self, x: X) -> float:
+        return self[self.id(-1)].query(x)
+
+    def sample(self, n: int = 1) -> Iterable[X]:
+        return self[self.id(-1)].sample(n)
+
+
+class FactorizedPosterior(Posterior[ID, Belief[X]]):
+    """
+    A factorized posterior that inherits from Posterior and implements UpdatesByBox.
+    Each factor is managed as a separate Posterior instance, allowing independent updates.
+    """
+
+    def __init__(
+        self,
+        n_factors: int,
+        belief_cls: Type[Belief[X]],
+        update: BeliefUpdate[X, O],
+        factor_ids: list[ID] = None,
+        *args,
+        **kwargs,
+    ):
+        """
+        Initialize a factorized posterior with n_factors independent posteriors.
+
+        Args:
+            n_factors: Number of independent factors
+            belief_cls: Class to instantiate for each factor's prior
+            update: Belief update function to apply to individual factors
+            factor_ids: Optional list of IDs for each factor (defaults to [0, 1, 2, ...])
+            *args, **kwargs: Arguments passed to belief_cls constructor
+        """
+        # Create factor IDs if not provided
+        if factor_ids is None:
+            factor_ids = list(range(n_factors))
+
+        # Initialize the first factor as the main posterior
+        first_prior = belief_cls(*args, **kwargs)
+        super().__init__(factor_ids[0], first_prior, update)
+
+        # Store the update function and factor information
+        self._update_func = update
+        self._factor_ids = factor_ids
+        self._belief_cls = belief_cls
+        self._belief_args = args
+        self._belief_kwargs = kwargs
+
+        # Initialize remaining factors
+        for i in range(1, n_factors):
+            prior = belief_cls(*args, **kwargs)
+            self[factor_ids[i]] = prior
+
+    def update(self, box_position: int, id: ID, o: O):
+        """
+        Update a specific factor based on box position and observation.
+        This method satisfies the UpdatesByBox protocol.
+
+        Args:
+            box_position: Which factor to update (0 to n_factors-1)
+            id: Identifier (unused, kept for protocol compatibility)
+            o: Observation containing the data for updating
+        """
+        if box_position < 0 or box_position >= len(self._factor_ids):
+            raise ValueError(
+                f"Box position {box_position} out of range [0, {len(self._factor_ids)-1}]"
+            )
+
+        # Get the factor ID for this box position
+        factor_id = self._factor_ids[box_position]
+
+        # Update the specific factor using the parent Posterior's update mechanism
+        self[factor_id] = self._update_func(self[factor_id], o)
+
+    def query_factor(self, factor_idx: int, x: X) -> float:
+        """
+        Query a specific factor's belief.
+
+        Args:
+            factor_idx: Index of the factor to query
+            x: Value to query
+
+        Returns:
+            Probability of x under the specified factor's belief
+        """
+        if factor_idx < 0 or factor_idx >= len(self._factor_ids):
+            raise ValueError(
+                f"Factor index {factor_idx} out of range [0, {len(self._factor_ids)-1}]"
+            )
+
+        factor_id = self._factor_ids[factor_idx]
+        return self[factor_id].query(x)
+
+    def sample_factor(self, factor_idx: int, n: int = 1) -> Iterable[X]:
+        """
+        Sample from a specific factor's belief.
+
+        Args:
+            factor_idx: Index of the factor to sample from
+            n: Number of samples to draw
+
+        Returns:
+            Samples from the specified factor's belief
+        """
+        if factor_idx < 0 or factor_idx >= len(self._factor_ids):
+            raise ValueError(
+                f"Factor index {factor_idx} out of range [0, {len(self._factor_ids)-1}]"
+            )
+
+        factor_id = self._factor_ids[factor_idx]
+        return self[factor_id].sample(n)
+
+    def get_factor_representation(self, factor_idx: int) -> Any:
+        """
+        Get the representation of a specific factor.
+
+        Args:
+            factor_idx: Index of the factor
+
+        Returns:
+            Representation of the specified factor's belief
+        """
+        if factor_idx < 0 or factor_idx >= len(self._factor_ids):
+            raise ValueError(
+                f"Factor index {factor_idx} out of range [0, {len(self._factor_ids)-1}]"
+            )
+
+        factor_id = self._factor_ids[factor_idx]
+        return self[factor_id].representation
+
+    def get_factor_id(self, factor_idx: int) -> ID:
+        """
+        Get the ID of a specific factor.
+
+        Args:
+            factor_idx: Index of the factor
+
+        Returns:
+            The ID of the specified factor
+        """
+        if factor_idx < 0 or factor_idx >= len(self._factor_ids):
+            raise ValueError(
+                f"Factor index {factor_idx} out of range [0, {len(self._factor_ids)-1}]"
+            )
+
+        return self._factor_ids[factor_idx]
+
+    @property
+    def factor_ids(self) -> list[ID]:
+        """Get the list of factor IDs."""
+        return self._factor_ids.copy()
+
+    def __len__(self) -> int:
+        return len(self._factor_ids)
 
 
 class GammaLikelihood:
@@ -248,70 +494,90 @@ class IndexedBelief(AbstractBelief):
         pass
 
 
-class AbstractID(ABC):
-    """
-    Abstraction of an ID, typically used in conjunction with a Record that maps any content to an ID.
-    IDs maintain a collection of fields and their corresponding values.
-    """
-
-    @abstractmethod
-    def fields(self, *args, **kwargs) -> Any:
-        pass
-
-    @abstractmethod
-    def values(self, *args, **kwargs) -> Any:
-        pass
-
-    @abstractmethod
-    def __lt__(self, other: "AbstractID") -> bool:
-        pass
-
-    @abstractmethod
-    def __eq__(self, other: "AbstractID") -> bool:
-        pass
-
-    @abstractmethod
-    def __hash__(self) -> int:
-        pass
-
-
-class AbstractRecordKeeper(ABC):
-    """
-    Abstraction of a record keeper, which maintains a collection of records.
-    It supports adding, updating, and deleting records. Think of it as a generalized dictionary.
-    """
-
-    @abstractmethod
-    def id(self, i: int) -> AbstractID:
-        pass
-
-    @abstractmethod
-    def __getitem__(self, id: AbstractID) -> Any:
-        pass
-
-    @abstractmethod
-    def __setitem__(self, id: AbstractID, record: Any) -> Any:
-        pass
+### IMPLEMENTATIONS
+class RealID(AbstractID):
+    def __init__(self, values: tuple, fields: tuple[str]):
+        self._values = values
+        self._fields = fields
 
     @property
-    @abstractmethod
-    def records(self) -> Any:
-        pass
+    def fields(self) -> tuple[str]:
+        return self._fields
 
-    @abstractmethod
-    def delete(self, *args, **kwargs) -> Any:
-        pass
+    @fields.setter
+    def fields(self, fields: tuple[str]):
+        self._fields = fields
 
-    @abstractmethod
-    def __len__(self) -> int:
-        pass
+    @property
+    def values(self) -> tuple:
+        return self._values
 
-    @abstractmethod
-    def sort(self, *args, **kwargs) -> Any:
-        pass
+    @values.setter
+    def values(self, values: tuple):
+        self._values = values
+
+    def __eq__(self, other: AbstractID) -> bool:
+        return self.values == other.values and all(
+            x == y for x, y in zip(self.fields, other.fields)
+        )
+
+    def __hash__(self) -> int:
+        return hash((self.values, self.fields))
+
+    def __lt__(self, other: AbstractID) -> bool:
+        return self.values < other.values
 
 
-### IMPLEMENTATIONS
+class IntID(RealID):
+    def __init__(self, values: int):
+        super().__init__((values,), ("id",))
+
+
+class EventID(RealID):
+
+    def __init__(self, values: tuple, minimal: bool = False):
+        if minimal:
+            super().__init__(values, INDEX[:MIN_INDEX])
+        else:
+            super().__init__(values, INDEX)
+
+
+class RecordKeeper(AbstractRecordKeeper):
+
+    def __init__(self, init_id: AbstractID = None, init_record: Any = None):
+        self._records = {}
+        if init_record and init_id:
+            self._records[init_id] = init_record
+
+    def id(self, i: int) -> AbstractID:
+        if i < 0:
+            i = len(self) + i
+        return list(self._records.keys())[i]
+
+    def __getitem__(self, id: AbstractID) -> Any:
+        return self._records[id]
+
+    def __setitem__(self, id: AbstractID, record: Any) -> Any:
+        self._records[id] = record
+
+    @property
+    def records(self) -> dict[AbstractID, Any]:
+        return self._records
+
+    @records.setter
+    def records(self, records: dict[AbstractID, Any]):
+        self._records = records
+
+    def delete(self, id: AbstractID) -> Any:
+        return self.records.pop(id, None)
+
+    def __len__(self):
+        return len(self.records)
+
+    def sort(self):
+        self.records = dict(sorted(self.records.items()))
+
+
 class ArrayBelief(AbstractBelief):
     """
     A belief that is represented as an array of probabilities as the features.

@@ -60,7 +60,7 @@ from foraging.utils.models import (
     BeliefCollection,
     BoxesBeliefContainer,
     EventID,
-    ExactBayesianUpdate,
+    ExactBayesianUpdateOnProbabilities,
     GammaBoxBelief,
     GammaLikelihood,
     GammaParameters,
@@ -196,7 +196,7 @@ belief = Probabilities(schedules, [0.25, 0.25, 0.25, 0.25])
 obs = RewardObservation(is_available=True, time=2.5)
 likelihood = GammaLikelihood()
 result = likelihood(obs, schedules)
-update = ExactBayesianUpdate(likelihood=likelihood)
+update = ExactBayesianUpdateOnProbabilities(likelihood=likelihood)
 update(belief, obs).representation
 
 # %%
@@ -313,3 +313,16 @@ plt.show()
 # ## Bias
 #
 # It's perfectly possible that the subjects have a prior about the schedules that could be mismatched to the true schedules. Now, asymptotically the posterior converges to a Gaussian centered on the MLE, with variance equal to 1/fisher information (Laplace approximation), but in the beginning a nontrivial bias may be present that influences behavior. It is also worth thinking about constrained computation-- if the agent prematurely stops updating their posterior due to computational budget, then they may also be biased in their belief about the schedule depending on the nature of their limited observations. Depending on the nature of the bias, the MSE may even be less than that of the unbiased estimator (bias-variance decomposition)
+
+# %%
+# Create a ScheduleArray
+schedules = PossibleSchedules(schedule=np.array([1.0, 2.0, 3.0, 4.0]), shape=1.0)
+
+# Use as array (for Probabilities)
+support_array = np.asarray(schedules)  # Returns: array([1., 2., 3., 4.])
+belief = Probabilities(schedules, [0.25, 0.25, 0.25, 0.25])
+
+obs = RewardObservation(is_available=True, time=2.5)
+likelihood = GammaLikelihood()
+update = ExactBayesianUpdateOnProbabilities(likelihood=likelihood)
+update(belief, obs).representation
