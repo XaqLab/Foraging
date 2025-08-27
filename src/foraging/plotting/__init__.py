@@ -13,6 +13,7 @@ from ._base import (
     enhanced_violinplot,
     fig_init,
     format_yticks,
+    get_figure_from_axes,
     legend_handler,
     multiplot,
     per_block,

@@ -22,12 +22,14 @@
 # %matplotlib inline
 import logging
 import os
+import textwrap
 
 import pandas as pd
 import seaborn as sns
+from IPython.display import Markdown, display, display_markdown
 from matplotlib import pyplot as plt
 
-from foraging.plotting import bp
+from foraging.plotting import bp, get_figure_from_axes, toggle_plot
 from foraging.plotting.behavior import (
     plot_block_onsets_vs_push_percentiles,
     plot_experiment_overview,
@@ -35,6 +37,7 @@ from foraging.plotting.behavior import (
     plot_long_push_blocks,
     plot_previous_push_interval_vs_push_interval,
     plot_push_percentiles,
+    plot_push_rates_across_block,
     plot_recent_rewards_vs_push_percentiles,
     plot_session_onsets_vs_push_percentiles,
     plot_vertical_position_in_block,
@@ -80,9 +83,9 @@ SEED = 42
 # &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; |___ block (kappa, stimulus type, schedules)\
 # &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; |___ push times\
 # &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; |___ reward outcomes\
-# &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; |___ push times\
+# &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; |___ push times
 #
-# For human data, each session is a subject. Otherwise noted, subjects underwent multiple sessions, one session per day, and each contain multiple blocks with different experiment parameters per block.
+# For human data, each session is a subject. Unless otherwise noted, subjects underwent multiple sessions, one session per day, and each contain multiple blocks with different experiment parameters per block.
 # Refer to `docs\info.docx` for more details.
 #
 # Here is a DataFrame showing a subset of the data. Refer to the docstring of `make_df` for more information about the contents of the DataFrame.
@@ -353,3 +356,90 @@ plot_push_percentiles(df_filtered)
 
 # %% [markdown]
 # Compared to the beginning of this notebook, after removing the outliers for each subject, we see now that the push intervals are within a more reasonable range and behave more like a gaussian.
+
+# %%
+
+# known bug that this doesn't currently work https://github.com/jupyter-book/jupyter-book/issues/2077
+# todo: consider running one of the longer thinking AI on the jupyter-book codebase to see if it can fix it
+
+ZOOM_KWARGS = {  # Convenience settings for zoomed in plots
+    "show_traces": True,
+    "smooth_kwargs": {"win_type": "gaussian", "window_size": 30, "step": 5},
+}
+FULL_BLOCK_KWARGS = {
+    "min_obs": 10,
+    "show_traces": True,
+    "smooth_kwargs": {"win_type": "gaussian"},
+}
+
+if TO_HTML:
+    figs_full = get_figure_from_axes(
+        plot_push_rates_across_block(df, by_box=True, **FULL_BLOCK_KWARGS)
+    )
+    figs_zoomed = get_figure_from_axes(
+        plot_push_rates_across_block(
+            df[df["push times"] < 120], by_box=True, **ZOOM_KWARGS
+        )
+    )
+    tab_md_template = """
+    ````{{tab-set}}
+    ```{{tab-item}} Full block
+    {full_images}
+    ```
+
+    ```{{tab-item}} Zoom block
+    {zoom_images}
+    ```
+    ````
+    """
+
+    os.makedirs("tmp", exist_ok=True)  # Ensure tmp directory exists
+
+    full_images = ""
+    for fig in figs_full:
+        fig.savefig(
+            f"tmp/full_{fig.number}.png", facecolor="white", bbox_inches="tight"
+        )
+        plt.close(fig)
+        full_images += f"![](tmp/full_{fig.number}.png)\n"
+
+    zoom_images = ""
+    for fig in figs_zoomed:
+        fig.savefig(
+            f"tmp/zoom_{fig.number}.png", facecolor="white", bbox_inches="tight"
+        )
+        plt.close(fig)
+        zoom_images += f"![](tmp/zoom_{fig.number}.png)\n"
+
+    tab_md = textwrap.dedent(tab_md_template).format(
+        full_images=full_images,
+        zoom_images=zoom_images,
+    )
+    display_markdown(tab_md, raw=True)
+else:
+    toggle_plot(
+        plot_push_rates_across_block,
+        plot_push_rates_across_block,
+        button_labels=("Full block", "Zoomed in"),
+        kwargs1={
+            "df": df,
+            "by_box": True,
+            **FULL_BLOCK_KWARGS,
+        },
+        kwargs2={"df": df[df["push times"] < 120], "by_box": True, **ZOOM_KWARGS},
+        inline=TO_HTML,
+    )
+    # todo: consider generating markdown text, loading it into a markdown cell, and then displaying it depending on the TO_HTML flag
+
+# %% [markdown]
+# ````{tab-set}
+# ```{tab-item} Figure A
+# ![](tmp/full_4.png)
+# ![](tmp/full_2.png)
+# ```
+#
+# ```{tab-item} Figure B
+# ![](tmp/zoom_5.png)
+# ![](tmp/zoom_6.png)
+# ```
+# ````

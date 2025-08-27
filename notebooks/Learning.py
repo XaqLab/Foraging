@@ -43,7 +43,11 @@ from foraging.plotting.beliefs import (
     plot_schedule_beliefs_mean_and_std_across_block,
 )
 from foraging.utils import INDEX, MIN_INDEX
-from foraging.utils.beliefs import compute_accuracy, compute_posterior
+from foraging.utils.beliefs import (
+    compute_accuracy,
+    compute_posterior,
+    sync_beliefs_in_block,
+)
 from foraging.utils.data import (
     display_df,
     exclusion_criteria,
@@ -53,8 +57,19 @@ from foraging.utils.data import (
     process_blocks,
 )
 from foraging.utils.models import (
+    BeliefCollection,
+    BoxesBeliefContainer,
+    EventID,
+    ExactBayesianUpdate,
+    GammaBoxBelief,
+    GammaLikelihood,
+    GammaParameters,
     IndependentGammaBoxesBelief,
     PermutationGammaBoxesBelief,
+    PossibleSchedules,
+    Posterior,
+    Probabilities,
+    RewardObservation,
 )
 
 pd.options.mode.copy_on_write = True
@@ -80,7 +95,7 @@ display_df(df, ["box", "push times", "reward outcomes"])
 #
 # In theory, observations about reward carries information about the task parameters that generate them. For example, if the subject is able to perfectly observe the reward intervals $\{t_{\text{reward}}\}$, which is the time that needs to elapse before reward becomes available, then they can average these reward intervals to get an estimate of the box's schedule $\lambda$, the mean of the generative distribution. It is known that the sample mean of observations drawn from a Gaussian distribution is the most efficient estimator of the population mean, in the sense that the variance achieves the Cramer-Rao lower bound. The same is true for the sample mean of observations drawn from a gamma distribution, which is the distribution we use in the experiment to generate reward intervals.
 #
-# Now, in the actual experiment, the rewards are hidden when they become available and the subject only receives potentially noisy observations of the reward interval. The observations take the form of a color cue that encodes the reward interval with some spatiotemporal noise. On one end of the spectrum lie completely unreliable observations that offer no information about the reward intervals, and hence no information about the schedules that generated them; however, there is still hope in the form of censored observations made available when the subject decides to push at the box. Then, the subject observes whether reward was available by the time they pushed at $t_{\text{push}}$, and they can use this observation to update their beliefs about the schedules. For example, if the subject waits a long time at a box they believe to be fast but still does not observe reward when they push, that is an indication that the box may be slower than anticipated, and vice versa if the subject only waits a short time at a box they thought was slow and is pleasantly surprised to receive reward. Both the perfect observations and the censored observations correspond to distinct but related likelihood functions, described below:
+# Now, in the actual experiment, the rewards are hidden when they become available and the subject only receives potentially noisy observations of the reward interval. The observations take the form of a color cue that encodes the reward interval with some spatiotemporal noise. On one end of the spectrum lie completely unreliable observations that offer no information about the reward intervals, and hence no information about the schedules that generated them; however, there is still hope in the form of censored observations made available when the subject decides to push at the box. Then, the subject observes whether reward was available by the time they pushed at $t_{\text{push}}$, and they can use this observation to update their beliefs about the schedules. For example, if the subject waits a long time at a box they believe to be fast but still does not observe reward when they push, that is an indication that the box may be slower than anticipated, and vice versa if the subject only waits a short time at a box they thought was slow and is pleasantly surprised to receive reward. Both the perfect observations and the censored observations correspond to distinct but related likelihood functions, defined below:
 #
 # *Perfect Observations*
 #
@@ -113,7 +128,7 @@ display_df(df, ["box", "push times", "reward outcomes"])
 #
 # Notice that the Fisher information of the censored observations depends on the push time $t_{\text{push}}$. Intuitively, this is because if you wait too long to push relative to the schedule or go too soon, then on average you will get very little information. Only a moderate regime of wait times gives useful information, and each box has a different optimal wait time that delivers maximum Fisher information. These curves are shown below.
 #
-# *The shape parameter basically influences the variance of the reward intervals and is held constant across blocks as well as shared between boxes. At the end of this notebook, we derive the Cramer-Rao lower bound for the shape parameter and show that it virtually vanishes to 0 after accumulating a typical block's worth of observations, lending credence to our assumption that the subjects know the shape parameter to a high degree of confidence.
+# $^1$ The shape parameter basically influences the variance of the reward intervals and is held constant across blocks as well as shared between boxes. At the end of this notebook, we derive the Cramer-Rao lower bound for the shape parameter and show that it virtually vanishes to 0 after accumulating a typical block's worth of observations, validating our assumption that the subjects know the shape parameter to a high degree of confidence.
 
 # %%
 plot_fisher_info(
@@ -124,14 +139,17 @@ plot_fisher_info(
 )
 
 # %% [markdown]
-# The optimal wait times that maximize the Fisher information of each box occur at distinct timepoints ordered by schedules. Notice that the maximal Fisher information of the two slower boxes are close together in value compared to the fast box, suggesting that the fast box may be easiest to figure out first because it only needs faster and fewer pushes to reach a certain precision. Using the maximal Fisher information of each box, we show how the uncertainty shrinks with more observations by showing how the standard deviation, the square root of the Cramer-Rao lower bound, decreases with the number of obervations.
+# The optimal wait times that maximize the Fisher information of each box occur at distinct timepoints ordered by schedules. Notice that the maximal Fisher information of the two slower boxes are close together in value compared to the fast box, suggesting that the fast box may be easiest to figure out first because it only needs faster and fewer pushes to reach a certain precision. Using the maximal Fisher information of each box, we show how the uncertainty shrinks with more observations by showing how the standard deviation, the square root of the Cramer-Rao lower bound, decreases with the number of obervations. We also do the same for perfect observations and compare both types of observations.
 
 # %%
 plot_cramer_rao_lb(n=50, schedules=[7, 14, 21], alpha=10)
 
 
 # %% [markdown]
-# After 50 pushes, all schedules can be estimated within ±1-2 s. Note that these results are shown for shape parameter = 10; when shape = 1, it takes 3-4x longer to achieve the same precision.
+# After 50 pushes, all schedules can be estimated within ±1-2 s $^2$. Notice the striking similarity between both types of observations! Having perfect observations only marginally improves the efficiency of the inference process. This provides this tired grad student an excuse to neglect incorporating color observations into the Bayesian model...
+# #TODO: actually, if pushing so fast s.t. reward outcomes provide little information, color observations may provide a lot of information in shorter amount of time. Show above plot but for some short fixed push interval instead (then argue that actual behavior is consistent with infomaxing pushes, so in that case you are not getting much more information from color)
+#
+# $^2$ Note that these results are shown for shape parameter = 10; when shape = 1, it takes 3-4x longer to achieve the same precision.
 
 # %% [markdown]
 # ## Empirical Beliefs using Censored Observations
@@ -140,25 +158,60 @@ plot_cramer_rao_lb(n=50, schedules=[7, 14, 21], alpha=10)
 #
 # $$b(\lambda|o_n := t_{\text{push}}) \propto \begin{cases} F(t_{\text{push}} | \lambda)b(\lambda|o_{1:n-1}) & \text{if reward}\\ (1-F(t_{\text{push}} | \lambda))b(\lambda|o_{1:n-1}) &  \text{else}\end{cases}$$
 #
-# Assuming a uniform prior over possible schedules that resets between blocks, the maximum a posteriori (MAP) estimator is equivalent to the maximum likelihood estimator (MLE). An example posterior over one block is shown below.
+# Assuming a uniform prior over possible schedules that resets between blocks, the maximum a posteriori (MAP) estimator is equivalent to the maximum likelihood estimator (MLE). An example posterior over one block is shown below. Inferring the actual prior is an inverse problem that we leave for downstream analysis.
 
 
 # %%
-# schedule_candidates = np.arange(30) + 1
-#
-# def posterior_maker(df, index):
-#     block = df.loc[index]
-#     shape = block.index.unique("shape")[0]
-#     n_boxes = block["n boxes"].values[0]
-#     return IndependentGammaBoxesBelief(
-#         n_boxes, schedules=schedule_candidates, shape=shape
-#     )
-#
-#
-# schedule_beliefs, _ = process_blocks(df, compute_posterior, posterior_maker)
+schedule_candidates = np.arange(30) + 1
+
+
+def posterior_maker(df, index) -> BoxesBeliefContainer:
+    block = df.loc[index]
+    shape = block.index.unique("shape")[0]
+    n_boxes = block["n boxes"].values[0]
+    return BeliefCollection(
+        n_boxes,
+        lambda: Posterior(
+            EventID(index + (0,)),
+            GammaBoxBelief(shape=shape, schedules=schedule_candidates),
+        ),
+    )
+
+
+# schedule_beliefs, _ = process_blocks(df, compute_posterior, posterior_maker, postprocessing = sync_beliefs_in_block)
 # conds = dict(subject="viktor", session=20230807, block=5)
-conds = dict(zip(INDEX[: MIN_INDEX - 1], ("viktor", 20230809, 4)))
-plot_schedule_beliefs_in_block(df, schedule_beliefs, conds=conds)
+# plot_schedule_beliefs_in_block(df, schedule_beliefs, conds=conds);
+
+
+# %%
+
+# Create a ScheduleArray
+schedules = PossibleSchedules(schedule=np.array([1.0, 2.0, 3.0, 4.0]), shape=1.0)
+
+# Use as array (for Probabilities)
+support_array = np.asarray(schedules)  # Returns: array([1., 2., 3., 4.])
+belief = Probabilities(schedules, [0.25, 0.25, 0.25, 0.25])
+
+# %%
+obs = RewardObservation(is_available=True, time=2.5)
+likelihood = GammaLikelihood()
+result = likelihood(obs, schedules)
+update = ExactBayesianUpdate(likelihood=likelihood)
+update(belief, obs).representation
+
+# %%
+# todo: update Engineering notebook with unit test of Posterior
+
+# %%
+conds = dict(subject="viktor", session=20230807, block=5)
+index = tuple(conds.values())
+x = compute_posterior(df, index, posterior_maker, postprocessing=sync_beliefs_in_block)
+
+# %%
+y = x[x.id(2)]
+
+# %%
+sns.heatmap(np.array(y.features).T)
 
 # %% [markdown]
 # Now we will aggregate posteriors over blocks and report the average summary statistics of those posteriors.

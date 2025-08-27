@@ -1,44 +1,229 @@
 import itertools
 from abc import ABC, abstractmethod
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from copy import deepcopy
+from dataclasses import dataclass
 from itertools import islice, permutations, product
-from typing import Any, Optional, Type
+from typing import Any, Callable, NamedTuple, Optional, Protocol, Type, TypeVar, Union
 
 import numpy as np
-import scipy.stats
 from numpy.typing import ArrayLike
 from scipy.stats import gamma
 
-from foraging.utils import INDEX, MIN_INDEX
+from foraging.utils import INDEX, MIN_INDEX, flatten
+
+## TYPES
+O = TypeVar("O")
+X = TypeVar("X")
+
+
+@dataclass
+class RewardObservation:
+    is_available: bool
+    time: float
+
+
+@dataclass
+class GammaParameters:
+    shape: float
+    schedule: float
+
+
+@dataclass
+class PossibleSchedules:
+    """
+    A convenience class that behaves like an array of schedules but also has structured fields.
+    When converted with np.asarray(), it becomes an array of schedules.
+    When passed to GammaLikelihood, it provides schedule and shape fields.
+    """
+
+    shape: float
+    schedule: Iterable[float]
+
+    def __array__(self, dtype=None):
+        """Make this class convertible to NumPy array."""
+        return np.asarray(self.schedule, dtype=dtype)
+
+    def __len__(self):
+        return len(self.schedule)
+
+    def __iter__(self):
+        return iter(self.schedule)
+
+
+## INTERFACES
+class Belief(Protocol[X]):
+    """
+    Interface for a belief.
+    Functionally, a belief supports sampling and querying.
+    Structurally, a belief has a representation ie. probabilities, sufficient statistics, etc.
+    """
+
+    @property
+    def representation(self) -> Any: ...
+
+    @representation.setter
+    def representation(self, value: Any): ...
+
+    def sample(self, n: int = 1) -> Iterable[X]: ...
+
+    def query(self, x: X) -> float: ...
+
+
+class Likelihood(Protocol[X, O]):
+    """
+    Interface for a likelihood.
+    """
+
+    def __call__(self, o: O, x: X) -> float | Iterable[float]: ...
+
+
+class BeliefUpdate(Protocol[X, O]):
+    """
+    Encapsulates the belief update rule ie. Bayesian, variational approximation, etc.
+    """
+
+    def __call__(self, prior: Belief[X], o: O) -> Belief[X]: ...
+
+
+class Posterior(Protocol[X, O]):
+    """
+    Interface for a posterior.
+    Updates belief with data.
+    """
+
+    prior: Belief[X]
+
+    def update(self, o: O) -> Belief[X]: ...
+
+
+## IMPLEMENTATIONS
+class Probabilities:
+    """
+    A belief that has finite and discrete probabilities as the representation.
+    """
+
+    def __init__(self, support: Iterable[X], probabilities: Iterable[float]):
+        self.support = support
+        self._support = np.asarray(support)  # for indexing
+        self._representation = np.asarray(probabilities)
+
+    @property
+    def representation(self) -> ArrayLike:
+        return self._representation
+
+    @representation.setter
+    def representation(self, value: Iterable[float]):
+        value = np.asarray(value)
+        assert np.all(value >= 0), "Probabilities must be non-negative"
+        assert np.isclose(np.sum(value), 1.0), "Probabilities must sum to 1"
+        self._representation = value
+
+    def sample(self, n: int = 1) -> Iterable[X]:
+        return np.random.choice(self._support, size=n, p=self.representation)
+
+    def query(self, x: X) -> float:
+        return self.representation[np.argwhere(self._support == x)[0][0]]
+
+    def query_by_index(self, i: int) -> float:
+        return self.representation[i]
+
+    def __len__(self) -> int:
+        return len(self.support)
+
+
+class ExactBayesianUpdate:
+    """
+    Exact Bayesian update on Probabilities.
+    """
+
+    def __init__(self, likelihood: Likelihood[X, O], vectorized: bool = True):
+        self.likelihood = likelihood
+        self.vectorized = vectorized
+
+    def __call__(self, prior: Probabilities, data: O) -> Probabilities:
+        # Bayes rule: posterior ∝ likelihood × prior
+        if self.vectorized:
+            posterior_probs = (
+                self.likelihood(data, prior.support) * prior.representation
+            )
+        else:
+            posterior_probs = np.array(
+                [
+                    self.likelihood(data, x) * prior.representation[i]
+                    for i, x in enumerate(prior.support)
+                ]
+            )
+
+        # Normalize
+        posterior_probs = posterior_probs / np.sum(posterior_probs)
+        return Probabilities(prior.support, posterior_probs)
+
+
+class GammaLikelihood:
+    def __call__(
+        self, o: RewardObservation, x: GammaParameters
+    ) -> float | Iterable[float]:
+        # Calculate the probability of reward being available/unavailable after t time has passed under the given latents.
+        p_t = gamma.cdf(o.time, x.shape, scale=x.schedule / x.shape)
+
+        # The last element is the probability of being in the last state, i.e., reward being available.
+        if (
+            not o.is_available
+        ):  # If reward is not available, return the complementary probability.
+            return 1.0 - p_t
+        return p_t
 
 
 ## ABSTRACT CLASSES
-# TODO: consider adding sampling method
 class AbstractBelief(ABC):
+    """
+    Abstract class for a belief.
+    Structurally, at a minimum, a belief has a prior (which is also a belief), support, and features ie. probabilities, parameters, arbitrary representations, etc.
+    Functionally, at a minimum, a belief supports updating after receiving an observation, normalizing after updating, querying the probability of a given value, and sampling from the belief (if computable).
+    """
 
     @abstractmethod
     def prior(self, *args, **kwargs) -> Any:
         pass
 
     @abstractmethod
-    def support(self, *args, **kwargs):
+    def support(self, *args, **kwargs) -> Any:
         pass
 
     @abstractmethod
-    def normalize(self, *args, **kwargs):
+    def features(self, *args, **kwargs) -> Any:
         pass
 
     @abstractmethod
-    def update(self, *args, **kwargs):
+    def normalize(self, *args, **kwargs) -> Any:
         pass
 
     @abstractmethod
-    def query(self, *args, **kwargs):
+    def update(self, *args, **kwargs) -> Any:
         pass
 
     @abstractmethod
-    def features(self, *args, **kwargs):
+    def query(self, *args, **kwargs) -> Any:
+        pass
+
+    @abstractmethod
+    def sample(self, *args, **kwargs) -> Any:
+        pass
+
+
+class BoxesBeliefContainer(ABC):
+    """
+    A convenience abstraction for representing a set of beliefs about boxes, regardless of the structure of the beliefs ie. 3 independent beliefs for each box vs 1 belief over permutations of fixed schedules.
+    Requires update method to take a box-related variable as an argument.
+    """
+
+    @abstractmethod
+    def update(self, box: int = None, *args, **kwargs) -> Any:
+        pass
+
+    @abstractmethod
+    def __len__(self) -> int:
         pass
 
 
@@ -51,19 +236,23 @@ class IndexedBelief(AbstractBelief):
     """
 
     @abstractmethod
-    def update(self, i: int, *args, **kwargs):
+    def update(self, i: int, *args, **kwargs) -> Any:
         pass
 
     @abstractmethod
-    def query(self, i: int, *args, **kwargs):
+    def query(self, i: int, *args, **kwargs) -> Any:
         pass
 
     @abstractmethod
-    def __len__(self):
+    def __len__(self) -> int:
         pass
 
 
 class AbstractID(ABC):
+    """
+    Abstraction of an ID, typically used in conjunction with a Record that maps any content to an ID.
+    IDs maintain a collection of fields and their corresponding values.
+    """
 
     @abstractmethod
     def fields(self, *args, **kwargs) -> Any:
@@ -73,56 +262,60 @@ class AbstractID(ABC):
     def values(self, *args, **kwargs) -> Any:
         pass
 
-
-class AbstractRecord(ABC):
-
     @abstractmethod
-    def id(self, *args, **kwargs) -> AbstractID:
+    def __lt__(self, other: "AbstractID") -> bool:
         pass
 
     @abstractmethod
-    def content(self, *args, **kwargs) -> Any:
-        pass
-
-
-class AbstractRecordKeeper(AbstractRecord):
-
-    @abstractmethod
-    def records(self, *args, **kwargs) -> Any:
+    def __eq__(self, other: "AbstractID") -> bool:
         pass
 
     @abstractmethod
-    def add(self, *args, **kwargs) -> Any:
+    def __hash__(self) -> int:
+        pass
+
+
+class AbstractRecordKeeper(ABC):
+    """
+    Abstraction of a record keeper, which maintains a collection of records.
+    It supports adding, updating, and deleting records. Think of it as a generalized dictionary.
+    """
+
+    @abstractmethod
+    def id(self, i: int) -> AbstractID:
         pass
 
     @abstractmethod
-    def update_record(self, *args, **kwargs) -> Any:
+    def __getitem__(self, id: AbstractID) -> Any:
+        pass
+
+    @abstractmethod
+    def __setitem__(self, id: AbstractID, record: Any) -> Any:
+        pass
+
+    @property
+    @abstractmethod
+    def records(self) -> Any:
         pass
 
     @abstractmethod
     def delete(self, *args, **kwargs) -> Any:
         pass
 
+    @abstractmethod
+    def __len__(self) -> int:
+        pass
 
-# class HistoryManager:
-#     def __init__(self):
-#         self.history = []
-
-#     def add(self, record):
-#         self.history.append(record)
-
-#     def get(self, index: int):
-#         return self.history[index]
-
-#     def get_all(self):
-#         return self.history
-
-#     def clear(self):
-#         self.history = []
+    @abstractmethod
+    def sort(self, *args, **kwargs) -> Any:
+        pass
 
 
 ### IMPLEMENTATIONS
 class ArrayBelief(AbstractBelief):
+    """
+    A belief that is represented as an array of probabilities as the features.
+    """
 
     def __init__(self, support: np.ndarray, probabilities: np.ndarray = None):
         self._support = support
@@ -166,16 +359,17 @@ class ArrayBelief(AbstractBelief):
     def query(self, i: int, **kwargs):
         return self.features[i]
 
-    @abstractmethod
-    def update(self, *args, **kwargs) -> Any:
-        pass
+    def sample(self, n: int = 1, **kwargs) -> np.ndarray:
+        return np.random.choice(self.support, size=n, p=self.features)
 
-    @abstractmethod
-    def likelihood(self, *args, **kwargs) -> Any:
-        pass
+    def __len__(self) -> int:
+        return len(self.support)
 
 
 class GammaBoxBelief(ArrayBelief):
+    """
+    An implementation of the beliefs of a box where reward intervals are gamma distributed and observations are reward outcomes.
+    """
 
     def __init__(
         self, shape: int = 1, schedules: np.ndarray = None, prior: ArrayBelief = None
@@ -208,6 +402,10 @@ class GammaBoxBelief(ArrayBelief):
 
 
 class IndependentBoxesBelief(IndexedBelief):
+    """
+    A belief that is represented as a collection of independent beliefs, one for each box.
+    """
+
     def __init__(self, n_boxes: int, belief_cls: Type[AbstractBelief], *args, **kwargs):
         self.n_boxes = n_boxes
         self.belief_cls = belief_cls
@@ -264,7 +462,7 @@ class PermutationBelief(ArrayBelief):
         super().__init__(list(permutations(params)))
 
 
-class PermutationGammaBoxesBelief(PermutationBelief, IndexedBelief):
+class PermutationGammaBoxesBelief(PermutationBelief):
     def __init__(self, schedules: list, shape: int = 1):
         super().__init__(schedules)
         self.shape = shape
@@ -321,8 +519,11 @@ class RealID(AbstractID):
     def __hash__(self) -> int:
         return hash((self.values, self.fields))
 
+    def __lt__(self, other: AbstractID) -> bool:
+        return self.values < other.values
 
-class MockID(RealID):
+
+class IntID(RealID):
     def __init__(self, values: int):
         super().__init__((values,), ("id",))
 
@@ -336,81 +537,54 @@ class EventID(RealID):
             super().__init__(values, INDEX)
 
 
-class Record(AbstractRecord):
-
-    def __init__(self, id: AbstractID, record: Any):
-        self._id = id
-        self._record = record
-
-    @property
-    def id(self) -> AbstractID:
-        return self._id
-
-    @id.setter
-    def id(self, id: AbstractID):
-        self._id = id
-
-    @property
-    def content(self) -> Any:
-        return self._record
-
-    @content.setter
-    def content(self, record: Any):
-        self._record = record
-
-
 class RecordKeeper(AbstractRecordKeeper):
 
     def __init__(self, init_id: AbstractID = None, init_record: Any = None):
         self._records = {}
         if init_record and init_id:
-            record = Record(init_id, init_record)
-            self._records[init_id] = record
+            self._records[init_id] = init_record
 
     def id(self, i: int) -> AbstractID:
         if i < 0:
             i = len(self) + i
-        return list(islice(self.records.values(), i, i + 1))[0].id
+        return list(self._records.keys())[i]
 
-    def content(self, i: int = None, id: AbstractID = None) -> Any:
-        id = self.id(i) if id is None else id
+    def __getitem__(self, id: AbstractID) -> Any:
         return self._records[id]
 
+    def __setitem__(self, id: AbstractID, record: Any) -> Any:
+        self._records[id] = record
+
     @property
-    def records(self) -> dict[AbstractID, Record]:
+    def records(self) -> dict[AbstractID, Any]:
         return self._records
 
     @records.setter
-    def records(self, records: dict[AbstractID, Record]):
+    def records(self, records: dict[AbstractID, Any]):
         self._records = records
 
-    def add(self, id: AbstractID, record: Any):
-        self._records[id] = Record(id, record)
-
-    def update_record(self, id: AbstractID, record: Any) -> Any:
-        old_record = self.records[id].content
-        self.records[id].content = record
-        return old_record
-
     def delete(self, id: AbstractID) -> Any:
-        return self.records.pop(id, None).content
+        return self.records.pop(id, None)
 
     def __len__(self):
         return len(self.records)
 
+    def sort(self):
+        self.records = dict(sorted(self.records.items()))
 
-class BeliefModule(RecordKeeper, AbstractBelief):
+
+class Posterior(RecordKeeper, AbstractBelief):
 
     def __init__(self, init_id: AbstractID, init_belief: AbstractBelief):
         super().__init__(init_id, init_belief)
 
     @property
     def prior(self) -> AbstractBelief:
-        return self.content(i=0).content
+        return self[self.id(0)]
 
     @prior.setter
     def prior(self, prior: AbstractBelief):
-        self.update_record(self.content(i=0).id, prior)
+        self[self.id(0)] = prior
 
     @property
     def support(self):
@@ -420,33 +594,50 @@ class BeliefModule(RecordKeeper, AbstractBelief):
     def support(self, support):
         # Change the support for all beliefs
         for _, record in self.records.items():
-            record.content.support = support
+            record.support = support
 
     @property
     def features(self):
-        return [self.records[id].content.features for id in self.records.keys()]
+        return [self[id].features for id in self.records.keys()]
 
     @features.setter
-    def features(self, features: dict[AbstractID, ArrayLike]):
+    def features(self, features: dict[AbstractID, Any]):
         for id, record in self.records.items():
-            record.content.features = features[id]
+            record.features = features[id]
+
+    def query(self, *args, **kwargs) -> Any:
+        self[self.id(-1)].query(*args, **kwargs)
+
+    def sample(self, *args, **kwargs) -> Any:
+        self[self.id(-1)].sample(*args, **kwargs)
 
     def update(self, new_id: AbstractID, *args, **kwargs):
 
-        # Step 1: Create a deep copy of the last record
-        last_record = self.content(i=-1)
-        new_record = deepcopy(last_record)
+        # Create a deep copy of the last belief
+        last_belief = self[self.id(-1)]
+        new_belief = deepcopy(last_belief)
 
-        # Step 2: Invoke the update method on the contents of this copy
-        new_record.content.update(*args, **kwargs)
+        # Invoke the update method on the contents of this copy
+        new_belief.update(*args, **kwargs)
 
-        # Step 3: Use the user-supplied AbstractID to augment the internal RecordKeeper structure
-        self.add(new_id, new_record.content)
+        # Add new belief
+        self[new_id] = new_belief
 
     def normalize(self, *args, **kwargs):
         # Normalize all beliefs
         for id, record in self.records.items():
-            record.content.normalize(*args, **kwargs)
+            record.normalize(*args, **kwargs)
 
-    def query(self, i: int = None, id: AbstractID = None):
-        return self.content(i, id)
+
+class BeliefCollection(RecordKeeper):
+    """
+    A collection of beliefs.
+    """
+
+    def __init__(self, n: int, belief_cls: Type[AbstractBelief], *args, **kwargs):
+        super().__init__()
+        for i in range(n):
+            self[IntID(i)] = belief_cls(*args, **kwargs)
+
+    def update(self, i: int, *args, **kwargs):
+        self[self.id(i)].update(*args, **kwargs)

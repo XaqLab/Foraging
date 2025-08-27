@@ -28,6 +28,7 @@ from foraging.config.constants import (
     KAPPA_LEVELS,
     MULTIPLOT_FIGSIZE,
     PALETTE,
+    PALETTE_DARK,
 )
 from foraging.utils import flatten, kwargs_handler
 from foraging.utils.data import filter_df
@@ -50,6 +51,28 @@ def get_figure_from_axes(
     for ax in flatten(axes):
         figs.add(ax.figure)
     return figs
+
+
+def get_box_color(box_label: str, dark: bool = False) -> tuple[float, ...]:
+    """
+    Get color for a specific box label.
+
+    Args:
+        box_label: Box label ie. "fast", "medium", "slow"
+        dark: Whether to return dark variant
+
+    Returns:
+        RGB color tuple (0-1 range)
+
+    Raises:
+        KeyError: If box_label not found
+    """
+    palette = PALETTE_DARK if dark else PALETTE
+    if box_label not in palette:
+        raise KeyError(
+            f"Box label '{box_label}' not found. Available: {list(palette.keys())}"
+        )
+    return palette[box_label]
 
 
 def titler(title: str = None, conds: dict = None, title_override: str = None):
@@ -433,7 +456,13 @@ def _figure_handler(**kwargs):
     return _inner
 
 
-def _figure_saver(fig: plt.Figure, ax: plt.Axes, figure_path: str):
+def _figure_saver(
+    fig: plt.Figure,
+    ax: plt.Axes,
+    figure_path: str,
+    bbox_inches: str = "tight",
+    facecolor: str = "white",
+):
     """
     Save figure and clear it for later reuse
 
@@ -441,12 +470,14 @@ def _figure_saver(fig: plt.Figure, ax: plt.Axes, figure_path: str):
         fig: figure to be drawn on
         ax: axis object to do drawing
         figure_path: path to save figure
+        bbox_inches: bbox_inches argument for plt.savefig
+        facecolor: facecolor argument for plt.savefig
 
     Returns:
 
     """
     Path(figure_path).parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(figure_path, facecolor="white")
+    fig.savefig(figure_path, facecolor=facecolor, bbox_inches=bbox_inches)
     [x.clear() for x in flatten(ax)]
 
 

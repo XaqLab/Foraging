@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Iterable
 from datetime import datetime
 from typing import Any, Callable, Optional
 
@@ -10,30 +11,29 @@ logger.setLevel(logging.DEBUG)
 
 
 # Credit: https://gist.github.com/gosuto-inzasheru/b6deccd3fd5fefbabb72759c74040745
-def flatten(li: list | tuple | set | range | np.ndarray):
+def flatten(x: Iterable):
     """
     Recursively flattens a nested list, tuple, set, or NumPy array.
 
     Args:
-        li (list | tuple | set | range | np.ndarray): The input iterable to be flattened.
+        x (Iterable): The input iterable to be flattened.
 
     Yields:
         Individual elements in a flattened sequence.
     """
-    if isinstance(li, (list, tuple, set, range)):
-        for item in li:
+    try:
+        for item in x:
             yield from flatten(item)
-    elif isinstance(li, np.ndarray):
-        yield from li.flatten()
-    else:
-        yield li
+    except TypeError:
+        if isinstance(x, np.ndarray):
+            yield from x.flatten()
+        else:
+            yield x
 
 
 def kwargs_handler(kwargs: dict, key: str, default: dict = None) -> dict:
     """
-    Intelligently extract keyword arguments from kwargs object, merging with default arguments the user may specify
-    inside a function in a way that only overrides them when necessary, such as when the user later provides different
-    inputs. This is usually the case when a single function accepts a nested kwargs dictionary that may contain the
+    Intelligently extract keyword arguments from kwargs object, merging with default arguments specified inside the function. This is helpful when a single function accepts a nested kwargs dictionary that may contain the
     kwargs for several different subroutines.
 
     Args:

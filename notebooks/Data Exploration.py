@@ -33,7 +33,6 @@ from foraging.config.constants import MULTIPLOT_FIGSIZE, PALETTE, PALETTE_DARK, 
 from foraging.plotting import (
     bp,
     enhanced_violinplot,
-    plot_block_average_or_traces,
     plot_quantity_across_block,
     toggle_plot,
 )
@@ -81,22 +80,50 @@ ZOOM_KWARGS = {  # Convenience settings for zoomed in plots
     "show_traces": True,
     "smooth_kwargs": {"win_type": "gaussian", "window_size": 30, "step": 5},
 }
+FULL_BLOCK_KWARGS = {
+    "min_obs": 10,
+    "smooth_kwargs": {"win_type": "gaussian"},
+}
 
-# %%
-# TODO: TOC like in data cleaning
-# TODO: generate per block figures
-# TODO: prove not much variation across sessions, that's why that dimension is neglected
+# %% [markdown]
+# # Table of Contents
+# - [Load Data](#Load-Data)
+#   - [Data Overview](#Data-Overview)
+# - [Explore Data](#Explore-Data)
+#   - [Example Block](#Example-Block)
+#   - [Pushes](#Pushes)
+#     - [Runlengths](#Runlengths)
+#     - [Accuracy](#Accuracy)
+#     - [Surprise](#Surprise)
+#     - [Staying vs Switching](#Staying-vs-Switching)
+#   - [Block Dynamics](#Block-Dynamics)
+#     - [Push Rate](#Push-Rate)
+#     - [Push Intervals](#Push-Intervals)
+#     - [Reward Rate](#Reward-Rate)
+#     - [Reward-Per-Push](#Reward-Per-Push)
+#   - [Matching Law](#Matching-Law)
+# - [Conclusion](#Conclusion)
 
 # %% [markdown]
 # # Load Data
 #
-# The experiment data consists of multiple matfiles corresponding to the data for different subjects. Each matfile contains that subject's push, eye tracking (if available), and position (if available) data organized by blocks and sessions. Each block corresponds to a set of experiment parameters, notably the schedule of each box, the stimulus reliability kappa, and the stimulus type. A hierarchical overview of a given matfile is given in the `Data Cleaning` notebook.
+# The experiment data consists of multiple matfiles corresponding to the data for different subjects. Each matfile contains that subject's push, eye tracking (if available), and position (if available) data organized by blocks and sessions. Each block corresponds to a set of experiment parameters, notably the schedule of each box, the stimulus reliability kappa, and the stimulus type. A hierarchical overview of a given matfile is as follows:
 #
-# Here is a DataFrame showing a subset of the data, after applying the exclusion criteria detailed in `Data Cleaning`. Refer to the docstring of `make_df` and `exclusion_criteria` for more information about the contents of the DataFrame.
+# +--- subject\
+# &nbsp;&nbsp;&nbsp;&nbsp; |___ session\
+# &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; |___ block (kappa, stimulus type, schedules)\
+# &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; |___ push times\
+# &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; |___ reward outcomes\
+# &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; |___ push times
+#
+# For human data, each session is a subject. Unless otherwise noted, subjects underwent multiple sessions, one session per day, and each contain multiple blocks with different experiment parameters per block.
+# Refer to `docs\info.docx` for more details.
+#
+# Here is a DataFrame showing a subset of the data. Refer to the docstring of `make_df` for more information about the contents of the DataFrame.
 
 # %%
 # %%capture --no-display
-df = make_df(os.path.join(DATA_DIR, "experiments"))
+df = make_df(EXPERIMENT_DIR)
 df = exclusion_criteria(df, EXPERIMENT_DIR)
 display_df(df, ["box", "push times", "reward outcomes"])
 
@@ -264,11 +291,13 @@ plot_push_intervals_by_sessions(df)
 #
 # One thing to look for are sessions that look distributionally different from the others, e.g. day 0 for Dylan shows a bump around extremely fast push intervals around 1 second, and days 53-59 contain a big bump of pushes right above 1 second. For Marco, day 4 is extremely scarce in pushes compared to other days. It's interesting to see heterogeneous patterns in the pushes, in particular for Viktor. In fact, we see three distinct patterns of clusters organized in time: days 0-91 exhibit strong bimodality, days 100-129 are more unimodal and concentrate towards larger push intervals, and days 300-317 concentrate on even larger push intervals. Notice that day 300 coincides with a change in the experiment from the exponential schedule to gamma schedule.
 #
-# Since the exponential schedule depicts atypical behavior, this notebook will be dedicated to the gamma schedule and a supplementary notebook will focus on the exponential schedule.
+# Since the exponential schedule depicts atypical behavior, this notebook will henceforth be dedicated to the gamma schedule and a supplementary notebook will focus on the exponential schedule.
 
 # %%
 df = filter_df(df, {"shape": 10})
-df = df[df["push times"] <= 900]
+viktor_index = filter_df(df[df["push times"] <= 900], {"subject": "viktor"}).index
+human_index = filter_df(df[df["push times"] <= 400], {"subject": "humans"}).index
+df = df.loc[viktor_index.append(human_index)]
 
 # %% [markdown]
 # Here are the distributions of push intervals at each box as a function of stimulus reliability.
@@ -295,10 +324,10 @@ plot_stay_switch_pushes(df)
 # To get a sense of the statistics of *sequences* of pushes, we can gather the runlengths, that is the number of consecutive pushes at the same box before the subject switches.
 
 # %%
-plot_runlengths(df, stat="probability")
+plot_runlengths(df)
 
 # %% [markdown]
-# Aside from fitting in slightly more pushes at the fast box before switching when the reliability is high, there isn't much difference in runlengths between reliabilities.
+# Subjects fit in more pushes at the fast box before switching.
 
 # %% [markdown]
 # ### Accuracy
@@ -339,14 +368,10 @@ plot_push_intervals_vs_reward_intervals(
 # %% [markdown]
 # ### Surprise
 #
-# We can ask how much the factor of "surprise" at a particular reward outcome influences future behavior. For example, if the subject waits a long time and still doesn't get reward, they might 1) switch boxes and 2) wait longer to push the box they left if they start to believe it's a slower box.
+# We can ask how much the factor of "surprise" at a particular reward outcome influences future behavior. For example, if the subject waits a long time and still doesn't get reward, they might 1) switch boxes and 2) wait longer to push the box they left if they start to believe it's a slower box. On the other hand, the behavior of an impatient subject who tends to spam pushes serially at the same box will manifest as a string of stay pushes straddling the y = -x line because y (change in push interval) + x (current push interval) = future push interval. Due to causality (future push can't come before current push), this line also marks the lower boundary of possible points.
 
 # %%
-# %%capture --no-display
-plot_next_push_surprise(
-    df,
-    legend_kwargs=dict(title=None),
-)
+plot_next_push_surprise(df, legend_kwargs=dict(title=None), s=10)
 
 # %% [markdown]
 # Across both rewarded and unrewarded cases, there is a transition point at 20-25 s between waiting longer and going sooner the next push that is roughly preserved across all conditions. As reliability increases, the push intervals on the x-axis cluster by boxes. There is a distinct string of stay pushes that occur near the bottom of the graph where the subject pushes a few seconds after the current push. Visually, it appears that the subject switches a lot more across both reward outcomes, possibly switching more the longer they've waited, but when choosing to stay and push again, does so more after being rewarded. We confirm this below by counting how many times they stay or switch depending on how long they waited to push and the reward outcome.
@@ -360,7 +385,7 @@ plot_next_push_surprise(
 plot_stay_probabilities(df, min_obs=10)
 
 # %% [markdown]
-# Clearly, the probability of staying is greater after receiving reward, but it generally goes down the longer the subject waits, with the exception of some weird quirks that could be due to low data volume. Tentatively, it even looks like the probability of staying grows more similar between reward outcomes as the subject waits longer.
+# Clearly, the probability of staying is greater after receiving reward, but it generally goes down the longer the subject waits, with the exception of some weird quirks that could be due to low data volume.
 
 # %% [markdown]
 # ## Block Dynamics
@@ -395,8 +420,7 @@ toggle_plot(
     kwargs1={
         "df": df,
         "by_box": True,
-        "min_obs": 10,
-        "smooth_kwargs": {"win_type": "gaussian"},
+        **FULL_BLOCK_KWARGS,
     },
     kwargs2={"df": df[df["push times"] < 120], "by_box": True, **ZOOM_KWARGS},
     inline=TO_HTML,
@@ -409,13 +433,11 @@ toggle_plot(
 # ### Reward Rate
 
 # %%
-# zoom_kwargs = ZOOM_KWARGS.copy()
-# zoom_kwargs["smooth_kwargs"].update({"agg_kwargs": {"std": 50}})
 toggle_plot(
     plot_reward_rates_across_block,
     plot_reward_rates_across_block,
     button_labels=("Full block", "Zoomed in"),
-    kwargs1={"df": df, "min_obs": 10, "smooth_kwargs": {"win_type": "gaussian"}},
+    kwargs1={"df": df, **FULL_BLOCK_KWARGS},
     kwargs2={"df": df[df["push times"] < 120], **ZOOM_KWARGS},
     inline=TO_HTML,
 )
@@ -431,8 +453,7 @@ toggle_plot(
     kwargs1={
         "df": df,
         "by_box": True,
-        "min_obs": 10,
-        "smooth_kwargs": {"win_type": "gaussian"},
+        **FULL_BLOCK_KWARGS,
     },
     kwargs2={"df": df[df["push times"] < 120], "by_box": True, **ZOOM_KWARGS},
     inline=TO_HTML,
@@ -468,10 +489,15 @@ def _auxiliary_plot(
 plot_quantity_across_block(
     df,
     y="push intervals",
+    x="push times",
     auxiliary_plot=_auxiliary_plot,
     min_obs=10,
     by_box=True,
-    errorbar="se",
+    smooth_kwargs=dict(
+        fill_value=np.nan,
+        min_periods=1,
+    ),
+    fig_title="Push intervals",
 )
 
 # %% [markdown]
@@ -483,7 +509,7 @@ plot_quantity_across_block(
 plot_reward_per_push_across_block(df, min_obs=10, by_box=True)
 
 # %% [markdown]
-# The reward-per-push start off low but increase over time in the block. As reliability increases, they start off higher.
+# The reward-per-push starts off low but increase over time in the block. As reliability increases, they start off higher.
 
 # %% [markdown]
 # ## Matching Law

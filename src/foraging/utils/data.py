@@ -1,3 +1,7 @@
+"""
+These functions are used to load and process the data, including useful data manipulations to perform on the DataFrame.
+"""
+
 import fnmatch
 import logging
 import os
@@ -43,6 +47,26 @@ def get_subjects(path: str) -> list[str]:
     subject_files = fnmatch.filter(os.listdir(path), "data_*.mat")
     subjects = [subject_file.split(".")[0][5:] for subject_file in subject_files]
     return subjects
+
+
+def get_subject_kappa_levels(subject: str) -> dict[str, tuple[float, ...]]:
+    """
+    Get kappa levels for a specific subject.
+
+    Args:
+        subject: Subject name
+
+    Returns:
+        Dictionary mapping kappa categories to their values
+
+    Raises:
+        KeyError: If subject not found in KAPPA_LEVELS
+    """
+    if subject not in KAPPA_LEVELS:
+        raise KeyError(
+            f"Subject '{subject}' not found in KAPPA_LEVELS. Available: {list(KAPPA_LEVELS.keys())}"
+        )
+    return KAPPA_LEVELS[subject]
 
 
 def open_subject_file(subject: str, path: str = ".") -> h5py.File:

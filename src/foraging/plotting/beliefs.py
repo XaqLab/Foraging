@@ -38,7 +38,7 @@ from foraging.utils.data import (
     process_block_safely,
     process_blocks,
 )
-from foraging.utils.models import AbstractBelief, BeliefModule
+from foraging.utils.models import AbstractBelief, Posterior
 from foraging.utils.stats import moving_average
 
 
@@ -259,7 +259,7 @@ def reward_beliefs3d(
 @legend_handler(bbox=(1.15, 1))
 def plot_schedule_beliefs_in_block(
     df: pd.DataFrame,
-    beliefs: dict[tuple, BeliefModule],
+    beliefs: dict[tuple, Posterior],
     conds: dict[str, Any],
     palette: dict = PALETTE,
     heatmap_palette: dict = HEATMAP_PALETTE,
@@ -422,7 +422,7 @@ def plot_schedule_beliefs_in_block(
 
 def plot_schedule_beliefs_mean_and_std_across_block(
     df: pd.DataFrame,
-    beliefs: dict[tuple, BeliefModule],
+    beliefs: dict[tuple, Posterior],
     conds: dict[str, Any] = None,
     x: str = "push times",
     palette: dict = PALETTE,
@@ -676,7 +676,7 @@ def plot_accuracy_across_block(
 
 def plot_schedule_beliefs_entropy_across_blocks(
     df: pd.DataFrame,
-    beliefs: dict[tuple, BeliefModule],
+    beliefs: dict[tuple, Posterior],
     conds: dict[str, Any] = None,
     x: str = "push times",
     palette: dict = PALETTE,

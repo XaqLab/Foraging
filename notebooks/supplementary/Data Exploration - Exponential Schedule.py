@@ -266,7 +266,23 @@ plot_push_intervals_vs_reward_intervals(
 )
 
 # %% [markdown]
-# Contrary to expectations, there appears to be no correlation between the push intervals and reward intervals, not even when the reliability is high.
+# Contrary to expectations, there appears to be no correlation between the push intervals and reward intervals, not even when the reliability is high. There is an interesting cluster preserved across subjects, likely the result of spamming pushes. We separate these figures into stay vs switch pushes below.
+
+# %%
+plot_push_intervals_vs_reward_intervals(
+    df[(df["push intervals"] < 60) & (df["reward intervals"] < 60)],
+    conds={"stay/switch": "stay"},
+    title_override="(Stay pushes) push intervals vs reward intervals",
+    annotate_reg=True,
+)
+
+# %%
+plot_push_intervals_vs_reward_intervals(
+    df[(df["push intervals"] < 60) & (df["reward intervals"] < 60)],
+    conds={"stay/switch": "switch"},
+    title_override="(Switch pushes) push intervals vs reward intervals",
+    annotate_reg=True,
+)
 
 # %% [markdown]
 # ### Surprise
@@ -275,6 +291,26 @@ plot_push_intervals_vs_reward_intervals(
 
 # %%
 plot_next_push_surprise(df, legend_kwargs=dict(title=None), s=10)
+
+# %%
+df2 = df.copy()
+
+# First, identify consecutive pushes for each box
+# TODO: double check this logic, because it disagrees with push interval vs reward interval plot
+push_deltas = get_blocks(df2, groupers=["box"])
+df2.loc[:, "consecutive wait"] = push_deltas["push # by box"].diff().fillna(1)
+df2 = df2.loc[df2["consecutive wait"] == 1].copy()
+
+# Calculate the change in push interval
+push_deltas = get_blocks(df2, groupers=["box"])
+df2.loc[:, "change in next push interval"] = -push_deltas["push intervals"].diff(-1)
+df2.loc[:, "rewarded"] = df2["reward outcomes"].map({True: "yes", False: "no"})
+
+# Track whether the subject stayed or switched after each push
+df2.loc[:, "stay/switch next"] = df2["stay/switch"].shift(-1)
+df2.loc[:, "future push interval"] = (
+    df2["push intervals"] + df2["change in next push interval"]
+)
 
 # %% [markdown]
 # Rather idiosyncratic behavior. In general, the longer a subject waits to push, the sooner they will go next time, which is just a trivial aspect of the push interval distribution (to see this, consider a gaussian distribution and condition the differences between pairs of samples on one of the samples). Let's break this down:

@@ -1483,7 +1483,6 @@ def plot_runlengths(
                     hue="box",
                     palette=PALETTE,
                     discrete=True,
-                    common_norm=True,
                     multiple="stack",
                     legend=i == len(kappas) - 1,
                     ax=ax[i],
@@ -1657,6 +1656,7 @@ def plot_next_push_surprise(
     df = df.loc[df["consecutive wait"] == 1].copy()
 
     # Calculate the change in push interval
+    push_deltas = get_blocks(df, groupers=["box"])
     df.loc[:, "change in next push interval"] = -push_deltas["push intervals"].diff(-1)
     df.loc[:, "rewarded"] = df["reward outcomes"].map({True: "yes", False: "no"})
 
@@ -1692,9 +1692,8 @@ def plot_next_push_surprise(
                     legend=cnt == len(kappas),
                     **kwargs,
                 )
-                axes[i][j].hlines(
-                    0, 0, axes[i][j].get_xlim()[1], linestyles="dashed", colors="black"
-                )
+                axes[i][j].hlines(0, 0, axes[i][j].get_xlim()[1], colors="black")
+                axes[i][j].plot([0, 40], [0, -40], linestyle="dashed", color="black")
                 axes[i][j].set_xlim([0, 40])
                 axes[i][j].set_ylim([-40, 40])
         fig.suptitle(

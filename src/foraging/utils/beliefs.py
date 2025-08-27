@@ -1,4 +1,5 @@
 import logging
+from copy import deepcopy
 from typing import Any, Callable, Type
 
 import numpy as np
@@ -10,7 +11,12 @@ from sklearn.utils.class_weight import compute_sample_weight
 
 from foraging.utils import discrete_time
 from foraging.utils.data import map_box_positions_to_ranks, process_block_safely
-from foraging.utils.models import BeliefModule, EventID, IndexedBelief
+from foraging.utils.models import (
+    BeliefCollection,
+    BoxesBeliefContainer,
+    EventID,
+    Posterior,
+)
 from foraging.utils.stats import mcfadden_pseudo_rsquared, permutation_test_logistic
 
 logger = logging.getLogger(__name__)
@@ -37,15 +43,39 @@ def fisher_info_reward_observations(t, schedule, alpha):
             return result
 
 
-@process_block_safely
+def sync_beliefs_in_block(df: pd.DataFrame, index: tuple, beliefs: BeliefCollection):
+    """
+    Syncs the beliefs in a block.
+    """
+    block_data = df.loc[index]
+    x = block_data[["box position", "push times"]].values
+    sync_beliefs = deepcopy(beliefs)
+    old_belief = [
+        beliefs[beliefs.id(i)].prior for i in range(len(beliefs))
+    ]  # Start with priors
+    boxes = np.array(range(len(beliefs))).astype(int)
+
+    # Populate each timestep with the most current beliefs at other boxes
+    for box, t in x:
+        other_boxes = boxes[boxes != box]
+        push_key = EventID(index + (t,))
+        for other_box in other_boxes:
+            sync_beliefs[beliefs.id(other_box)][push_key] = old_belief[other_box]
+        old_belief[int(box)] = beliefs[beliefs.id(int(box))][push_key]
+    [x.sort() for x in sync_beliefs.records.values()]
+    return sync_beliefs
+
+
+# @process_block_safely
 # TODO: make filtering block consistent with rest of code
 def compute_posterior(
     df: pd.DataFrame,
     index: tuple,
-    posterior_maker: Callable[Any, IndexedBelief],
+    posterior_maker: Callable[Any, BoxesBeliefContainer],
+    postprocessing: Callable[Any, BoxesBeliefContainer] = None,
     *args,
     **kwargs,
-) -> BeliefModule:
+) -> BoxesBeliefContainer:
     """
     Computes the posterior belief over reward schedules for each box, updating after each push.
 
@@ -65,27 +95,30 @@ def compute_posterior(
     push_times = block_data["push times"].values
     push_intervals = block_data["push intervals"].values
     reward_outcomes = block_data["reward outcomes"].values
-    box_positions = block_data["box position"].values
+    box_positions = block_data["box position"].values.astype(int)
 
     # Construct posterior
-    posterior = BeliefModule(
-        EventID(index + (0,)), posterior_maker(df, index, *args, **kwargs)
-    )
-
+    beliefs = posterior_maker(df, index, *args, **kwargs)
     for i in range(n_obs):
-        posterior.update(
-            EventID(index + (push_times[i],)),
+        # id = beliefs.id(box_positions[i])
+        # beliefs[id].update(EventID(index + (push_times[i],)), (reward_outcomes[i], push_intervals[i]))
+        beliefs.update(
             box_positions[i],
+            EventID(index + (push_times[i],)),
             (reward_outcomes[i], push_intervals[i]),
         )
-    return posterior
+
+    # Sync beliefs across boxes, so that each timestep contains simultaneous beliefs
+    if postprocessing:
+        beliefs = postprocessing(df, index, beliefs)
+    return beliefs
 
 
 @process_block_safely
 def compute_accuracy(
     df: pd.DataFrame,
     index: tuple,
-    schedule_beliefs: BeliefModule,
+    schedule_beliefs: dict[tuple, BeliefCollection],
     *args,
     seed: int = 42,
     n_samples: int = 100,
@@ -108,13 +141,13 @@ def compute_accuracy(
     df_block = df.loc[index]
     box_ranks = map_box_positions_to_ranks(df_block)
     belief_block = schedule_beliefs[index]
-    n_steps = len(belief_block)
-    n_boxes = len(belief_block.prior)
+    n_boxes = len(belief_block)
+    n_steps = len(df_block)
     samples = np.zeros((n_steps, n_boxes, n_samples))
     rng = np.random.default_rng(seed)
 
     # Estimate accuracy via Monte Carlo sampling
-    for i in range(n_steps):
+    for i in range(n_boxes):
         belief = belief_block.query(i).content
         for j in range(n_boxes):
             belief_box = belief.query(j)
