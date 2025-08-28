@@ -1,10 +1,21 @@
 import itertools
+import math
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from itertools import islice, permutations, product
-from typing import Any, Callable, NamedTuple, Optional, Protocol, Type, TypeVar, Union
+from typing import (
+    Any,
+    Callable,
+    Generic,
+    NamedTuple,
+    Optional,
+    Protocol,
+    Type,
+    TypeVar,
+    Union,
+)
 
 import numpy as np
 from numpy.typing import ArrayLike
@@ -32,11 +43,17 @@ class GammaParameters:
 
 
 @dataclass
+class FactorizedObservation:
+    i: int
+    observation: O
+
+
+@dataclass
 class PossibleSchedules:
     """
     A convenience class that behaves like an array of schedules but also has structured fields.
     When converted with np.asarray(), it becomes an array of schedules.
-    When passed to GammaLikelihood, it provides schedule and shape fields.
+    When passed to a Likelihood, it provides schedule and shape fields.
     """
 
     shape: float
@@ -54,25 +71,6 @@ class PossibleSchedules:
 
 
 ## INTERFACES AND ABSTRACTIONS
-
-
-# tests
-class Uniform:
-    def __init__(self, support: Iterable[X]):
-        self.support = support
-        self._support = np.asarray(support)  # for indexing
-        self._representation = np.ones(len(support)) / len(support)
-
-    def representation(self) -> ArrayLike:
-        return self._representation
-
-    def sample(self, n: int = 1) -> Iterable[X]:
-        return np.random.choice(self._support, size=n, p=self.representation())
-
-    def query(self, x: X) -> float:
-        return self.representation()[np.argwhere(self._support == x)[0][0]]
-
-
 class Belief(Protocol[X]):
     """
     Interface for a belief.
@@ -86,33 +84,6 @@ class Belief(Protocol[X]):
     def sample(self, n: int = 1) -> Iterable[X]: ...
 
     def query(self, x: X) -> float: ...
-
-
-class BeliefCollection(Protocol[X]):
-    """Convenience class for a collection of beliefs."""
-
-    def __init__(self, n: int, belief_cls: Type[Belief[X]], *args, **kwargs):
-        self.belief_cls = belief_cls
-        self.beliefs = [belief_cls(*args, **kwargs) for _ in range(n)]
-
-    def __getitem__(self, i: int) -> Belief[X]:
-        return self.beliefs[i]
-
-    def __setitem__(self, i: int, belief: Belief[X]):
-        self.beliefs[i] = belief
-
-    @property
-    def representation(self) -> Iterable[Any]:
-        return [belief.representation() for belief in self.beliefs]
-
-    def sample(self, n: int = 1) -> Iterable[X]:
-        return [belief.sample(n) for belief in self.beliefs]
-
-    def query(self, x: Iterable[X]) -> Iterable[float]:
-        return [belief.query(_x) for belief, _x in zip(self.beliefs, x)]
-
-    def query_by_index(self, i: int, x: X) -> float:
-        return self.beliefs[i].query(x)
 
 
 class Likelihood(Protocol[X, O]):
@@ -131,10 +102,10 @@ class BeliefUpdate(Protocol[X, O]):
     def __call__(self, prior: Belief[X], o: O) -> Belief[X]: ...
 
 
-class UpdatesByBox(Protocol[O, ID]):
+class UpdatesByBox(Protocol[ID]):
     """Convenience protocol for updating beliefs with a box-specific observation."""
 
-    def update(self, box_position: int, id: ID, o: O): ...
+    def update(self, id: ID, o: FactorizedObservation): ...
 
 
 ## IMPLEMENTATIONS
@@ -170,6 +141,26 @@ class Probabilities:
 
     def __len__(self) -> int:
         return len(self.support)
+
+
+class FactorizedBelief:
+    def __init__(self, n_factors: int, belief_cls: Type[Belief[X]], *args, **kwargs):
+        self.beliefs = [belief_cls(*args, **kwargs) for _ in range(n_factors)]
+
+    def __getitem__(self, i: int) -> Belief[X]:
+        return self.beliefs[i]
+
+    def __setitem__(self, i: int, belief: Belief[X]):
+        self.beliefs[i] = belief
+
+    def __len__(self) -> int:
+        return len(self.beliefs)
+
+    def query(self, x: Iterable[X]) -> float:
+        return math.prod([self.beliefs[i].query(_x) for i, _x in enumerate(x)])
+
+    def sample(self, n: int = 1) -> Iterable[X]:
+        return [belief.sample(n) for belief in self.beliefs]
 
 
 class ExactBayesianUpdateOnProbabilities:
@@ -258,7 +249,8 @@ class Posterior(RecordKeeper[ID, Belief[X]]):
         return self[self.id(-1)].sample(n)
 
 
-class FactorizedPosterior(Posterior[ID, Belief[X]]):
+# TODO: you still want a belief collection ie. list of Beliefs
+class FactorizedPosterior(Posterior[ID, FactorizedBelief[X]]):
     """
     A factorized posterior that inherits from Posterior and implements UpdatesByBox.
     Each factor is managed as a separate Posterior instance, allowing independent updates.
@@ -267,9 +259,9 @@ class FactorizedPosterior(Posterior[ID, Belief[X]]):
     def __init__(
         self,
         n_factors: int,
+        init_id: ID,
         belief_cls: Type[Belief[X]],
         update: BeliefUpdate[X, O],
-        factor_ids: list[ID] = None,
         *args,
         **kwargs,
     ):
@@ -283,13 +275,10 @@ class FactorizedPosterior(Posterior[ID, Belief[X]]):
             factor_ids: Optional list of IDs for each factor (defaults to [0, 1, 2, ...])
             *args, **kwargs: Arguments passed to belief_cls constructor
         """
-        # Create factor IDs if not provided
-        if factor_ids is None:
-            factor_ids = list(range(n_factors))
 
         # Initialize the first factor as the main posterior
         first_prior = belief_cls(*args, **kwargs)
-        super().__init__(factor_ids[0], first_prior, update)
+        super().__init__(init_id, first_prior, update)
 
         # Store the update function and factor information
         self._update_func = update
@@ -303,7 +292,7 @@ class FactorizedPosterior(Posterior[ID, Belief[X]]):
             prior = belief_cls(*args, **kwargs)
             self[factor_ids[i]] = prior
 
-    def update(self, box_position: int, id: ID, o: O):
+    def update(self, id: ID, o: FactorizedBelief):
         """
         Update a specific factor based on box position and observation.
         This method satisfies the UpdatesByBox protocol.
@@ -313,54 +302,10 @@ class FactorizedPosterior(Posterior[ID, Belief[X]]):
             id: Identifier (unused, kept for protocol compatibility)
             o: Observation containing the data for updating
         """
-        if box_position < 0 or box_position >= len(self._factor_ids):
-            raise ValueError(
-                f"Box position {box_position} out of range [0, {len(self._factor_ids)-1}]"
-            )
-
-        # Get the factor ID for this box position
-        factor_id = self._factor_ids[box_position]
-
-        # Update the specific factor using the parent Posterior's update mechanism
-        self[factor_id] = self._update_func(self[factor_id], o)
-
-    def query_factor(self, factor_idx: int, x: X) -> float:
-        """
-        Query a specific factor's belief.
-
-        Args:
-            factor_idx: Index of the factor to query
-            x: Value to query
-
-        Returns:
-            Probability of x under the specified factor's belief
-        """
-        if factor_idx < 0 or factor_idx >= len(self._factor_ids):
-            raise ValueError(
-                f"Factor index {factor_idx} out of range [0, {len(self._factor_ids)-1}]"
-            )
-
-        factor_id = self._factor_ids[factor_idx]
-        return self[factor_id].query(x)
-
-    def sample_factor(self, factor_idx: int, n: int = 1) -> Iterable[X]:
-        """
-        Sample from a specific factor's belief.
-
-        Args:
-            factor_idx: Index of the factor to sample from
-            n: Number of samples to draw
-
-        Returns:
-            Samples from the specified factor's belief
-        """
-        if factor_idx < 0 or factor_idx >= len(self._factor_ids):
-            raise ValueError(
-                f"Factor index {factor_idx} out of range [0, {len(self._factor_ids)-1}]"
-            )
-
-        factor_id = self._factor_ids[factor_idx]
-        return self[factor_id].sample(n)
+        i = o.i
+        box_beliefs = deepcopy(self[self.id(-1)])
+        box_beliefs[i] = self.update(box_beliefs[i], o.observation)
+        self[id] = box_beliefs
 
     def get_factor_representation(self, factor_idx: int) -> Any:
         """
