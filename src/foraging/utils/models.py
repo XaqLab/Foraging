@@ -42,10 +42,10 @@ class GammaParameters:
     schedule: float
 
 
-@dataclass
-class FactorizedObservation:
-    i: int
-    observation: O
+class IndexedObservation(Generic[O]):
+    def __init__(self, i: int, observation: O):
+        self.i = i
+        self.observation = observation
 
 
 @dataclass
@@ -53,7 +53,7 @@ class PossibleSchedules:
     """
     A convenience class that behaves like an array of schedules but also has structured fields.
     When converted with np.asarray(), it becomes an array of schedules.
-    When passed to a Likelihood, it provides schedule and shape fields.
+    When passed to a Likelihood, it acts as an instance of GammaParameters.
     """
 
     shape: float
@@ -68,6 +68,9 @@ class PossibleSchedules:
 
     def __iter__(self):
         return iter(self.schedule)
+
+    def __getitem__(self, key):
+        return self.schedule[key]
 
 
 ## INTERFACES AND ABSTRACTIONS
@@ -105,7 +108,7 @@ class BeliefUpdate(Protocol[X, O]):
 class UpdatesByBox(Protocol[ID]):
     """Convenience protocol for updating beliefs with a box-specific observation."""
 
-    def update(self, id: ID, o: FactorizedObservation): ...
+    def update(self, id: ID, o: IndexedObservation): ...
 
 
 ## IMPLEMENTATIONS
@@ -144,8 +147,8 @@ class Probabilities:
 
 
 class FactorizedBelief:
-    def __init__(self, n_factors: int, belief_cls: Type[Belief[X]], *args, **kwargs):
-        self.beliefs = [belief_cls(*args, **kwargs) for _ in range(n_factors)]
+    def __init__(self, n_factors: int, prior: Belief[X]):
+        self.beliefs = [deepcopy(prior) for _ in range(n_factors)]
 
     def __getitem__(self, i: int) -> Belief[X]:
         return self.beliefs[i]
@@ -155,6 +158,10 @@ class FactorizedBelief:
 
     def __len__(self) -> int:
         return len(self.beliefs)
+
+    @property
+    def representation(self) -> Iterable[Any]:
+        return [belief.representation for belief in self.beliefs]
 
     def query(self, x: Iterable[X]) -> float:
         return math.prod([self.beliefs[i].query(_x) for i, _x in enumerate(x)])
@@ -168,14 +175,14 @@ class ExactBayesianUpdateOnProbabilities:
     Exact Bayesian update on Probabilities.
     """
 
-    def __init__(self, likelihood: Likelihood[X, O], vectorized: bool = False):
-        """Set vectorized to True to vectorize likelihood over the parameters."""
+    def __init__(self, likelihood: Likelihood[X, O], vectorize: bool = False):
+        """Set vectorize to True to vectorize likelihood over the parameters."""
         self.likelihood = likelihood
-        self.vectorized = vectorized
+        self.vectorize = vectorize
 
     def __call__(self, prior: Probabilities, data: O) -> Probabilities:
         # Bayes rule: posterior ∝ likelihood × prior
-        if self.vectorized:
+        if self.vectorize:
             posterior_probs = (
                 self.likelihood(data, prior.support) * prior.representation
             )
@@ -192,11 +199,11 @@ class ExactBayesianUpdateOnProbabilities:
         return Probabilities(prior.support, posterior_probs)
 
 
-class RecordKeeper(Protocol[ID, R]):
+class RecordKeeper(Generic[ID, R]):
 
     def __init__(self, init_id: ID = None, init_record: R = None):
         self._records = {}
-        if init_record and init_id:
+        if init_record is not None and init_id is not None:
             self._records[init_id] = init_record
 
     def id(self, i: int) -> ID:
@@ -231,16 +238,18 @@ class RecordKeeper(Protocol[ID, R]):
 class Posterior(RecordKeeper[ID, Belief[X]]):
     def __init__(self, init_id: ID, prior: Belief[X], update: BeliefUpdate[X, O]):
         super().__init__(init_id, prior)
-        self.update = update
+        self._update = update
 
+    @property
     def prior(self) -> Belief[X]:
         return self[self.id(0)]
 
-    def representation(self):
-        return [self[id].representation() for id in self.records.keys()]
+    @property
+    def representation(self) -> Iterable[Any]:
+        return [self[id].representation for id in self.records.keys()]
 
     def update(self, id: ID, o: O):
-        self[id] = self.update(self[self.id(-1)], o)
+        self[id] = self._update(self[self.id(-1)], o)
 
     def query(self, x: X) -> float:
         return self[self.id(-1)].query(x)
@@ -248,9 +257,12 @@ class Posterior(RecordKeeper[ID, Belief[X]]):
     def sample(self, n: int = 1) -> Iterable[X]:
         return self[self.id(-1)].sample(n)
 
+    @property
+    def head(self) -> Belief[X]:
+        return self[self.id(-1)]
 
-# TODO: you still want a belief collection ie. list of Beliefs
-class FactorizedPosterior(Posterior[ID, FactorizedBelief[X]]):
+
+class FactorizedPosterior(Posterior):
     """
     A factorized posterior that inherits from Posterior and implements UpdatesByBox.
     Each factor is managed as a separate Posterior instance, allowing independent updates.
@@ -260,8 +272,8 @@ class FactorizedPosterior(Posterior[ID, FactorizedBelief[X]]):
         self,
         n_factors: int,
         init_id: ID,
-        belief_cls: Type[Belief[X]],
         update: BeliefUpdate[X, O],
+        prior: Belief[X],
         *args,
         **kwargs,
     ):
@@ -277,22 +289,10 @@ class FactorizedPosterior(Posterior[ID, FactorizedBelief[X]]):
         """
 
         # Initialize the first factor as the main posterior
-        first_prior = belief_cls(*args, **kwargs)
-        super().__init__(init_id, first_prior, update)
+        first_belief = FactorizedBelief(n_factors, prior)
+        super().__init__(init_id, first_belief, update)
 
-        # Store the update function and factor information
-        self._update_func = update
-        self._factor_ids = factor_ids
-        self._belief_cls = belief_cls
-        self._belief_args = args
-        self._belief_kwargs = kwargs
-
-        # Initialize remaining factors
-        for i in range(1, n_factors):
-            prior = belief_cls(*args, **kwargs)
-            self[factor_ids[i]] = prior
-
-    def update(self, id: ID, o: FactorizedBelief):
+    def update(self, id: ID, o: IndexedObservation):
         """
         Update a specific factor based on box position and observation.
         This method satisfies the UpdatesByBox protocol.
@@ -304,51 +304,8 @@ class FactorizedPosterior(Posterior[ID, FactorizedBelief[X]]):
         """
         i = o.i
         box_beliefs = deepcopy(self[self.id(-1)])
-        box_beliefs[i] = self.update(box_beliefs[i], o.observation)
+        box_beliefs[i] = self._update(box_beliefs[i], o.observation)
         self[id] = box_beliefs
-
-    def get_factor_representation(self, factor_idx: int) -> Any:
-        """
-        Get the representation of a specific factor.
-
-        Args:
-            factor_idx: Index of the factor
-
-        Returns:
-            Representation of the specified factor's belief
-        """
-        if factor_idx < 0 or factor_idx >= len(self._factor_ids):
-            raise ValueError(
-                f"Factor index {factor_idx} out of range [0, {len(self._factor_ids)-1}]"
-            )
-
-        factor_id = self._factor_ids[factor_idx]
-        return self[factor_id].representation
-
-    def get_factor_id(self, factor_idx: int) -> ID:
-        """
-        Get the ID of a specific factor.
-
-        Args:
-            factor_idx: Index of the factor
-
-        Returns:
-            The ID of the specified factor
-        """
-        if factor_idx < 0 or factor_idx >= len(self._factor_ids):
-            raise ValueError(
-                f"Factor index {factor_idx} out of range [0, {len(self._factor_ids)-1}]"
-            )
-
-        return self._factor_ids[factor_idx]
-
-    @property
-    def factor_ids(self) -> list[ID]:
-        """Get the list of factor IDs."""
-        return self._factor_ids.copy()
-
-    def __len__(self) -> int:
-        return len(self._factor_ids)
 
 
 class GammaLikelihood:
@@ -367,488 +324,488 @@ class GammaLikelihood:
 
 
 ## ABSTRACT CLASSES
-class AbstractBelief(ABC):
-    """
-    Abstract class for a belief.
-    Structurally, at a minimum, a belief has a prior (which is also a belief), support, and features ie. probabilities, parameters, arbitrary representations, etc.
-    Functionally, at a minimum, a belief supports updating after receiving an observation, normalizing after updating, querying the probability of a given value, and sampling from the belief (if computable).
-    """
+# class AbstractBelief(ABC):
+#     """
+#     Abstract class for a belief.
+#     Structurally, at a minimum, a belief has a prior (which is also a belief), support, and features ie. probabilities, parameters, arbitrary representations, etc.
+#     Functionally, at a minimum, a belief supports updating after receiving an observation, normalizing after updating, querying the probability of a given value, and sampling from the belief (if computable).
+#     """
 
-    @abstractmethod
-    def prior(self, *args, **kwargs) -> Any:
-        pass
+#     @abstractmethod
+#     def prior(self, *args, **kwargs) -> Any:
+#         pass
 
-    @abstractmethod
-    def support(self, *args, **kwargs) -> Any:
-        pass
+#     @abstractmethod
+#     def support(self, *args, **kwargs) -> Any:
+#         pass
 
-    @abstractmethod
-    def features(self, *args, **kwargs) -> Any:
-        pass
+#     @abstractmethod
+#     def features(self, *args, **kwargs) -> Any:
+#         pass
 
-    @abstractmethod
-    def normalize(self, *args, **kwargs) -> Any:
-        pass
+#     @abstractmethod
+#     def normalize(self, *args, **kwargs) -> Any:
+#         pass
 
-    @abstractmethod
-    def update(self, *args, **kwargs) -> Any:
-        pass
+#     @abstractmethod
+#     def update(self, *args, **kwargs) -> Any:
+#         pass
 
-    @abstractmethod
-    def query(self, *args, **kwargs) -> Any:
-        pass
+#     @abstractmethod
+#     def query(self, *args, **kwargs) -> Any:
+#         pass
 
-    @abstractmethod
-    def sample(self, *args, **kwargs) -> Any:
-        pass
+#     @abstractmethod
+#     def sample(self, *args, **kwargs) -> Any:
+#         pass
 
 
-class BoxesBeliefContainer(ABC):
-    """
-    A convenience abstraction for representing a set of beliefs about boxes, regardless of the structure of the beliefs ie. 3 independent beliefs for each box vs 1 belief over permutations of fixed schedules.
-    Requires update method to take a box-related variable as an argument.
-    """
+# class BoxesBeliefContainer(ABC):
+#     """
+#     A convenience abstraction for representing a set of beliefs about boxes, regardless of the structure of the beliefs ie. 3 independent beliefs for each box vs 1 belief over permutations of fixed schedules.
+#     Requires update method to take a box-related variable as an argument.
+#     """
 
-    @abstractmethod
-    def update(self, box: int = None, *args, **kwargs) -> Any:
-        pass
+#     @abstractmethod
+#     def update(self, box: int = None, *args, **kwargs) -> Any:
+#         pass
 
-    @abstractmethod
-    def __len__(self) -> int:
-        pass
+#     @abstractmethod
+#     def __len__(self) -> int:
+#         pass
 
 
-class IndexedBelief(AbstractBelief):
-    """
-    A belief that is indexed by an integer.
-    This is useful for representing a belief that is indexed by a box number, for example.
-    The update method is then called with the box number as the first argument.
-    The query method is then called with the box number as the first argument.
-    """
+# class IndexedBelief(AbstractBelief):
+#     """
+#     A belief that is indexed by an integer.
+#     This is useful for representing a belief that is indexed by a box number, for example.
+#     The update method is then called with the box number as the first argument.
+#     The query method is then called with the box number as the first argument.
+#     """
 
-    @abstractmethod
-    def update(self, i: int, *args, **kwargs) -> Any:
-        pass
+#     @abstractmethod
+#     def update(self, i: int, *args, **kwargs) -> Any:
+#         pass
 
-    @abstractmethod
-    def query(self, i: int, *args, **kwargs) -> Any:
-        pass
+#     @abstractmethod
+#     def query(self, i: int, *args, **kwargs) -> Any:
+#         pass
 
-    @abstractmethod
-    def __len__(self) -> int:
-        pass
+#     @abstractmethod
+#     def __len__(self) -> int:
+#         pass
 
 
-### IMPLEMENTATIONS
-class RealID(AbstractID):
-    def __init__(self, values: tuple, fields: tuple[str]):
-        self._values = values
-        self._fields = fields
+# ### IMPLEMENTATIONS
+# class RealID(AbstractID):
+#     def __init__(self, values: tuple, fields: tuple[str]):
+#         self._values = values
+#         self._fields = fields
 
-    @property
-    def fields(self) -> tuple[str]:
-        return self._fields
+#     @property
+#     def fields(self) -> tuple[str]:
+#         return self._fields
 
-    @fields.setter
-    def fields(self, fields: tuple[str]):
-        self._fields = fields
+#     @fields.setter
+#     def fields(self, fields: tuple[str]):
+#         self._fields = fields
 
-    @property
-    def values(self) -> tuple:
-        return self._values
+#     @property
+#     def values(self) -> tuple:
+#         return self._values
 
-    @values.setter
-    def values(self, values: tuple):
-        self._values = values
+#     @values.setter
+#     def values(self, values: tuple):
+#         self._values = values
 
-    def __eq__(self, other: AbstractID) -> bool:
-        return self.values == other.values and all(
-            x == y for x, y in zip(self.fields, other.fields)
-        )
+#     def __eq__(self, other: AbstractID) -> bool:
+#         return self.values == other.values and all(
+#             x == y for x, y in zip(self.fields, other.fields)
+#         )
 
-    def __hash__(self) -> int:
-        return hash((self.values, self.fields))
+#     def __hash__(self) -> int:
+#         return hash((self.values, self.fields))
 
-    def __lt__(self, other: AbstractID) -> bool:
-        return self.values < other.values
+#     def __lt__(self, other: AbstractID) -> bool:
+#         return self.values < other.values
 
 
-class IntID(RealID):
-    def __init__(self, values: int):
-        super().__init__((values,), ("id",))
+# class IntID(RealID):
+#     def __init__(self, values: int):
+#         super().__init__((values,), ("id",))
 
 
-class EventID(RealID):
+# class EventID(RealID):
 
-    def __init__(self, values: tuple, minimal: bool = False):
-        if minimal:
-            super().__init__(values, INDEX[:MIN_INDEX])
-        else:
-            super().__init__(values, INDEX)
+#     def __init__(self, values: tuple, minimal: bool = False):
+#         if minimal:
+#             super().__init__(values, INDEX[:MIN_INDEX])
+#         else:
+#             super().__init__(values, INDEX)
 
 
-class RecordKeeper(AbstractRecordKeeper):
+# class RecordKeeper(AbstractRecordKeeper):
 
-    def __init__(self, init_id: AbstractID = None, init_record: Any = None):
-        self._records = {}
-        if init_record and init_id:
-            self._records[init_id] = init_record
+#     def __init__(self, init_id: AbstractID = None, init_record: Any = None):
+#         self._records = {}
+#         if init_record and init_id:
+#             self._records[init_id] = init_record
 
-    def id(self, i: int) -> AbstractID:
-        if i < 0:
-            i = len(self) + i
-        return list(self._records.keys())[i]
+#     def id(self, i: int) -> AbstractID:
+#         if i < 0:
+#             i = len(self) + i
+#         return list(self._records.keys())[i]
 
-    def __getitem__(self, id: AbstractID) -> Any:
-        return self._records[id]
+#     def __getitem__(self, id: AbstractID) -> Any:
+#         return self._records[id]
 
-    def __setitem__(self, id: AbstractID, record: Any) -> Any:
-        self._records[id] = record
+#     def __setitem__(self, id: AbstractID, record: Any) -> Any:
+#         self._records[id] = record
 
-    @property
-    def records(self) -> dict[AbstractID, Any]:
-        return self._records
+#     @property
+#     def records(self) -> dict[AbstractID, Any]:
+#         return self._records
 
-    @records.setter
-    def records(self, records: dict[AbstractID, Any]):
-        self._records = records
+#     @records.setter
+#     def records(self, records: dict[AbstractID, Any]):
+#         self._records = records
 
-    def delete(self, id: AbstractID) -> Any:
-        return self.records.pop(id, None)
+#     def delete(self, id: AbstractID) -> Any:
+#         return self.records.pop(id, None)
 
-    def __len__(self):
-        return len(self.records)
+#     def __len__(self):
+#         return len(self.records)
 
-    def sort(self):
-        self.records = dict(sorted(self.records.items()))
+#     def sort(self):
+#         self.records = dict(sorted(self.records.items()))
 
 
-class ArrayBelief(AbstractBelief):
-    """
-    A belief that is represented as an array of probabilities as the features.
-    """
+# class ArrayBelief(AbstractBelief):
+#     """
+#     A belief that is represented as an array of probabilities as the features.
+#     """
 
-    def __init__(self, support: np.ndarray, probabilities: np.ndarray = None):
-        self._support = support
-        if probabilities is None:
-            probabilities = np.ones(len(support)) / len(support)
-        self._prior = probabilities
-        self._features = probabilities
+#     def __init__(self, support: np.ndarray, probabilities: np.ndarray = None):
+#         self._support = support
+#         if probabilities is None:
+#             probabilities = np.ones(len(support)) / len(support)
+#         self._prior = probabilities
+#         self._features = probabilities
 
-    @property
-    def support(self) -> np.ndarray:
-        return self._support
+#     @property
+#     def support(self) -> np.ndarray:
+#         return self._support
 
-    @support.setter
-    def support(self, support: np.ndarray):
-        self._support = support
+#     @support.setter
+#     def support(self, support: np.ndarray):
+#         self._support = support
 
-    @property
-    def features(self) -> np.ndarray:
-        return self._features
+#     @property
+#     def features(self) -> np.ndarray:
+#         return self._features
 
-    @features.setter
-    def features(self, features: np.ndarray):
-        self._features = features
-        self.normalize()
+#     @features.setter
+#     def features(self, features: np.ndarray):
+#         self._features = features
+#         self.normalize()
 
-    @property
-    def prior(self) -> np.ndarray:
-        return self._prior
+#     @property
+#     def prior(self) -> np.ndarray:
+#         return self._prior
 
-    @prior.setter
-    def prior(self, prior: np.ndarray) -> Any:
-        self._prior = prior
+#     @prior.setter
+#     def prior(self, prior: np.ndarray) -> Any:
+#         self._prior = prior
 
-    def normalize(self, inplace: bool = True):
-        if inplace:
-            self._features /= self._features.sum()
-            return self._features
-        else:
-            return self._features / self._features.sum()
+#     def normalize(self, inplace: bool = True):
+#         if inplace:
+#             self._features /= self._features.sum()
+#             return self._features
+#         else:
+#             return self._features / self._features.sum()
 
-    def query(self, i: int, **kwargs):
-        return self.features[i]
+#     def query(self, i: int, **kwargs):
+#         return self.features[i]
 
-    def sample(self, n: int = 1, **kwargs) -> np.ndarray:
-        return np.random.choice(self.support, size=n, p=self.features)
+#     def sample(self, n: int = 1, **kwargs) -> np.ndarray:
+#         return np.random.choice(self.support, size=n, p=self.features)
 
-    def __len__(self) -> int:
-        return len(self.support)
+#     def __len__(self) -> int:
+#         return len(self.support)
 
 
-class GammaBoxBelief(ArrayBelief):
-    """
-    An implementation of the beliefs of a box where reward intervals are gamma distributed and observations are reward outcomes.
-    """
+# class GammaBoxBelief(ArrayBelief):
+#     """
+#     An implementation of the beliefs of a box where reward intervals are gamma distributed and observations are reward outcomes.
+#     """
 
-    def __init__(
-        self, shape: int = 1, schedules: np.ndarray = None, prior: ArrayBelief = None
-    ):
-        if prior:
-            super().__init__(prior.support, prior.features)
-        else:
-            super().__init__(schedules)
-        self.shape = shape
+#     def __init__(
+#         self, shape: int = 1, schedules: np.ndarray = None, prior: ArrayBelief = None
+#     ):
+#         if prior:
+#             super().__init__(prior.support, prior.features)
+#         else:
+#             super().__init__(schedules)
+#         self.shape = shape
 
-    def likelihood(self, obs: tuple[bool, float], schedule: np.ndarray) -> np.ndarray:
-        # Extract the reward availability and push interval.
-        is_avail = obs[0]
-        t = obs[1]
+#     def likelihood(self, obs: tuple[bool, float], schedule: np.ndarray) -> np.ndarray:
+#         # Extract the reward availability and push interval.
+#         is_avail = obs[0]
+#         t = obs[1]
 
-        # Calculate the probability of reward being available/unavailable after t time has passed under the given latents.
-        p_t = gamma.cdf(t, self.shape, scale=schedule / self.shape)
+#         # Calculate the probability of reward being available/unavailable after t time has passed under the given latents.
+#         p_t = gamma.cdf(t, self.shape, scale=schedule / self.shape)
 
-        # The last element is the probability of being in the last state, i.e., reward being available.
-        if (
-            not is_avail
-        ):  # If reward is not available, return the complementary probability.
-            return 1.0 - p_t
-        return p_t
+#         # The last element is the probability of being in the last state, i.e., reward being available.
+#         if (
+#             not is_avail
+#         ):  # If reward is not available, return the complementary probability.
+#             return 1.0 - p_t
+#         return p_t
 
-    def update(self, obs: tuple[bool, float], **kwargs):
-        self.features = (
-            self.likelihood(obs, self.support) * self.features
-        )  # this automatically normalizes due to setter property!!
+#     def update(self, obs: tuple[bool, float], **kwargs):
+#         self.features = (
+#             self.likelihood(obs, self.support) * self.features
+#         )  # this automatically normalizes due to setter property!!
 
 
-class IndependentBoxesBelief(IndexedBelief):
-    """
-    A belief that is represented as a collection of independent beliefs, one for each box.
-    """
+# class IndependentBoxesBelief(IndexedBelief):
+#     """
+#     A belief that is represented as a collection of independent beliefs, one for each box.
+#     """
 
-    def __init__(self, n_boxes: int, belief_cls: Type[AbstractBelief], *args, **kwargs):
-        self.n_boxes = n_boxes
-        self.belief_cls = belief_cls
-        self.beliefs = [belief_cls(*args, **kwargs) for _ in range(n_boxes)]
+#     def __init__(self, n_boxes: int, belief_cls: Type[AbstractBelief], *args, **kwargs):
+#         self.n_boxes = n_boxes
+#         self.belief_cls = belief_cls
+#         self.beliefs = [belief_cls(*args, **kwargs) for _ in range(n_boxes)]
 
-    def update(self, i: int, *args, **kwargs):
-        self.beliefs[i].update(*args, **kwargs)
+#     def update(self, i: int, *args, **kwargs):
+#         self.beliefs[i].update(*args, **kwargs)
 
-    def query(self, i: int, *args, **kwargs):
-        return self.beliefs[i]
+#     def query(self, i: int, *args, **kwargs):
+#         return self.beliefs[i]
 
-    def normalize(self, *args, **kwargs):
-        for belief in self.beliefs:
-            belief.normalize(*args, **kwargs)
+#     def normalize(self, *args, **kwargs):
+#         for belief in self.beliefs:
+#             belief.normalize(*args, **kwargs)
 
-    @property
-    def prior(self):
-        return [self.beliefs[i].prior for i in range(self.n_boxes)]
+#     @property
+#     def prior(self):
+#         return [self.beliefs[i].prior for i in range(self.n_boxes)]
 
-    @prior.setter
-    def prior(self, prior: AbstractBelief):
-        for belief in self.beliefs:
-            belief.prior = prior
+#     @prior.setter
+#     def prior(self, prior: AbstractBelief):
+#         for belief in self.beliefs:
+#             belief.prior = prior
 
-    @property
-    def support(self):
-        return [self.beliefs[i].support for i in range(self.n_boxes)]
+#     @property
+#     def support(self):
+#         return [self.beliefs[i].support for i in range(self.n_boxes)]
 
-    @support.setter
-    def support(self, support: ArrayLike):
-        for belief in self.beliefs:
-            belief.support = support
+#     @support.setter
+#     def support(self, support: ArrayLike):
+#         for belief in self.beliefs:
+#             belief.support = support
 
-    @property
-    def features(self):
-        return [self.beliefs[i].features for i in range(self.n_boxes)]
+#     @property
+#     def features(self):
+#         return [self.beliefs[i].features for i in range(self.n_boxes)]
 
-    @features.setter
-    def features(self, features: ArrayLike):
-        for i, belief in enumerate(self.beliefs):
-            belief.features = features[i]
+#     @features.setter
+#     def features(self, features: ArrayLike):
+#         for i, belief in enumerate(self.beliefs):
+#             belief.features = features[i]
 
-    def __len__(self):
-        return self.n_boxes
+#     def __len__(self):
+#         return self.n_boxes
 
 
-class IndependentGammaBoxesBelief(IndependentBoxesBelief):
-    def __init__(self, n_boxes: int, *args, **kwargs):
-        super().__init__(n_boxes, GammaBoxBelief, *args, **kwargs)
+# class IndependentGammaBoxesBelief(IndependentBoxesBelief):
+#     def __init__(self, n_boxes: int, *args, **kwargs):
+#         super().__init__(n_boxes, GammaBoxBelief, *args, **kwargs)
 
 
-class PermutationBelief(ArrayBelief):
-    def __init__(self, params: list):
-        super().__init__(list(permutations(params)))
+# class PermutationBelief(ArrayBelief):
+#     def __init__(self, params: list):
+#         super().__init__(list(permutations(params)))
 
 
-class PermutationGammaBoxesBelief(PermutationBelief):
-    def __init__(self, schedules: list, shape: int = 1):
-        super().__init__(schedules)
-        self.shape = shape
+# class PermutationGammaBoxesBelief(PermutationBelief):
+#     def __init__(self, schedules: list, shape: int = 1):
+#         super().__init__(schedules)
+#         self.shape = shape
 
-    def likelihood(self, i: int, obs: tuple[bool, float], perm: list):
-        # Extract the reward availability and push interval.
-        is_avail = obs[0]
-        t = obs[1]
-        schedule = perm[i]
+#     def likelihood(self, i: int, obs: tuple[bool, float], perm: list):
+#         # Extract the reward availability and push interval.
+#         is_avail = obs[0]
+#         t = obs[1]
+#         schedule = perm[i]
 
-        # Calculate the probability of reward being available/unavailable after t time has passed under the given latents.
-        p_t = gamma.cdf(t, self.shape, scale=schedule / self.shape)
+#         # Calculate the probability of reward being available/unavailable after t time has passed under the given latents.
+#         p_t = gamma.cdf(t, self.shape, scale=schedule / self.shape)
 
-        # The last element is the probability of being in the last state, i.e., reward being available.
-        if (
-            not is_avail
-        ):  # If reward is not available, return the complementary probability.
-            return 1.0 - p_t
-        return p_t
+#         # The last element is the probability of being in the last state, i.e., reward being available.
+#         if (
+#             not is_avail
+#         ):  # If reward is not available, return the complementary probability.
+#             return 1.0 - p_t
+#         return p_t
 
-    def update(self, i: int, obs: tuple[bool, float]):
-        new_features = np.zeros(len(self.support))
-        for j, perm in enumerate(self.support):
-            new_features[j] = self.likelihood(i, obs, perm) * self.features[j]
-        self.features = new_features
+#     def update(self, i: int, obs: tuple[bool, float]):
+#         new_features = np.zeros(len(self.support))
+#         for j, perm in enumerate(self.support):
+#             new_features[j] = self.likelihood(i, obs, perm) * self.features[j]
+#         self.features = new_features
 
 
-class RealID(AbstractID):
-    def __init__(self, values: tuple, fields: tuple[str]):
-        self._values = values
-        self._fields = fields
+# class RealID(AbstractID):
+#     def __init__(self, values: tuple, fields: tuple[str]):
+#         self._values = values
+#         self._fields = fields
 
-    @property
-    def fields(self) -> tuple[str]:
-        return self._fields
+#     @property
+#     def fields(self) -> tuple[str]:
+#         return self._fields
 
-    @fields.setter
-    def fields(self, fields: tuple[str]):
-        self._fields = fields
+#     @fields.setter
+#     def fields(self, fields: tuple[str]):
+#         self._fields = fields
 
-    @property
-    def values(self) -> tuple:
-        return self._values
+#     @property
+#     def values(self) -> tuple:
+#         return self._values
 
-    @values.setter
-    def values(self, values: tuple):
-        self._values = values
+#     @values.setter
+#     def values(self, values: tuple):
+#         self._values = values
 
-    def __eq__(self, other: AbstractID) -> bool:
-        return self.values == other.values and all(
-            x == y for x, y in zip(self.fields, other.fields)
-        )
+#     def __eq__(self, other: AbstractID) -> bool:
+#         return self.values == other.values and all(
+#             x == y for x, y in zip(self.fields, other.fields)
+#         )
 
-    def __hash__(self) -> int:
-        return hash((self.values, self.fields))
+#     def __hash__(self) -> int:
+#         return hash((self.values, self.fields))
 
-    def __lt__(self, other: AbstractID) -> bool:
-        return self.values < other.values
+#     def __lt__(self, other: AbstractID) -> bool:
+#         return self.values < other.values
 
 
-class IntID(RealID):
-    def __init__(self, values: int):
-        super().__init__((values,), ("id",))
+# class IntID(RealID):
+#     def __init__(self, values: int):
+#         super().__init__((values,), ("id",))
 
 
-class EventID(RealID):
+# class EventID(RealID):
 
-    def __init__(self, values: tuple, minimal: bool = False):
-        if minimal:
-            super().__init__(values, INDEX[:MIN_INDEX])
-        else:
-            super().__init__(values, INDEX)
+#     def __init__(self, values: tuple, minimal: bool = False):
+#         if minimal:
+#             super().__init__(values, INDEX[:MIN_INDEX])
+#         else:
+#             super().__init__(values, INDEX)
 
 
-class RecordKeeper(AbstractRecordKeeper):
+# class RecordKeeper(AbstractRecordKeeper):
 
-    def __init__(self, init_id: AbstractID = None, init_record: Any = None):
-        self._records = {}
-        if init_record and init_id:
-            self._records[init_id] = init_record
+#     def __init__(self, init_id: AbstractID = None, init_record: Any = None):
+#         self._records = {}
+#         if init_record and init_id:
+#             self._records[init_id] = init_record
 
-    def id(self, i: int) -> AbstractID:
-        if i < 0:
-            i = len(self) + i
-        return list(self._records.keys())[i]
+#     def id(self, i: int) -> AbstractID:
+#         if i < 0:
+#             i = len(self) + i
+#         return list(self._records.keys())[i]
 
-    def __getitem__(self, id: AbstractID) -> Any:
-        return self._records[id]
+#     def __getitem__(self, id: AbstractID) -> Any:
+#         return self._records[id]
 
-    def __setitem__(self, id: AbstractID, record: Any) -> Any:
-        self._records[id] = record
+#     def __setitem__(self, id: AbstractID, record: Any) -> Any:
+#         self._records[id] = record
 
-    @property
-    def records(self) -> dict[AbstractID, Any]:
-        return self._records
+#     @property
+#     def records(self) -> dict[AbstractID, Any]:
+#         return self._records
 
-    @records.setter
-    def records(self, records: dict[AbstractID, Any]):
-        self._records = records
+#     @records.setter
+#     def records(self, records: dict[AbstractID, Any]):
+#         self._records = records
 
-    def delete(self, id: AbstractID) -> Any:
-        return self.records.pop(id, None)
+#     def delete(self, id: AbstractID) -> Any:
+#         return self.records.pop(id, None)
 
-    def __len__(self):
-        return len(self.records)
+#     def __len__(self):
+#         return len(self.records)
 
-    def sort(self):
-        self.records = dict(sorted(self.records.items()))
+#     def sort(self):
+#         self.records = dict(sorted(self.records.items()))
 
 
-class Posterior(RecordKeeper, AbstractBelief):
+# class Posterior(RecordKeeper, AbstractBelief):
 
-    def __init__(self, init_id: AbstractID, init_belief: AbstractBelief):
-        super().__init__(init_id, init_belief)
+#     def __init__(self, init_id: AbstractID, init_belief: AbstractBelief):
+#         super().__init__(init_id, init_belief)
 
-    @property
-    def prior(self) -> AbstractBelief:
-        return self[self.id(0)]
+#     @property
+#     def prior(self) -> AbstractBelief:
+#         return self[self.id(0)]
 
-    @prior.setter
-    def prior(self, prior: AbstractBelief):
-        self[self.id(0)] = prior
+#     @prior.setter
+#     def prior(self, prior: AbstractBelief):
+#         self[self.id(0)] = prior
 
-    @property
-    def support(self):
-        return self.prior.support
+#     @property
+#     def support(self):
+#         return self.prior.support
 
-    @support.setter
-    def support(self, support):
-        # Change the support for all beliefs
-        for _, record in self.records.items():
-            record.support = support
+#     @support.setter
+#     def support(self, support):
+#         # Change the support for all beliefs
+#         for _, record in self.records.items():
+#             record.support = support
 
-    @property
-    def features(self):
-        return [self[id].features for id in self.records.keys()]
+#     @property
+#     def features(self):
+#         return [self[id].features for id in self.records.keys()]
 
-    @features.setter
-    def features(self, features: dict[AbstractID, Any]):
-        for id, record in self.records.items():
-            record.features = features[id]
+#     @features.setter
+#     def features(self, features: dict[AbstractID, Any]):
+#         for id, record in self.records.items():
+#             record.features = features[id]
 
-    def query(self, *args, **kwargs) -> Any:
-        self[self.id(-1)].query(*args, **kwargs)
+#     def query(self, *args, **kwargs) -> Any:
+#         self[self.id(-1)].query(*args, **kwargs)
 
-    def sample(self, *args, **kwargs) -> Any:
-        self[self.id(-1)].sample(*args, **kwargs)
+#     def sample(self, *args, **kwargs) -> Any:
+#         self[self.id(-1)].sample(*args, **kwargs)
 
-    def update(self, new_id: AbstractID, *args, **kwargs):
+#     def update(self, new_id: AbstractID, *args, **kwargs):
 
-        # Create a deep copy of the last belief
-        last_belief = self[self.id(-1)]
-        new_belief = deepcopy(last_belief)
+#         # Create a deep copy of the last belief
+#         last_belief = self[self.id(-1)]
+#         new_belief = deepcopy(last_belief)
 
-        # Invoke the update method on the contents of this copy
-        new_belief.update(*args, **kwargs)
+#         # Invoke the update method on the contents of this copy
+#         new_belief.update(*args, **kwargs)
 
-        # Add new belief
-        self[new_id] = new_belief
+#         # Add new belief
+#         self[new_id] = new_belief
 
-    def normalize(self, *args, **kwargs):
-        # Normalize all beliefs
-        for id, record in self.records.items():
-            record.normalize(*args, **kwargs)
+#     def normalize(self, *args, **kwargs):
+#         # Normalize all beliefs
+#         for id, record in self.records.items():
+#             record.normalize(*args, **kwargs)
 
 
-class BeliefCollection(RecordKeeper):
-    """
-    A collection of beliefs.
-    """
+# class BeliefCollection(RecordKeeper):
+#     """
+#     A collection of beliefs.
+#     """
 
-    def __init__(self, n: int, belief_cls: Type[AbstractBelief], *args, **kwargs):
-        super().__init__()
-        for i in range(n):
-            self[IntID(i)] = belief_cls(*args, **kwargs)
+#     def __init__(self, n: int, belief_cls: Type[AbstractBelief], *args, **kwargs):
+#         super().__init__()
+#         for i in range(n):
+#             self[IntID(i)] = belief_cls(*args, **kwargs)
 
-    def update(self, i: int, *args, **kwargs):
-        self[self.id(i)].update(*args, **kwargs)
+#     def update(self, i: int, *args, **kwargs):
+#         self[self.id(i)].update(*args, **kwargs)

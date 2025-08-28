@@ -21,7 +21,7 @@ from foraging.plotting import (
 )
 from foraging.plotting._base import (
     across_conditions_plotter,
-    plot_block_average_or_traces,
+    plot_quantity_across_block,
 )
 from foraging.utils import INDEX, MIN_INDEX
 from foraging.utils._base import kwargs_handler
@@ -38,12 +38,13 @@ from foraging.utils.data import (
     process_block_safely,
     process_blocks,
 )
-from foraging.utils.models import AbstractBelief, Posterior
+from foraging.utils.models import FactorizedPosterior, Posterior
 from foraging.utils.stats import moving_average
 
 
+# TODO: update these
 def likelihood_single_obs(
-    obs_model: AbstractBelief,
+    obs_model: Any,
     latents: ArrayLike,
     obs: Any,
     ax: Optional[plt.Axes] = None,
@@ -259,7 +260,7 @@ def reward_beliefs3d(
 @legend_handler(bbox=(1.15, 1))
 def plot_schedule_beliefs_in_block(
     df: pd.DataFrame,
-    beliefs: dict[tuple, Posterior],
+    beliefs: dict[tuple, FactorizedPosterior],
     conds: dict[str, Any],
     palette: dict = PALETTE,
     heatmap_palette: dict = HEATMAP_PALETTE,
@@ -289,8 +290,8 @@ def plot_schedule_beliefs_in_block(
     df_block = filter_df(df, conds)
     n_boxes = df_block["n boxes"].values[0]
     push_times = df_block["push times"].values
-    posteriors = np.array(beliefs[tuple(conds.values())].features)
-    schedule_candidates = beliefs[tuple(conds.values())].support[0]
+    posteriors = np.asarray(beliefs[tuple(conds.values())].representation)
+    schedule_candidates = beliefs[tuple(conds.values())].prior[0].support
     schedules = np.sort(df_block["schedule"].unique())
     mean_across_pushes = get_mean_beliefs_over_time(posteriors, schedule_candidates)[1:]
 
@@ -422,7 +423,7 @@ def plot_schedule_beliefs_in_block(
 
 def plot_schedule_beliefs_mean_and_std_across_block(
     df: pd.DataFrame,
-    beliefs: dict[tuple, Posterior],
+    beliefs: dict[tuple, FactorizedPosterior],
     conds: dict[str, Any] = None,
     x: str = "push times",
     palette: dict = PALETTE,
@@ -453,8 +454,8 @@ def plot_schedule_beliefs_mean_and_std_across_block(
     # Get beliefs of each block
     def _inner(df: pd.DataFrame, index: tuple):
         df_block = df.loc[index].reset_index()
-        posteriors = np.array(beliefs[index].features)
-        schedule_candidates = beliefs[index].support[0]
+        posteriors = np.asarray(beliefs[index].representation)
+        schedule_candidates = beliefs[index].prior[0].support
 
         # Get mean and std of beliefs
         mean = get_mean_beliefs_over_time(posteriors, schedule_candidates)
@@ -492,6 +493,7 @@ def plot_schedule_beliefs_mean_and_std_across_block(
         df_beliefs.index, names=INDEX[:MIN_INDEX]
     )
 
+    return df_beliefs
     # Average data over time
     groupers = ["box", "block_id"]
     if x == "push times":
@@ -501,7 +503,6 @@ def plot_schedule_beliefs_mean_and_std_across_block(
             x=x,
             y="mean",
             y_name="mean",
-            bin_func=lambda x: x["mean"].mean(),
             groupers=groupers,
             **smooth_kwargs,
         )
@@ -510,7 +511,6 @@ def plot_schedule_beliefs_mean_and_std_across_block(
             x=x,
             y="standard deviation",
             y_name="standard deviation",
-            bin_func=lambda x: x["standard deviation"].mean(),
             groupers=groupers,
             **smooth_kwargs,
         )
@@ -533,10 +533,11 @@ def plot_schedule_beliefs_mean_and_std_across_block(
             "y": "mean",
             "hue": "box",
             "palette": palette,
+            "by_box": True,
             "ax": ax[0],
             **kwargs,
         }
-        plot_block_average_or_traces(df_subj, show_traces=show_traces, **params)
+        plot_quantity_across_block(df_subj, show_traces=show_traces, **params)
 
         # Plot schedules on top of means
         schedules = sorted(filter_df(df, conds=conds)["schedule"].unique())
@@ -565,7 +566,7 @@ def plot_schedule_beliefs_mean_and_std_across_block(
                 "ax": ax[1],
             }
         )
-        plot_block_average_or_traces(df_subj, show_traces=show_traces, **params)
+        plot_quantity_across_block(df_subj, show_traces=show_traces, **params)
 
         fig.suptitle(titler(title="Beliefs about schedule", conds=conds))
         fig.tight_layout()

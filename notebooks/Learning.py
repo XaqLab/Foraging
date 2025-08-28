@@ -43,11 +43,7 @@ from foraging.plotting.beliefs import (
     plot_schedule_beliefs_mean_and_std_across_block,
 )
 from foraging.utils import INDEX, MIN_INDEX
-from foraging.utils.beliefs import (
-    compute_accuracy,
-    compute_posterior,
-    sync_beliefs_in_block,
-)
+from foraging.utils.beliefs import compute_accuracy, compute_posterior
 from foraging.utils.data import (
     display_df,
     exclusion_criteria,
@@ -57,20 +53,15 @@ from foraging.utils.data import (
     process_blocks,
 )
 from foraging.utils.models import (
-    BeliefCollection,
-    BoxesBeliefContainer,
-    EventID,
     ExactBayesianUpdateOnProbabilities,
-    GammaBoxBelief,
+    FactorizedPosterior,
     GammaLikelihood,
     GammaParameters,
-    IndependentGammaBoxesBelief,
-    PermutationGammaBoxesBelief,
     PossibleSchedules,
     Posterior,
     Probabilities,
-    RewardObservation,
 )
+from foraging.utils.stats import moving_average
 
 pd.options.mode.copy_on_write = True
 
@@ -163,61 +154,33 @@ plot_cramer_rao_lb(n=50, schedules=[7, 14, 21], alpha=10)
 
 # %%
 schedule_candidates = np.arange(30) + 1
+belief_update = ExactBayesianUpdateOnProbabilities(GammaLikelihood(), vectorize=True)
 
 
-def posterior_maker(df, index) -> BoxesBeliefContainer:
+def posterior_maker(df, index) -> FactorizedPosterior:
     block = df.loc[index]
     shape = block.index.unique("shape")[0]
     n_boxes = block["n boxes"].values[0]
-    return BeliefCollection(
-        n_boxes,
-        lambda: Posterior(
-            EventID(index + (0,)),
-            GammaBoxBelief(shape=shape, schedules=schedule_candidates),
-        ),
+    uniform = 1 / len(schedule_candidates) * np.ones(len(schedule_candidates))
+    single_box_prior = Probabilities(
+        support=PossibleSchedules(schedule=schedule_candidates, shape=shape),
+        probabilities=uniform,
+    )
+    return FactorizedPosterior(
+        n_boxes, index + (0,), belief_update, prior=single_box_prior
     )
 
 
-# schedule_beliefs, _ = process_blocks(df, compute_posterior, posterior_maker, postprocessing = sync_beliefs_in_block)
-# conds = dict(subject="viktor", session=20230807, block=5)
-# plot_schedule_beliefs_in_block(df, schedule_beliefs, conds=conds);
-
-
-# %%
-
-# Create a ScheduleArray
-schedules = PossibleSchedules(schedule=np.array([1.0, 2.0, 3.0, 4.0]), shape=1.0)
-
-# Use as array (for Probabilities)
-support_array = np.asarray(schedules)  # Returns: array([1., 2., 3., 4.])
-belief = Probabilities(schedules, [0.25, 0.25, 0.25, 0.25])
-
-# %%
-obs = RewardObservation(is_available=True, time=2.5)
-likelihood = GammaLikelihood()
-result = likelihood(obs, schedules)
-update = ExactBayesianUpdateOnProbabilities(likelihood=likelihood)
-update(belief, obs).representation
-
-# %%
-# todo: update Engineering notebook with unit test of Posterior
-
-# %%
+schedule_beliefs, _ = process_blocks(df, compute_posterior, posterior_maker)
 conds = dict(subject="viktor", session=20230807, block=5)
-index = tuple(conds.values())
-x = compute_posterior(df, index, posterior_maker, postprocessing=sync_beliefs_in_block)
+plot_schedule_beliefs_in_block(df, schedule_beliefs, conds=conds)
 
-# %%
-y = x[x.id(2)]
-
-# %%
-sns.heatmap(np.array(y.features).T)
 
 # %% [markdown]
 # Now we will aggregate posteriors over blocks and report the average summary statistics of those posteriors.
 
 # %%
-plot_schedule_beliefs_mean_and_std_across_block(
+df2 = plot_schedule_beliefs_mean_and_std_across_block(
     df,
     schedule_beliefs,
     conds={"kappa": 0, "shape": 10},
@@ -226,6 +189,23 @@ plot_schedule_beliefs_mean_and_std_across_block(
     show_traces=True,
 )
 
+
+# %%
+df2
+
+# %%
+groupers = ["box", "block_id"]
+
+df3 = moving_average(
+    df2,
+    x="push times",
+    y="mean",
+    y_name="mean",
+    groupers=groupers,
+)
+
+# %%
+df3
 
 # %%
 

@@ -12,10 +12,10 @@ from sklearn.utils.class_weight import compute_sample_weight
 from foraging.utils import discrete_time
 from foraging.utils.data import map_box_positions_to_ranks, process_block_safely
 from foraging.utils.models import (
-    BeliefCollection,
-    BoxesBeliefContainer,
-    EventID,
+    FactorizedPosterior,
+    IndexedObservation,
     Posterior,
+    RewardObservation,
     UpdatesByBox,
 )
 from foraging.utils.stats import mcfadden_pseudo_rsquared, permutation_test_logistic
@@ -44,39 +44,36 @@ def fisher_info_reward_observations(t, schedule, alpha):
             return result
 
 
-def sync_beliefs_in_block(df: pd.DataFrame, index: tuple, beliefs: BeliefCollection):
-    """
-    Syncs the beliefs in a block.
-    """
-    block_data = df.loc[index]
-    x = block_data[["box position", "push times"]].values
-    sync_beliefs = deepcopy(beliefs)
-    old_belief = [
-        beliefs[beliefs.id(i)].prior for i in range(len(beliefs))
-    ]  # Start with priors
-    boxes = np.array(range(len(beliefs))).astype(int)
-
-    # Populate each timestep with the most current beliefs at other boxes
-    for box, t in x:
-        other_boxes = boxes[boxes != box]
-        push_key = EventID(index + (t,))
-        for other_box in other_boxes:
-            sync_beliefs[beliefs.id(other_box)][push_key] = old_belief[other_box]
-        old_belief[int(box)] = beliefs[beliefs.id(int(box))][push_key]
-    [x.sort() for x in sync_beliefs.records.values()]
-    return sync_beliefs
-
-
 # @process_block_safely
 # TODO: make filtering block consistent with rest of code
+
+
+def _create_box_observation(
+    box: int, is_available: bool, time: float
+) -> IndexedObservation[RewardObservation]:
+    """
+    Factory function that creates an IndexedObservation with RewardObservation.
+
+    Args:
+        box: Box position/index
+        is_available: Whether reward is available
+        time: Time value for the observation
+
+    Returns:
+        IndexedObservation[RewardObservation] that can be used anywhere an IndexedObservation is expected
+    """
+    return IndexedObservation(
+        i=box, observation=RewardObservation(is_available=is_available, time=time)
+    )
+
+
 def compute_posterior(
     df: pd.DataFrame,
     index: tuple,
     posterior_maker: Callable[Any, UpdatesByBox],
-    postprocessing: Callable[Any, BoxesBeliefContainer] = None,
     *args,
     **kwargs,
-) -> BoxesBeliefContainer:
+) -> Posterior:
     """
     Computes the posterior belief over reward schedules for each box, updating after each push.
 
@@ -101,17 +98,14 @@ def compute_posterior(
     # Construct posterior
     beliefs = posterior_maker(df, index, *args, **kwargs)
     for i in range(n_obs):
-        # id = beliefs.id(box_positions[i])
-        # beliefs[id].update(EventID(index + (push_times[i],)), (reward_outcomes[i], push_intervals[i]))
         beliefs.update(
-            box_positions[i],
-            EventID(index + (push_times[i],)),
-            (reward_outcomes[i], push_intervals[i]),
+            index + (push_times[i],),
+            _create_box_observation(
+                box=box_positions[i],
+                is_available=reward_outcomes[i],
+                time=push_intervals[i],
+            ),
         )
-
-    # Sync beliefs across boxes, so that each timestep contains simultaneous beliefs
-    if postprocessing:
-        beliefs = postprocessing(df, index, beliefs)
     return beliefs
 
 
@@ -119,7 +113,7 @@ def compute_posterior(
 def compute_accuracy(
     df: pd.DataFrame,
     index: tuple,
-    schedule_beliefs: dict[tuple, BeliefCollection],
+    schedule_beliefs: dict[tuple, FactorizedPosterior],
     *args,
     seed: int = 42,
     n_samples: int = 100,
