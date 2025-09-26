@@ -22,32 +22,34 @@
 # %matplotlib inline
 import logging
 import os
-import textwrap
 
 import pandas as pd
 import seaborn as sns
-from IPython.display import Markdown, display, display_markdown
 from matplotlib import pyplot as plt
 
-from foraging.plotting import bp, get_figure_from_axes, toggle_plot
+from foraging import SEED
+from foraging.config.experiments import AngelakiPlottingConfig
+from foraging.plotting import bp
 from foraging.plotting.behavior import (
+    BehaviorPlotter,
     plot_block_onsets_vs_push_percentiles,
-    plot_experiment_overview,
     plot_hmm_probabilities_in_block,
     plot_long_push_blocks,
     plot_previous_push_interval_vs_push_interval,
     plot_push_percentiles,
-    plot_push_rates_across_block,
     plot_recent_rewards_vs_push_percentiles,
     plot_session_onsets_vs_push_percentiles,
     plot_vertical_position_in_block,
     plot_vertical_position_vs_push_percentiles,
 )
 from foraging.utils.autoreload import setup_auto_reload
-from foraging.utils.data import display_df, exclusion_criteria, make_df
+from foraging.utils.data import (
+    angelaki_exclusion_criteria,
+    display_df,
+    make_angelaki_experiment,
+)
 
 setup_auto_reload()
-
 
 pd.options.mode.copy_on_write = True
 
@@ -58,7 +60,6 @@ mlogger.setLevel(logging.WARNING)
 EXPERIMENT_DIR = "../data/experiments"
 ANALYSIS_DIR = "../data/analysis"
 FIGURES_DIR = "../figures"
-SEED = 42
 
 # %% [markdown]
 # # Table of Contents
@@ -91,7 +92,9 @@ SEED = 42
 # Here is a DataFrame showing a subset of the data. Refer to the docstring of `make_df` for more information about the contents of the DataFrame.
 
 # %%
-df = make_df(EXPERIMENT_DIR)
+angelaki = make_angelaki_experiment(EXPERIMENT_DIR)
+plotter = BehaviorPlotter(angelaki, AngelakiPlottingConfig().to_dict())
+df = angelaki.df
 display_df(df, ["box", "push times", "reward outcomes"])
 
 # %% [markdown]
@@ -108,11 +111,7 @@ plt.title("Duration of block")
 plt.xlabel("duration (s)")
 
 # %%
-block_summary = (
-    df.groupby(["subject", "session", "block"])
-    .size()
-    .reset_index(name="n pushes per block")
-)
+block_summary = angelaki.blocks.size().reset_index(name="n pushes per block")
 sns.violinplot(block_summary, x="subject", y="n pushes per block", cut=0)
 plt.title("# pushes per block")
 
@@ -121,10 +120,9 @@ plt.title("# pushes per block")
 
 # %%
 conds = dict(subject="viktor")
-plot_experiment_overview(
-    df,
+plotter.plot_experiment_overview(
     conds=conds,
-    annotate_block=True,
+    annotate_block=[r"$\kappa$", r"$\alpha$"],
     fig_kwargs=dict(figsize=(40, 50)),
 )
 
@@ -182,7 +180,7 @@ bp(sns.violinplot)(
 df["push percentiles"] = df.groupby("subject", as_index=False)[
     "consecutive push intervals"
 ].rank(pct=True)
-plot_push_percentiles(df)
+plot_push_percentiles(angelaki)
 
 # %% [markdown]
 # Aside from the humans, whose percentile curves are characteristic of a gaussian, the other subjects are heavily non-gaussian. The rest of this notebook is dedicated to getting a better sense of when a boundary emreges between normally long and abnormally long push intervals. Next, we will consider the characteristics of example blocks containing the longest push intervals.
@@ -194,7 +192,17 @@ plot_push_percentiles(df)
 #
 
 # %%
-plot_long_push_blocks(df, 3)
+plotter.plot_pushes(
+    conds=dict(subject="viktor", session=20230811, block=3),
+    fig_kwargs=dict(figsize=(30, 2.2)),
+    legend=False,
+)
+
+# %%
+angelaki.get_unique("box position")
+
+# %%
+plotter.plot_long_push_blocks(3)
 
 # %% [markdown]
 # Some push intervals appear long because the subject doesn't initiate the task for a long time. We will show the distribution of initiation times next. Also, some blocks are very sparse while other blocks have long segments of task-engaged behavior interrupted by long breaks when the monkey does not push. One consideration for the exclusion criteria is to drop blocks that contain fewer than n pushes e.g. 10 pushes, even if there are a couple "reasonable looking" pushes; it's very likely the animal is actually disengaged the entirety of that block, thus casting doubt on any reasonable behavior appearing in that block. For blocks that are denser in pushes, we need a different criteria.
@@ -356,90 +364,3 @@ plot_push_percentiles(df_filtered)
 
 # %% [markdown]
 # Compared to the beginning of this notebook, after removing the outliers for each subject, we see now that the push intervals are within a more reasonable range and behave more like a gaussian.
-
-# %%
-
-# known bug that this doesn't currently work https://github.com/jupyter-book/jupyter-book/issues/2077
-# todo: consider running one of the longer thinking AI on the jupyter-book codebase to see if it can fix it
-
-ZOOM_KWARGS = {  # Convenience settings for zoomed in plots
-    "show_traces": True,
-    "smooth_kwargs": {"win_type": "gaussian", "window_size": 30, "step": 5},
-}
-FULL_BLOCK_KWARGS = {
-    "min_obs": 10,
-    "show_traces": True,
-    "smooth_kwargs": {"win_type": "gaussian"},
-}
-
-if TO_HTML:
-    figs_full = get_figure_from_axes(
-        plot_push_rates_across_block(df, by_box=True, **FULL_BLOCK_KWARGS)
-    )
-    figs_zoomed = get_figure_from_axes(
-        plot_push_rates_across_block(
-            df[df["push times"] < 120], by_box=True, **ZOOM_KWARGS
-        )
-    )
-    tab_md_template = """
-    ````{{tab-set}}
-    ```{{tab-item}} Full block
-    {full_images}
-    ```
-
-    ```{{tab-item}} Zoom block
-    {zoom_images}
-    ```
-    ````
-    """
-
-    os.makedirs("tmp", exist_ok=True)  # Ensure tmp directory exists
-
-    full_images = ""
-    for fig in figs_full:
-        fig.savefig(
-            f"tmp/full_{fig.number}.png", facecolor="white", bbox_inches="tight"
-        )
-        plt.close(fig)
-        full_images += f"![](tmp/full_{fig.number}.png)\n"
-
-    zoom_images = ""
-    for fig in figs_zoomed:
-        fig.savefig(
-            f"tmp/zoom_{fig.number}.png", facecolor="white", bbox_inches="tight"
-        )
-        plt.close(fig)
-        zoom_images += f"![](tmp/zoom_{fig.number}.png)\n"
-
-    tab_md = textwrap.dedent(tab_md_template).format(
-        full_images=full_images,
-        zoom_images=zoom_images,
-    )
-    display_markdown(tab_md, raw=True)
-else:
-    toggle_plot(
-        plot_push_rates_across_block,
-        plot_push_rates_across_block,
-        button_labels=("Full block", "Zoomed in"),
-        kwargs1={
-            "df": df,
-            "by_box": True,
-            **FULL_BLOCK_KWARGS,
-        },
-        kwargs2={"df": df[df["push times"] < 120], "by_box": True, **ZOOM_KWARGS},
-        inline=TO_HTML,
-    )
-    # todo: consider generating markdown text, loading it into a markdown cell, and then displaying it depending on the TO_HTML flag
-
-# %% [markdown]
-# ````{tab-set}
-# ```{tab-item} Figure A
-# ![](tmp/full_4.png)
-# ![](tmp/full_2.png)
-# ```
-#
-# ```{tab-item} Figure B
-# ![](tmp/zoom_5.png)
-# ![](tmp/zoom_6.png)
-# ```
-# ````

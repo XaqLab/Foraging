@@ -24,7 +24,7 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, Dataset, Subset
 from tqdm import tqdm
 
-from foraging.config.constants import PSYCHOPHYSICS_IMAGE_SIZE, SEED
+from foraging.constants import PSYCHOPHYSICS_IMAGE_SIZE, SEED
 from foraging.utils import kwargs_handler
 from foraging.utils.autoreload import setup_hexarena
 

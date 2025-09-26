@@ -4,9 +4,8 @@ from pathlib import Path
 import seaborn as sns
 from matplotlib import pyplot as plt
 
-from foraging.config.constants import BOX_COLORS, BOX_COLORS_DARK, BOX_LABELS
-
-from ._base import (
+from foraging.plotting._base import (
+    BasePlotter,
     across_blocks,
     across_conditions_plotter,
     bp,
@@ -14,11 +13,10 @@ from ._base import (
     fig_init,
     format_yticks,
     get_figure_from_axes,
-    legend_handler,
+    legend_corrector,
     multiplot,
     per_block,
-    plot_block_average_or_traces,
-    plot_quantity_across_block,
+    plot_average_or_traces,
     plot_variable_subplots,
     titler,
     toggle_plot,

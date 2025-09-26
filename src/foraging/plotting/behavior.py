@@ -1,7 +1,7 @@
 import logging
 import pickle
 from copy import deepcopy
-from typing import Callable
+from typing import Any, Callable, Iterable
 
 import numpy as np
 import pandas as pd
@@ -15,42 +15,35 @@ from numpy.typing import ArrayLike
 from scipy.spatial.distance import jensenshannon
 from scipy.stats import expon, fit, kstest
 
-from foraging.config.constants import (
+from foraging import (
     BIN_WIDTH,
-    BOX_COLORS,
-    BOX_POSITIONS,
-    KAPPA_LEVELS,
-    PALETTE,
-    PALETTE_DARK,
     SEED,
     STEP,
     WINDOW_SIZE,
 )
+from foraging.models.experiment import Experiment
 from foraging.plotting import (
+    BasePlotter,
     across_conditions_plotter,
     bp,
     enhanced_violinplot,
     fig_init,
-    legend_handler,
+    legend_corrector,
     multiplot,
     titler,
     unitler,
 )
 from foraging.plotting._base import (
     get_bar_heights,
-    palette_handler,
-    plot_block_average_or_traces,
-    plot_quantity_across_block,
+    palette_corrector,
+    plot_average_or_traces,
     regplot,
 )
-from foraging.utils import INDEX, MIN_INDEX, kwargs_handler
+from foraging.utils import kwargs_handler
 from foraging.utils.data import (
     bin_data,
     filter_df,
-    get_blocks,
     get_continuous_from_df_to_dict,
-    process_block_safely,
-    process_blocks,
 )
 from foraging.utils.stats import moving_average
 
@@ -58,146 +51,206 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 
-@legend_handler
-def plot_experiment_overview(
-    df: pd.DataFrame,
-    conds: dict = None,
-    title: str = "Overview of pushes over entire experiment",
-    palette: dict = PALETTE,
-    label_rotation: float = 35,
-    annotate_block: bool = False,
-    ax: plt.Axes = None,
-    **kwargs,
-) -> plt.Axes:
-    """
-    Plot the pushes over all blocks in the experiment, organized by sessions. This assumes one subject is specified in the `conds` dictionary.
+class BehaviorPlotter(BasePlotter):
+    def __init__(self, experiment: Experiment, config: dict | Iterable):
+        super().__init__(experiment, config)
 
-    Args:
-        df: DataFrame.
-        conds: Dictionary to filter df.
-        title: Title of figure.
-        palette: Dictionary mapping box schedules to colors. Can also be a list of just colors.
-        label_rotation: Angle to rotate y-tick labels by.
-        annotate_block: if True, also display the block parameters above each block.
-        ax: Axes to plot on. If None, a new figure and axes are created using plt.subplots. Specify keyword arguments in `fig_kwargs`.
-        **kwargs: Keyword arguments passed to seaborn. May also contain nested kwargs.
-            - 'fig_kwargs': Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
+    @legend_corrector
+    def plot_experiment_overview(
+        self,
+        dataset: Experiment = None,
+        conds: dict[str, Any] = None,
+        title: str = "Overview of pushes over entire experiment",
+        row: str = "session",
+        col: str = "block",
+        label_rotation: float = 35,
+        annotate_block: list[str] = None,
+        ax: plt.Axes = None,
+        **kwargs,
+    ):
+        """
+        Plot the pushes over all blocks in the experiment, organized by sessions. This assumes one subject is specified in the `conds` dictionary.
 
-    Returns:
-        The axes.
-    """
-    df = filter_df(df, conds)
+        Args:
+            dataset: Experiment dataset.
+            conds: Dictionary to filter df.
+            title: Title of figure.
+            palette: Dictionary mapping box schedules to colors. Can also be a list of just colors.
+            label_rotation: Angle to rotate y-tick labels by.
+            annotate_block: if True, also display the block parameters above each block.
+            ax: Axes to plot on. If None, a new figure and axes are created using plt.subplots. Specify keyword arguments in `fig_kwargs`.
+            **kwargs: Keyword arguments passed to seaborn. May also contain nested kwargs.
+                - 'fig_kwargs': Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
 
-    # Offset x-coord
-    x_offset = get_blocks(df)["duration"].last()
-    x_offset.iloc[1:] = x_offset.groupby(["subject", "session"]).cumsum().iloc[:-1]
-    session_start = (
-        x_offset.reset_index(level="block")
-        .groupby(["subject", "session"])["block"]
-        .first()
-    )
-    for (
-        idx,
-        x,
-    ) in (
-        session_start.items()
-    ):  # Make sure each row (session) starts from 0 on the x-axis
-        x_offset.loc[idx + (x,)] = 0
-    df_temp = df.join(x_offset, rsuffix="_offset", on=INDEX[: MIN_INDEX - 1])
-    df_temp["x"] = df_temp["push times"] + df_temp["duration_offset"]
+        Returns:
+            The axes.
+        """
+        dataset = self._init_vars(dataset=dataset)
+        df = dataset.filter(conds).df
 
-    # Offset y-coord
-    session_order = sorted(df_temp.index.unique("session"))
-    session_offsets = {session: i for i, session in enumerate(session_order)}
-    box_order = sorted(df_temp["box position"].unique())
-    box_offsets = {box: box - 1 for box in box_order}
+        # Offset x-coord
+        x_offset = df.groupby(dataset.block_identifiers)["duration"].last()
+        x_offset.iloc[1:] = x_offset.groupby(["subject", row]).cumsum().iloc[:-1]
+        y_start = x_offset.reset_index(level=col).groupby(["subject", row])[col].first()
+        for (
+            idx,
+            x,
+        ) in (
+            y_start.items()
+        ):  # Make sure each row (session) starts from 0 on the x-axis
+            x_offset.loc[idx + (x,)] = 0
+        df_temp = df.join(x_offset, rsuffix="_offset", on=dataset.block_identifiers)
+        df_temp["x"] = df_temp["push times"] + df_temp["duration_offset"]
 
-    df_temp["y_offset_1"] = df_temp["box position"].map(box_offsets)
-    df_temp["y_offset_2"] = df_temp.index.map(
-        lambda x: session_offsets[x[INDEX.index("session")]]
-    )
+        # Offset y-coord
+        y_order = sorted(df_temp.index.unique(row))
+        y_offsets = {y: i for i, y in enumerate(y_order)}
+        box_order = sorted(df_temp["box position"].unique())
+        box_offsets = {box: box - 1 for box in box_order}
 
-    # Change multiplier to control spacing between sessions and rows
-    y_offset_1_factor = 1
-    y_offset_2_factor = 6
-    df_temp["y"] = (
-        1
-        + y_offset_1_factor * df_temp["y_offset_1"]
-        + y_offset_2_factor * df_temp["y_offset_2"]
-    )
+        df_temp["y_offset_1"] = df_temp["box position"].map(box_offsets)
+        df_temp["y_offset_2"] = df_temp.index.map(
+            lambda x: y_offsets[x[dataset.index.index(row)]]
+        )
 
-    # Create ax if none provided
-    fig_kwargs = kwargs_handler(kwargs, "fig_kwargs", dict(figsize=(40, 50)))
-    fig, ax = fig_init(ax, **fig_kwargs)
+        # Change multiplier to control spacing between sessions and rows
+        y_offset_1_factor = 1
+        y_offset_2_factor = 6
+        df_temp["y"] = (
+            1
+            + y_offset_1_factor * df_temp["y_offset_1"]
+            + y_offset_2_factor * df_temp["y_offset_2"]
+        )
 
-    legend = True
-    for session in session_order:
-        bp(sns.scatterplot)(
-            filter_df(df_temp, {"session": session}),
-            x="x",
-            y="y",
-            marker="|",
-            s=100,
-            hue="box",
+        # Create ax if none provided
+        fig_kwargs = kwargs_handler(kwargs, "fig_kwargs", dict(figsize=(40, 50)))
+        fig, ax = fig_init(ax, **fig_kwargs)
+
+        legend = True
+        for y in y_order:
+            bp(sns.scatterplot)(
+                filter_df(df_temp, {row: y}),
+                x="x",
+                y="y",
+                marker="|",
+                s=100,
+                hue="box",
+                palette=self.get_config_value("palette"),
+                title=None,
+                legend=legend,
+                ax=ax,
+                **kwargs,
+            )
+            legend = False
+
+        # Annotate block parameters
+        y_text_offset = 0.5
+        if annotate_block:
+            for y in y_order:
+                df_row = filter_df(df_temp, {row: y})
+                y_text = df_row["y"].max() + y_text_offset
+                blocks = df_row.index.get_level_values("block")
+                flag = np.insert(blocks[1:] != blocks[:-1], 0, True)
+                annotation_labels = []
+                for anot in annotate_block:
+                    labels = df_row[anot][flag].values
+                    annotation_labels.append(labels)
+                x_text = df_row["duration_offset"].unique()
+                for i in range(len(annotation_labels[0])):
+                    label = []
+                    for j, anot in enumerate(annotate_block):
+                        label.append(rf"{anot}={annotation_labels[j][i]}")
+                    ax.text(x_text[i], y_text, ", ".join(label))
+
+        # Demarcate blocks
+        for y in y_order:
+            df_row = filter_df(df_temp, {row: y})
+            x_text = df_row["duration_offset"].unique()[1:]
+            ax.vlines(
+                x_text,
+                y_offset_2_factor * df_row["y_offset_2"].unique()[0] - 0.5,
+                y_offset_2_factor * df_row["y_offset_2"].unique()[0] + 2.5,
+                linestyles="dotted",
+                colors="black",
+            )
+
+        # Tidy up axes
+        ax.set_yticks(
+            [
+                y_offset_2_factor * offset + 0.5
+                for offset in sorted(df_temp["y_offset_2"].unique())
+            ],
+            [str(s) for s in y_order],
+        )
+        ax.tick_params(axis="y", labelrotation=label_rotation)
+        ax.set_xlabel(col)
+        ax.set_ylabel(row)
+        ax.set_title(titler(title=title, conds=conds))
+        fig.tight_layout()
+        return ax
+
+    @legend_corrector
+    def plot_push_percentiles(self, **kwargs):
+        return plot_push_percentiles(self.experiment, **kwargs)
+
+    @legend_corrector
+    def plot_long_push_blocks(self, **kwargs):
+        return plot_long_push_blocks(self.experiment, **kwargs)
+
+    def plot_pushes(
+        self,
+        dataset: Experiment = None,
+        conds: dict[str, Any] = None,
+        title: str = "Pushes",
+        palette: dict[str, Any] = None,
+        legend: bool = True,
+        ax: plt.Axes = None,
+        **kwargs,
+    ) -> plt.Axes:
+        """
+        Plot the pushes in the block by the box they occur at.
+
+        Args:
+            dataset: Experiment dataset.
+            conds: Dictionary to filter df.
+            title: Title of figure.
+            palette: Dictionary mapping box schedules to colors. Can also be a list of just colors.
+            box_labels: Labels on y-axis for each box.
+            legend: If True, display legend. Specify keyword arguments in `legend_kwargs`.
+            ax: Axes to plot on. If None, a new figure and axes are created using plt.subplots. Specify keyword arguments in `fig_kwargs`.
+            **kwargs: Additional keyword arguments passed to `plot_block_events`.
+
+        Returns:
+            The axes.
+        """
+
+        ax = super().plot_block_events(
+            dataset=dataset,
+            conds=conds,
+            title=title,
             palette=palette,
-            title=None,
             legend=legend,
             ax=ax,
             **kwargs,
         )
-        legend = False
 
-    # Annotate block parameters
-    y_text_offset = 0.5
-    if annotate_block:
-        for session in session_order:
-            df_session = filter_df(df_temp, {"session": session})
-            y_text = df_session["y"].max() + y_text_offset
-            blocks = df_session.index.get_level_values("block")
-            kappas = df_session.index.get_level_values("kappa")
-            kappas = kappas[np.insert(blocks[1:] != blocks[:-1], 0, True)]
-            shapes = df_session.index.get_level_values("shape")
-            shapes = shapes[np.insert(blocks[1:] != blocks[:-1], 0, True)]
-            x_text = df_session["duration_offset"].unique()
-            for i in range(len(kappas)):
-                ax.text(
-                    x_text[i], y_text, rf"$\kappa$={kappas[i]},$\alpha$={shapes[i]}"
-                )
-
-    # Demarcate blocks
-    for session in session_order:
-        df_session = filter_df(df_temp, {"session": session})
-        x_text = df_session["duration_offset"].unique()[1:]
-        ax.vlines(
-            x_text,
-            y_offset_2_factor * df_session["y_offset_2"].unique()[0] - 0.5,
-            y_offset_2_factor * df_session["y_offset_2"].unique()[0] + 2.5,
-            linestyles="dotted",
-            colors="black",
-        )
-
-    # Tidy up axes
-    ax.set_yticks(
-        [
-            y_offset_2_factor * offset + 0.5
-            for offset in sorted(df_temp["y_offset_2"].unique())
-        ],
-        [str(s) for s in session_order],
-    )
-    ax.tick_params(axis="y", labelrotation=label_rotation)
-    ax.set_xlabel("time in block (s)")
-    ax.set_ylabel("session")
-    ax.set_title(titler(title=title, conds=conds))
-    fig.tight_layout()
-    return ax
+        # Custom plotting logic
+        dataset = self._init_vars(dataset=dataset)
+        block = dataset.filter(conds)
+        box_labels = dataset.constants.BOX_POSITIONS
+        ax.set_xlim([0, block.get("push times").max() + 1])
+        box_labels = [box_labels[i] for i in sorted(block.get_unique("box position"))]
+        ax.set_yticks(range(len(box_labels)), box_labels, rotation=90, va="center")
+        ax.set_ylabel("")
+        return ax
 
 
-def plot_push_percentiles(df: pd.DataFrame, percentiles: dict = None, **kwargs):
+def plot_push_percentiles(experiment: Experiment, percentiles: dict = None, **kwargs):
     """
     Plot the percentiles of consecutive push intervals for each subject.
 
     Args:
-        df: A DataFrame containing the data to be plotted.
+        experiment: An Experiment dataset.
         percentiles: A dictionary mapping subjects to their specific percentile thresholds.
         **kwargs: Additional keyword arguments passed to the plotting function.
 
@@ -207,6 +260,7 @@ def plot_push_percentiles(df: pd.DataFrame, percentiles: dict = None, **kwargs):
 
     def _plot(i, subj, **kwargs):
         # Plot each push's percentiles
+        df = experiment.filter({"subject": subj}).df
         ax = bp(sns.scatterplot)(
             df,
             x="consecutive push intervals",
@@ -234,18 +288,21 @@ def plot_push_percentiles(df: pd.DataFrame, percentiles: dict = None, **kwargs):
             )
             ax.legend(loc="upper right")
 
-    return across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
+    return across_conditions_plotter(experiment.get_unique("subject"), _plot, **kwargs)
 
 
 def plot_long_push_blocks(
-    df: pd.DataFrame, top_n: int, figsize: tuple[float, float] = (20, 2.5), **kwargs
+    experiment: Experiment,
+    top_n: int,
+    figsize: tuple[float, float] = (20, 2.5),
+    **kwargs,
 ):
     """
     Plot the blocks containing the top N longest push intervals for each subject.
     This function sorts the data by the magnitude of push intervals in descending order and plots the blocks containing the top N longest push intervals for each subject.
 
     Args:
-        df: A DataFrame containing the data to be plotted.
+        experiment: An Experiment dataset.
         top_n: The number of top longest push intervals to plot.
         figsize: A tuple specifying the size of the figure.
         **kwargs: Additional keyword arguments passed to the plotting function.
@@ -254,38 +311,43 @@ def plot_long_push_blocks(
         None
     """
     # Sort data by magnitude of push interval in descending order
-    df_sorted = df.sort_values(by="consecutive push intervals", ascending=False)
+    experiment = experiment.wrap(
+        experiment.df.sort_values(by="consecutive push intervals", ascending=False)
+    )
 
     def _plot(i, subj, **kwargs):
         fig, axes = plt.subplots(1, top_n, figsize=figsize)
-        df_subject = filter_df(df_sorted, {"subject": subj})
+        experiment_subject = experiment.filter({"subject": subj})
 
         # Plot each block containing the `top_n` pushes
-        for i, (idx, g) in enumerate(get_blocks(df_subject, sort=False)):
+        for i, (idx, g) in enumerate(experiment_subject.get_blocks(sort=False)):
             if i >= top_n:
                 break
-            conds = dict(zip(INDEX[: MIN_INDEX - 1], idx))
+            conds = dict(zip(experiment.block_identifiers, idx))
             plot_pushes(
                 g.sort_index(),
                 conds=conds,
                 title="",
                 legend=False,
+                palette=experiment.constants.PALETTE,
+                box_labels=experiment.constants.BOX_POSITIONS,
                 ax=axes[i],
                 **kwargs,
             )
-            axes[i].set_title(f"session {conds['session']} block {conds['block']}")
+            conds.pop("subject", None)
+            axes[i].set_title(titler(title="", conds=conds))
         fig.suptitle(subj)
         fig.tight_layout()
 
-    return across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
+    return across_conditions_plotter(experiment.get_unique("subject"), _plot, **kwargs)
 
 
 def plot_pushes(
     df: pd.DataFrame,
     conds: dict = None,
     title: str = "Pushes",
-    palette: dict = PALETTE,
-    box_labels: list = BOX_POSITIONS,
+    palette: dict = None,
+    box_labels: list = None,
     legend: bool = True,
     ax: plt.Axes = None,
     **kwargs,
@@ -326,126 +388,7 @@ def plot_pushes(
     return ax
 
 
-@legend_handler
-def plot_block_events(
-    df: pd.DataFrame,
-    conds: dict = None,
-    x: str = "push times",
-    y: str = "box position",
-    x_unit: str = "s",
-    y_unit: str = None,
-    title: str = "Block activity",
-    palette: dict = PALETTE,
-    legend: bool = True,
-    ax: plt.Axes = None,
-    **kwargs,
-) -> plt.Axes:
-    """
-    Plot the push-related variable in the block.
-
-    Args:
-        df: DataFrame.
-        conds: Dictionary to filter df.
-        x: Name of x variable in DataFrame. Defaults to `push times`.
-        y: Name of y variable in DataFrame. Defaults to `box rank`.
-        x_unit: Unit to assign to x. Defaults to `s` for seconds. Ignored if None.
-        y_unit: Unit to assign to y. Defaults to None. Ignored if None.
-        title: Title of figure.
-        palette: Dictionary mapping box schedules to colors. Can also be a list of just colors.
-        legend: If True, display legend. Specify keyword arguments in `legend_kwargs`.
-        ax: Axes to plot on. If None, a new figure and axes are created using plt.subplots. Specify keyword arguments in `fig_kwargs`.
-        **kwargs: Additional keyword arguments.
-            - 'fig_kwargs': Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
-            - 'line_kwargs': Dictionary to specify line properties (passed to 'LineCollection').
-            - 'legend_kwargs': Dictionary of keyword arguments for customizing the legend (passed to `ax.legend`).
-
-    Returns:
-        The axes.
-    """
-
-    # Create ax if none provided
-    fig_kwargs = kwargs_handler(kwargs, "fig_kwargs")
-    fig, ax = fig_init(ax, **fig_kwargs)
-
-    # Get block data and metadata
-    df_block = filter_df(df, conds)
-    schedules = sorted(df_block["schedule"].unique())
-    kappa = df_block.index.unique("kappa")
-    stim_type = df_block.index.unique("stimulus type")
-    shape = df_block.index.unique("shape")
-
-    if conds is None:
-        conds = {}
-    else:
-        conds = deepcopy(conds)
-    conds["kappa"] = kappa[0]
-    conds["stim type"] = stim_type[0]
-    conds["shape"] = shape[0]
-    # Create switch segments (x, y) pairs for LineCollection
-    x_vals = df_block[x].values
-    y_vals = df_block[y].values
-    colors = np.array(["black"] * (len(y_vals) - 1))
-    # styles = ['dashed' if x else 'solid' for x in df_block['stay/switch'].values[1:]]
-    segments = [
-        [(x_vals[i], y_vals[i]), (x_vals[i + 1], y_vals[i + 1])]
-        for i in range(len(x_vals) - 1)
-    ]
-
-    # Create the LineCollection
-    line_kwargs = kwargs_handler(
-        kwargs, "line_kwargs", dict(linestyles="--", linewidth=1, zorder=0)
-    )
-    lc = LineCollection(segments, colors=colors, **line_kwargs)
-
-    # Set labels
-    ax.add_collection(lc)
-    ax.autoscale()
-    ax.set_title(titler(title=title, conds=conds))
-    ax.set_ylabel(unitler(y, y_unit))
-    ax.set_xlabel(unitler(x, x_unit))
-
-    # Add reward outcomes with shaded (rewarded) and empty (not rewarded) markers
-    colors = np.array([palette[i] for i in df_block["box"].values])
-    mask = df_block["reward outcomes"].values
-    ax.scatter(x_vals[mask], y_vals[mask], c=colors[mask], marker="^", s=80, zorder=2)
-    ax.scatter(
-        x_vals[~mask],
-        y_vals[~mask],
-        edgecolors=colors[~mask],
-        marker="v",
-        s=80,
-        zorder=2,
-        facecolors="none",
-    )
-    ax.spines["left"].set_visible(False)
-    ax.spines["bottom"].set_visible(False)
-
-    # Create legend manually with proxy artists
-    if legend:
-        legend_kwargs = kwargs_handler(
-            kwargs, "legend_kwargs", {"loc": "upper left", "bbox_to_anchor": (1.05, 1)}
-        )
-        palette = palette_handler(palette, df_block["box"].unique())
-        legend_elements = [
-            Line2D([0], [0], color=palette[j], linestyle="-", label=schedules[i])
-            for i, j in enumerate(palette.keys())
-        ] + [
-            Line2D([0], [0], color="black", linestyle="", marker="^", label="rewarded"),
-            Line2D(
-                [0],
-                [0],
-                color="black",
-                linestyle="",
-                marker="v",
-                markerfacecolor="none",
-                label="no reward",
-            ),
-        ]
-        ax.legend(handles=legend_elements, **legend_kwargs)
-    return ax
-
-
-@legend_handler
+@legend_corrector
 def plot_recent_rewards_vs_push_percentiles(
     df: pd.DataFrame,
     n_samples: int = 5000,
@@ -568,7 +511,7 @@ def plot_previous_push_interval_vs_push_interval(
     rng = np.random.default_rng(seed)
     fig_kwargs = kwargs_handler(kwargs, "fig_kwargs")
 
-    @legend_handler
+    @legend_corrector
     def _plot(i, subj, **kwargs):
 
         df_rate_content = {
@@ -639,7 +582,7 @@ def plot_previous_push_interval_vs_push_interval(
     return across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
 
 
-@legend_handler
+@legend_corrector
 def plot_push_interval_autocorrelation(df: pd.DataFrame, lags: int = 10, **kwargs):
     """
     Plot the autocorrelation of consecutive push intervals for each subject over a range of lags, aggregated over blocks.
@@ -696,7 +639,7 @@ def plot_push_interval_autocorrelation(df: pd.DataFrame, lags: int = 10, **kwarg
     return ax
 
 
-@legend_handler
+@legend_corrector
 def plot_session_onsets_vs_push_percentiles(df: pd.DataFrame, **kwargs):
     """
     Plot the session onset times of pushes as a function of push percentile.
@@ -742,7 +685,7 @@ def plot_session_onsets_vs_push_percentiles(df: pd.DataFrame, **kwargs):
     return ax
 
 
-@legend_handler
+@legend_corrector
 def plot_block_onsets_vs_push_percentiles(df: pd.DataFrame, **kwargs):
     """
     Plot the block onset times of pushes as a function of push percentile.
@@ -972,7 +915,7 @@ def plot_xy_velocity_long_vs_medium_pushes(
     return across_conditions_plotter(df.index.unique("subject"), _plot)
 
 
-@legend_handler(bbox=(1.1, 1))
+@legend_corrector(bbox=(1.1, 1))
 def plot_hmm_probabilities_in_block(
     df: pd.DataFrame, filepath: str, block_idx: int = 3
 ):
@@ -1198,7 +1141,7 @@ def plot_push_intervals_by_sessions(
             y="consecutive push intervals",
             conds={"subject": subj},
             hue="box",
-            palette=PALETTE,
+            palette=None,
             title_override="Push intervals across sessions",
             size=1,
             log_scale=True,
@@ -1229,9 +1172,9 @@ def plot_push_intervals_by_sessions(
 @multiplot
 def plot_push_intervals(
     df: pd.DataFrame,
-    stim_reliabilities: dict = KAPPA_LEVELS,
-    palette: dict = PALETTE,
-    palette_dark: dict = PALETTE_DARK,
+    stim_reliabilities: dict = None,
+    palette: dict = None,
+    palette_dark: dict = None,
     **kwargs,
 ):
     """
@@ -1292,8 +1235,8 @@ def plot_push_intervals(
 
 def plot_stay_switch_pushes(
     df: pd.DataFrame,
-    palette: dict = PALETTE,
-    palette_dark: dict = PALETTE_DARK,
+    palette: dict = None,
+    palette_dark: dict = None,
     null_model: bool = False,
     **kwargs,
 ):
@@ -1407,8 +1350,8 @@ def plot_stay_switch_pushes(
 @multiplot
 def plot_runlengths(
     df: pd.DataFrame,
-    palette: dict = PALETTE,
-    stim_reliabilities: dict = KAPPA_LEVELS,
+    palette: dict = None,
+    stim_reliabilities: dict = None,
     null_model: bool = False,
     disp_js: bool = False,
     **kwargs,
@@ -1430,7 +1373,7 @@ def plot_runlengths(
         None
     """
 
-    @legend_handler
+    @legend_corrector
     def _plot(i, subj, **kwargs):
         # Identify consecutive pushes and when they switch
         df_subj = filter_df(df, {"subject": subj})
@@ -1481,7 +1424,7 @@ def plot_runlengths(
                     x="length",
                     conds={"stimulus reliability": kappa},
                     hue="box",
-                    palette=PALETTE,
+                    palette=None,
                     discrete=True,
                     multiple="stack",
                     legend=i == len(kappas) - 1,
@@ -1544,8 +1487,8 @@ def plot_push_intervals_vs_reward_intervals(
     conds: dict = None,
     title: str = "Push intervals vs reward intervals",
     title_override: str = None,
-    palette: dict = PALETTE,
-    stim_reliabilities: dict = KAPPA_LEVELS,
+    palette: dict = None,
+    stim_reliabilities: dict = None,
     annotate_reg: bool = False,
     **kwargs,
 ):
@@ -1569,7 +1512,7 @@ def plot_push_intervals_vs_reward_intervals(
     # df = df.drop(df[df['push # by box'] == 1].index)
     fig_kwargs = kwargs_handler(kwargs, "fig_kwargs", {"sharey": True, "sharex": True})
 
-    @legend_handler
+    @legend_corrector
     def _plot(i, subj, **kwargs):
         kappas = stim_reliabilities[subj].keys()
         fig_kwargs["ncols"] = len(kappas)
@@ -1634,9 +1577,9 @@ def plot_push_intervals_vs_reward_intervals(
 
 def plot_next_push_surprise(
     df: pd.DataFrame,
-    stim_reliabilities: dict = KAPPA_LEVELS,
-    palette: dict = PALETTE,
-    palette_dark: dict = PALETTE_DARK,
+    stim_reliabilities: dict = None,
+    palette: dict = None,
+    palette_dark: dict = None,
     **kwargs,
 ):
     """Plot the change in push interval after each push.
@@ -1669,7 +1612,7 @@ def plot_next_push_surprise(
         {"nrows": 2, "sharey": True, "sharex": True, "figsize": (20, 10)},
     )
 
-    @legend_handler
+    @legend_corrector
     def _plot(i, subj, **kwargs):
         df_subj = filter_df(df, {"subject": subj})
         kappas = stim_reliabilities[subj].keys()
@@ -1708,7 +1651,7 @@ def plot_next_push_surprise(
 @multiplot
 def plot_stay_probabilities(
     df: pd.DataFrame,
-    stim_reliabilities: dict = KAPPA_LEVELS,
+    stim_reliabilities: dict = None,
     bin_width: float = 10,
     **kwargs,
 ):
@@ -1736,7 +1679,7 @@ def plot_stay_probabilities(
 
     fig_kwargs = kwargs_handler(kwargs, "fig_kwargs", {"sharey": True, "sharex": True})
 
-    @legend_handler
+    @legend_corrector
     def _plot(i, subj, **kwargs):
         df_subj = filter_df(df, {"subject": subj})
         kappas = stim_reliabilities[subj].keys()
@@ -1765,8 +1708,8 @@ def plot_stay_probabilities(
 @multiplot
 def plot_push_rates_across_block(
     df: pd.DataFrame,
-    stim_reliabilities: dict = KAPPA_LEVELS,
-    palette: dict = PALETTE,
+    stim_reliabilities: dict = None,
+    palette: dict = None,
     by_box: bool = False,
     show_traces: bool = False,
     **kwargs,
@@ -1809,8 +1752,8 @@ def plot_push_rates_across_block(
 @multiplot
 def plot_reward_rates_across_block(
     df: pd.DataFrame,
-    stim_reliabilities: dict = KAPPA_LEVELS,
-    palette: dict = PALETTE,
+    stim_reliabilities: dict = None,
+    palette: dict = None,
     by_box: bool = False,
     show_traces: bool = False,
     **kwargs,
@@ -1853,8 +1796,8 @@ def plot_reward_rates_across_block(
 @multiplot
 def plot_reward_per_push_across_block(
     df: pd.DataFrame,
-    stim_reliabilities: dict = KAPPA_LEVELS,
-    palette: dict = PALETTE,
+    stim_reliabilities: dict = None,
+    palette: dict = None,
     by_box: bool = False,
     show_traces: bool = False,
     fig_title: str = "Reward-per-push",
@@ -1903,10 +1846,10 @@ def plot_reward_per_push_across_block(
                 "ax": axes[i],
             }
         )
-        plot_block_average_or_traces(df2, show_traces=show_traces, **kwargs)
+        plot_average_or_traces(df2, show_traces=show_traces, **kwargs)
         return axes[i]
 
-    @legend_handler
+    @legend_corrector
     def _plot(i, subj, **kwargs):
         df_subj = filter_df(df, {"subject": subj})
         ma_push = moving_average(
@@ -1950,8 +1893,8 @@ def plot_reward_per_push_across_block(
 @multiplot
 def plot_matching_law(
     df: pd.DataFrame,
-    stim_reliabilities: list = KAPPA_LEVELS,
-    palette: dict = PALETTE,
+    stim_reliabilities: list = None,
+    palette: dict = None,
     time_bin: tuple[float, float] = None,
     **kwargs,
 ):
@@ -2007,7 +1950,7 @@ def plot_matching_law(
 
     fig_kwargs = kwargs_handler(kwargs, "fig_kwargs")
 
-    @legend_handler
+    @legend_corrector
     def _plot(i, subj, **kwargs):
         kappas = stim_reliabilities[subj].keys()
         fig_kwargs["ncols"] = len(kappas)
@@ -2064,7 +2007,7 @@ def plot_matching_law(
 @multiplot
 def plot_matching_law_coefficients(
     df: pd.DataFrame,
-    stim_reliabilities: list = KAPPA_LEVELS,
+    stim_reliabilities: list = None,
     min_obs: int = 10,
     **kwargs,
 ):
@@ -2110,7 +2053,7 @@ def plot_matching_law_coefficients(
     rr = rr.replace([np.inf, -np.inf], np.nan).dropna()
 
     # For each block, fit matching law
-    @process_block_safely
+    @safely
     def _inner(df: pd.DataFrame, index: tuple):
         df_block = df.loc[index]
         slopes, intercepts, observed_time_bins = [], [], []
@@ -2151,7 +2094,7 @@ def plot_matching_law_coefficients(
         {"sharey": True, "sharex": True, "nrows": 2, "ncols": 1, "figsize": (5, 5)},
     )
 
-    @legend_handler
+    @legend_corrector
     def _plot(i, subj, **kwargs):
         df_subj = filter_df(merged_df, {"subject": subj})
         fig, ax = fig_init(**fig_kwargs)
@@ -2190,7 +2133,7 @@ def plot_matching_law_coefficients(
 @multiplot
 def plot_matching_law_coefficients_across_block(
     df: pd.DataFrame,
-    stim_reliabilities: list = KAPPA_LEVELS,
+    stim_reliabilities: list = None,
     min_obs: int = 10,
     **kwargs,
 ):
@@ -2252,7 +2195,6 @@ def plot_matching_law_coefficients_across_block(
     rr = rr.replace([np.inf, -np.inf], np.nan).dropna()
 
     # For each block, fit matching law
-    @process_block_safely
     def _inner(df: pd.DataFrame, index: tuple):
         df_block = df.loc[index]
         time_bins = sorted(df_block.index.unique("time"))
@@ -2297,7 +2239,7 @@ def plot_matching_law_coefficients_across_block(
         kwargs, "fig_kwargs", {"sharey": True, "sharex": True, "nrows": 2, "ncols": 1}
     )
 
-    @legend_handler
+    @legend_corrector
     def _plot(i, subj, **kwargs):
         df_subj = filter_df(merged_df, {"subject": subj})
         fig, ax = fig_init(**fig_kwargs)
@@ -2337,7 +2279,7 @@ def plot_frequencies_over_experiment(
     conds: dict = None,
     title: str = None,
     title_override: str = None,
-    palette: list = BOX_COLORS,
+    palette: list = None,
     label_rotation: float = 35,
     ax: plt.Axes = None,
     **kwargs,
@@ -2409,7 +2351,7 @@ def plot_fisher(
     conds: dict = None,
     title: str = "Fisher information",
     title_override: str = None,
-    box_colors: list = BOX_COLORS,
+    box_colors: list = None,
     box_labels: list = None,
     legend: bool = True,
     specific: bool = False,

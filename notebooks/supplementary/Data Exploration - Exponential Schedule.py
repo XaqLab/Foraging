@@ -29,7 +29,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
-from foraging.config.constants import (
+from foraging.constants import (
     KAPPA_LEVELS,
     MULTIPLOT_FIGSIZE,
     PALETTE,
@@ -61,12 +61,12 @@ from foraging.utils.autoreload import setup_auto_reload
 
 # Create a new x-axis with regular intervals
 from foraging.utils.data import (
+    angelaki_exclusion_criteria,
     bin_data,
     display_df,
-    exclusion_criteria,
     filter_df,
     get_blocks,
-    make_df,
+    make_angelaki_dataset,
 )
 
 setup_auto_reload()
@@ -122,7 +122,7 @@ KAPPA_LEVELS["viktor"] = {"low": [0.01], "high": [0.1, 0.2]}
 
 # %%
 # %%capture --no-display
-df = make_df(EXPERIMENT_DIR)
+df = make_dataset(EXPERIMENT_DIR)
 df = df.xs(1, level="shape", drop_level=False)
 df = exclusion_criteria(df, EXPERIMENT_DIR)
 

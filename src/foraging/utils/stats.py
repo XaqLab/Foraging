@@ -5,31 +5,9 @@ from scipy.special import beta, betainc
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 
-from foraging.config.constants import BIN_WIDTH, STEP, WINDOW_SIZE
+from foraging import BIN_WIDTH, STEP, WINDOW_SIZE
 from foraging.utils import kwargs_handler
-from foraging.utils.data import bin_data, extend_df, get_blocks, process_block_safely
-
-
-def compute_gaussian_correction_factor(window_size, std, bin_width=BIN_WIDTH):
-    """
-    Compute the correction factor for Gaussian window weighting.
-
-    Args:
-        window_size: Window size in seconds
-        std: Standard deviation of Gaussian in bins
-        bin_width: Width of each bin in seconds
-
-    Returns:
-        Correction factor to multiply Gaussian-windowed results
-    """
-    n_bins = int(window_size / bin_width)
-    # Sum of weights
-    sum_weights = std * np.sqrt(2 * np.pi)
-
-    # Correction factor
-    correction_factor = n_bins / sum_weights
-
-    return correction_factor
+from foraging.utils.data import bin_data
 
 
 def moving_average(
@@ -89,6 +67,7 @@ def moving_average(
         )
         .reset_index(level="index")
     )
+
     rolled_data = rolled_data.rename(columns={0: y, "index": x_name}).set_index(
         x_name, append=True
     )
@@ -205,12 +184,10 @@ def kfold_fit_eval(
     return pd.concat(train_results, axis=0), pd.concat(test_results, axis=0)
 
 
-@process_block_safely
 def null_likelihood(df: pd.DataFrame, index: tuple):
     return np.ones(len(df.loc[index])) * np.log(1 / 3)
 
 
-@process_block_safely
 def biased_coin_likelihood(df: pd.DataFrame, index: tuple, probs):
     df_block = df.loc[index]
     return np.log(
@@ -218,7 +195,6 @@ def biased_coin_likelihood(df: pd.DataFrame, index: tuple, probs):
     )
 
 
-@process_block_safely
 def stay_switch_likelihood(df: pd.DataFrame, index: tuple, probs):
     df_block = df.loc[index]
     LL = np.zeros(len(df_block))
@@ -234,7 +210,6 @@ def stay_switch_likelihood(df: pd.DataFrame, index: tuple, probs):
     return LL
 
 
-@process_block_safely
 def mc1_likelihood(df: pd.DataFrame, index: tuple, transition_probs):
     df_block = df.loc[index]
     LL = np.zeros(len(df_block))
@@ -249,7 +224,6 @@ def mc1_likelihood(df: pd.DataFrame, index: tuple, transition_probs):
     return LL
 
 
-@process_block_safely
 def generalized_markov_likelihood(df: pd.DataFrame, index: tuple, transition_probs):
     df_block = df.loc[index]
     LL = np.zeros(len(df_block))
@@ -268,7 +242,6 @@ def generalized_markov_likelihood(df: pd.DataFrame, index: tuple, transition_pro
 
 
 # todo: the normalization here is a shortcut, long-term we need to write a policy class capable of evaluating the likelihood of each action
-@process_block_safely
 def beliefs_likelihood(df: pd.DataFrame, index: tuple, beliefs):
     df_block = df.loc[index]
     data = beliefs[index] / beliefs[index].sum(axis=1, keepdims=True)
@@ -323,7 +296,6 @@ def null_likelihood_bins(df, x: str = "push times", bins: int = 20):
     return LL, n_obs_bins, "bins"
 
 
-@process_block_safely
 def ts_likelihood(df: pd.DataFrame, index: tuple, beliefs):
     df_block = df.loc[index]
     data = beliefs[index].probabilities(record="all")

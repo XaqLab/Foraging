@@ -14,7 +14,6 @@ from IPython import get_ipython
 def setup_auto_reload(mode: int = 2):
     """
     Setup automatic reloading for Jupyter notebooks.
-
     This enables automatic reloading of modules when files change.
 
     Args:
@@ -108,8 +107,3 @@ def setup_hexarena(path: str = "D:/Documents/hex-arena", **kwargs):
     Quick setup for hex-arena with auto-reload.
     """
     add_external_package(path, "hexarena", **kwargs)
-
-
-if __name__ == "__main__":
-    # Example usage
-    setup_hexarena()

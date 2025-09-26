@@ -25,6 +25,7 @@
 
 import os
 from collections import defaultdict
+from itertools import permutations
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -32,10 +33,9 @@ import pandas as pd
 import seaborn as sns
 from scipy.special import polygamma
 
-from foraging import plotting, utils
-from foraging.config.constants import BOX_COLORS, BOX_LABELS, PALETTE, SEED
+from foraging.constants import BOX_COLORS, BOX_LABELS, PALETTE, SEED
 from foraging.plotting import bp, format_yticks, per_block, titler
-from foraging.plotting.beliefs import (
+from foraging.plotting.belief import (
     plot_accuracy_across_block,
     plot_cramer_rao_lb,
     plot_fisher_info,
@@ -45,10 +45,10 @@ from foraging.plotting.beliefs import (
 from foraging.utils import INDEX, MIN_INDEX
 from foraging.utils.beliefs import compute_accuracy, compute_posterior
 from foraging.utils.data import (
+    angelaki_exclusion_criteria,
     display_df,
-    exclusion_criteria,
     filter_df,
-    make_df,
+    make_angelaki_dataset,
     map_box_positions_to_ranks,
     process_blocks,
 )
@@ -57,6 +57,8 @@ from foraging.utils.models import (
     FactorizedPosterior,
     GammaLikelihood,
     GammaParameters,
+    Permutation,
+    PermutationLikelihood,
     PossibleSchedules,
     Posterior,
     Probabilities,
@@ -79,7 +81,7 @@ EXPERIMENT_DIR = os.path.join(DATA_DIR, "experiments")
 # %%capture --no-display
 df = make_df(os.path.join(DATA_DIR, "experiments"))
 df = exclusion_criteria(df, EXPERIMENT_DIR)
-display_df(df, ["box", "push times", "reward outcomes"])
+display_df(df, ["box", "assigned schedules", "push times", "reward outcomes"])
 
 # %% [markdown]
 # # Theoretical Beliefs about the Schedules
@@ -180,46 +182,26 @@ plot_schedule_beliefs_in_block(df, schedule_beliefs, conds=conds)
 # Now we will aggregate posteriors over blocks and report the average summary statistics of those posteriors.
 
 # %%
-df2 = plot_schedule_beliefs_mean_and_std_across_block(
+plot_schedule_beliefs_mean_and_std_across_block(
     df,
     schedule_beliefs,
     conds={"kappa": 0, "shape": 10},
     x="push times",
-    min_obs=5,
     show_traces=True,
+    show_average=False,
 )
 
 
 # %%
-df2
-
-# %%
-groupers = ["box", "block_id"]
-
-df3 = moving_average(
-    df2,
-    x="push times",
-    y="mean",
-    y_name="mean",
-    groupers=groupers,
-)
-
-# %%
-df3
-
-# %%
-
 accuracies, _ = process_blocks(df, compute_accuracy, schedule_beliefs)
-
-# %%
 df["# observations"] = df.index.get_level_values("push #")
 plot_accuracy_across_block(
     df,
     accuracies,
     conds={"kappa": 0, "shape": 10},
     x="push times",
-    min_obs=5,
     show_traces=True,
+    show_average=False,
     color="black",
 )
 
@@ -230,20 +212,25 @@ plot_accuracy_across_block(
 
 
 # %%
-def posterior_maker(df, index):
+belief_update = ExactBayesianUpdateOnProbabilities(PermutationLikelihood())
+
+
+def posterior_maker(df, index) -> Posterior:
     block = df.loc[index]
     shape = block.index.unique("shape")[0]
-    schedules = sorted(df["schedule"].unique())
-    return PermutationGammaBoxesBelief(schedules, shape=shape)
+    schedules = sorted(block["assigned schedules"].iloc[0])
+    perms = list(permutations(schedules))
+    uniform = 1 / len(perms) * np.ones(len(perms))
+    prior = Probabilities(
+        support=[Permutation(permutation=x, shape=shape) for x in perms],
+        probabilities=uniform,
+    )
+    return Posterior(index + (0,), update=belief_update, prior=prior)
 
 
-schedule_beliefs_permutations, _ = process_blocks(
-    df, compute_posterior, posterior_maker, use_tqdm=True
-)
-
-# %%
-perm_beliefs = np.array(schedule_beliefs_permutations[tuple(conds.values())].features)
-sns.heatmap(perm_beliefs.T)
+schedule_beliefs, _ = process_blocks(df, compute_posterior, posterior_maker)
+probs = np.asarray(schedule_beliefs[tuple(conds.values())].representation)
+sns.heatmap(probs.T)
 
 # %% [markdown]
 # # Extra: Knowing the shape parameter after a couple blocks of behavior

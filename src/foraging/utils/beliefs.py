@@ -10,7 +10,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.utils.class_weight import compute_sample_weight
 
 from foraging.utils import discrete_time
-from foraging.utils.data import map_box_positions_to_ranks, process_block_safely
+from foraging.utils.data import map_box_positions_to_ranks
 from foraging.utils.models import (
     FactorizedPosterior,
     IndexedObservation,
@@ -136,20 +136,16 @@ def compute_accuracy(
     df_block = df.loc[index]
     box_ranks = map_box_positions_to_ranks(df_block)
     belief_block = schedule_beliefs[index]
-    n_boxes = len(belief_block)
-    n_steps = len(df_block)
+    n_boxes = len(box_ranks)
+    n_steps = len(belief_block)
+    push_times = df_block["push times"].values
     samples = np.zeros((n_steps, n_boxes, n_samples))
-    rng = np.random.default_rng(seed)
+    samples[0] = belief_block[index + (0,)].sample(n_samples)
 
     # Estimate accuracy via Monte Carlo sampling
-    for i in range(n_boxes):
-        belief = belief_block.query(i).content
-        for j in range(n_boxes):
-            belief_box = belief.query(j)
-            p_vec = belief_box.features
-            schedule_candidates = belief_box.support
-
-            samples[i, j, :] = rng.choice(schedule_candidates, p=p_vec, size=n_samples)
+    for i, pt in enumerate(push_times):
+        belief = belief_block[index + (pt,)]
+        samples[i + 1] = belief.sample(n_samples)
 
     # Count the fraction of samples that match the true order
     sampled_orders = np.argsort(np.argsort(samples, axis=1), axis=1)
@@ -255,7 +251,6 @@ def compute_accuracy(
 #     return belief_avail_event
 
 
-@process_block_safely
 def get_concurrent_reward_intervals(df: pd.DataFrame, index: tuple) -> np.ndarray:
     """
     Compute the belief of reward availability for each box as an event-based representation.
@@ -382,7 +377,6 @@ def get_push_reward_interval_diff(df: pd.DataFrame, index: tuple) -> np.ndarray:
 #     return belief_avail_event
 
 
-@process_block_safely
 def compute_surprise(
     df: pd.DataFrame,
     index: tuple,

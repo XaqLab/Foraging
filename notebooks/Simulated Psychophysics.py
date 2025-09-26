@@ -18,7 +18,7 @@ import numpy as np
 from hexarena.color import get_cmap, get_cue_movie, get_cue_movie_independent_noise
 from numpy.fft import fftfreq, ifft2
 
-from foraging.config.constants import SEED
+from foraging.constants import SEED
 from foraging.plotting.video import display_frames_video, frames_to_rgb
 from foraging.psychophysics import (
     ActualExperimentColorCue,

@@ -29,7 +29,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
-from foraging.config.constants import MULTIPLOT_FIGSIZE, PALETTE, PALETTE_DARK, SEED
+from foraging.constants import MULTIPLOT_FIGSIZE, PALETTE, PALETTE_DARK, SEED
 from foraging.plotting import (
     bp,
     enhanced_violinplot,
@@ -55,12 +55,11 @@ from foraging.utils.autoreload import setup_auto_reload
 
 # Create a new x-axis with regular intervals
 from foraging.utils.data import (
+    angelaki_exclusion_criteria,
     bin_data,
     display_df,
-    exclusion_criteria,
     filter_df,
-    get_blocks,
-    make_df,
+    make_angelaki_experiment,
 )
 from foraging.utils.stats import moving_average
 
@@ -123,9 +122,30 @@ FULL_BLOCK_KWARGS = {
 
 # %%
 # %%capture --no-display
-df = make_df(EXPERIMENT_DIR)
-df = exclusion_criteria(df, EXPERIMENT_DIR)
+dataset = make_angelaki_experiment(EXPERIMENT_DIR)
+dataset = angelaki_exclusion_criteria(dataset, EXPERIMENT_DIR)
+df = dataset.df
 display_df(df, ["box", "push times", "reward outcomes"])
+
+
+# %%
+class HashableDict(dict):
+    def __hash__(self):
+        return hash(frozenset(self.items()))
+
+    def __eq__(self, other):
+        if not isinstance(other, dict):
+            return NotImplemented
+        return dict(self) == dict(other)
+
+
+d1 = HashableDict(a=1, b=2)
+d2 = HashableDict(b=2, a=1)
+
+print(hash(d1), hash(d2))  # same hash
+print(d1 == d2)  # True
+d2 = HashableDict(a=3)
+{d1: 0, d2: 1}
 
 # %% [markdown]
 # ## Data Overview

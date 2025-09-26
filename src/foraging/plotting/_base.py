@@ -1,10 +1,12 @@
+import gc
 import logging
 import math
 import os
 from copy import deepcopy
+from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable, Protocol, Union
 
 import ipywidgets as widgets
 import numpy as np
@@ -14,7 +16,8 @@ import statsmodels.api as sm
 from IPython.display import clear_output, display
 from kneed import KneeLocator
 from matplotlib import pyplot as plt
-from matplotlib.collections import PolyCollection
+from matplotlib.artist import Artist
+from matplotlib.collections import LineCollection, PolyCollection
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 from matplotlib.ticker import FuncFormatter
@@ -23,14 +26,10 @@ from scipy.optimize import curve_fit
 from scipy.spatial.distance import euclidean
 from tqdm import tqdm
 
-from foraging.config.constants import (
-    BOX_LABELS,
-    KAPPA_LEVELS,
-    MULTIPLOT_FIGSIZE,
-    PALETTE,
-    PALETTE_DARK,
-)
-from foraging.utils import flatten, kwargs_handler
+from foraging import MULTIPLOT_FIGSIZE
+from foraging.models import SuperDict
+from foraging.models.experiment import Experiment
+from foraging.utils import SupportsConds, flatten, kwargs_handler
 from foraging.utils.data import filter_df
 from foraging.utils.stats import moving_average
 
@@ -38,70 +37,109 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 
-def fig_init(ax: plt.Axes = None, **kwargs):
+@dataclass
+class Embeddable:
+    """A class that represents a plotting condition and its index."""
+
+    name: str
+    value: Any
+    index: int
+
+
+class SupportsEmbeddables(Protocol):
+    """A protocol that defines a function that takes an iterable of Embeddables."""
+
+    def __call__(self, embeddables: Iterable[Embeddable], **kwargs) -> Any: ...
+
+
+def embeddable_to_conds(func: SupportsConds):
+    """
+    Wraps function that doesn't need embeddable functionality to be compatible with the Embeddable interface.
+
+    Args:
+        func: function to wrap
+
+    Returns:
+        wrapped function
+    """
+
+    @wraps(func)
+    @legend_corrector
+    def wrapper(
+        embeddables: Iterable[Embeddable],
+        **kwargs,
+    ) -> Any:
+        conds = {embeddable.name: embeddable.value for embeddable in embeddables}
+        return func(conds=conds, **kwargs)
+
+    return wrapper
+
+
+def fig_init(ax: plt.Axes = None, **kwargs) -> tuple[plt.Figure, plt.Axes]:
+    """
+    Initialize a figure and axes. If `ax` is provided, return the figure and axes.
+    """
     if ax is None:
         return plt.subplots(**kwargs)
     return ax.get_figure(), ax
 
 
 def get_figure_from_axes(
-    axes: plt.Axes | list[plt.Axes] | tuple[plt.Axes] | np.ndarray[plt.Axes],
-):
+    axes: plt.Axes | Iterable[plt.Axes],
+) -> set[plt.Figure]:
+    """
+    Get the figure(s) from the axes.
+    """
     figs = set()
     for ax in flatten(axes):
         figs.add(ax.figure)
     return figs
 
 
-def get_box_color(box_label: str, dark: bool = False) -> tuple[float, ...]:
-    """
-    Get color for a specific box label.
+def titler(
+    title: str = None, conds: dict[str, Any] = None, title_override: str = None
+) -> str:
+    """Creates title for plot, customizing it according to `conds`.
 
     Args:
-        box_label: Box label ie. "fast", "medium", "slow"
-        dark: Whether to return dark variant
+        title: Main title for plot, concatenated with `conds` if specified.
+        conds: Dictionary mapping keys to values that were relevant for generating the plot.
+        title_override: Override title for plot, ignoring conds. Useful when embedded inside functions that take `conds` as input but you want to override the title.
 
     Returns:
-        RGB color tuple (0-1 range)
-
-    Raises:
-        KeyError: If box_label not found
+        str: Title for plot.
     """
-    palette = PALETTE_DARK if dark else PALETTE
-    if box_label not in palette:
-        raise KeyError(
-            f"Box label '{box_label}' not found. Available: {list(palette.keys())}"
-        )
-    return palette[box_label]
-
-
-def titler(title: str = None, conds: dict = None, title_override: str = None):
     if title_override is not None:
         return title_override
     if title is None:
         return None
     if conds is None or len(conds) == 0:
         return title
+
+    # Customize title based on `conds`
     conds_str = ", ".join([k + " = " + str(v) for k, v in conds.items()])
     if len(title) > 0:
         return title + "\n" + conds_str
     return conds_str
 
 
-def unitler(label: str, unit: str):
+def unitler(label: str, unit: str) -> str:
+    """Adds unit to label if specified."""
     if unit is None:
         return label
     return label + " (" + unit + ")"
 
 
-def format_yticks(axes, func):
+def format_yticks(axes: Iterable[plt.Axes], func: Callable) -> None:
+    """Formats y-axis ticks using a function."""
     for ax in flatten(axes):
         ax.yaxis.set_major_formatter(FuncFormatter(func))
 
 
 def get_bar_positions(
-    ax: plt.Axes, hue_order: list = BOX_LABELS, x_centers: ArrayLike = None
+    ax: plt.Axes, hue_order: list = None, x_centers: ArrayLike = None
 ):
+    """Gets the positions of the bars in the plot."""
     bars = ax.patches
 
     # Group bar patches by hue group
@@ -121,9 +159,8 @@ def get_bar_positions(
     return {k: np.array(v) for k, v in positions_by_group.items()}
 
 
-def get_bar_heights(
-    ax: plt.Axes, hue_order: list = BOX_LABELS, x_centers: ArrayLike = None
-):
+def get_bar_heights(ax: plt.Axes, hue_order: list = None, x_centers: ArrayLike = None):
+    """Gets the heights of the bars in the plot."""
     # First map bar positions to heights
     bars = ax.patches
     bar_width = bars[0].get_width()  # Width of one bar
@@ -151,205 +188,13 @@ def get_bar_heights(
     return {k: np.array(v) for k, v in heights_by_group.items()}
 
 
-def palette_handler(palette: dict | list, categories: list):
+def palette_corrector(palette: dict | list, categories: list) -> dict | list:
     """Corrects for any mismatch between `palette` and observed `categories`. If `palette` is list, return first `len(categories)` entries."""
     return (
         {k: v for k, v in palette.items() if k in categories}
         if type(palette) == dict
         else palette[: len(categories)]
     )
-
-
-def bp(func: callable):
-    """
-    Wraps seaborn-style function with custom figure settings
-
-    Args:
-        func: function to wrap, typically seaborn-style function that takes the following as input:
-            - df: DataFrame.
-            - x: Name of x variable to be plotted.
-            - hue (Optional): Name of variable to color-code data by.
-            - hue_order (Optional): List specifying the order to assign colors to the `hue` variable.
-            - palette (Optional): List of colors to map onto `hue` ordered by `hue_order`.
-            - ax (Optional): axes to plot on.
-
-    Returns:
-        wrapped function
-    """
-
-    @wraps(func)
-    @legend_handler
-    def wrapper(
-        df: pd.DataFrame = None,
-        x: str = None,
-        hue: str = None,
-        palette: list = None,
-        conds: dict = None,
-        single_block: bool = False,
-        title: str = "",
-        title_override: str = None,
-        legend: Any = "auto",
-        x_unit: str = None,
-        y_unit: str = None,
-        min_obs: int = None,
-        attempt_index: bool = True,
-        ax: plt.Axes = None,
-        **kwargs,
-    ) -> Any:
-        """
-        Convenience decorator that customizes figure in formulaic fashion
-
-        Args:
-            df: DataFrame of block(s) data.
-            x: Name of x variable to be plotted.
-            hue: Name of hue variable to be plotted.
-            palette: List or dictionary mapping hue levels to colors.
-            conds: Dictionary mapping level keys to values to be used to filter `df`.
-            single_block: True indicates `df` should be treated as a single block.
-            title: Title for figure.
-            title_override: Override title for figure.
-            legend: If True, display figure.
-            x_unit: Unit of the x-axis. If None, then ignored.
-            y_unit: Unit of the y-axis. If None, then ignored.
-            min_obs: Threshold for min number of observations a bin must have to be displayed. Only used if not None.
-            attempt_index: Refer to `filter_df` for more details.
-            ax: Axis to plot on (not None if reusing premade figure and axis object).
-            **kwargs: Additional keyword arguments.
-                - fig_kwargs: keyword arguments to be passed to `plt.subplots`.
-                - legend_kwargs: keyword arguments to be passed to `Axes.legend`.
-                - title_kwargs: keyword arguments to be passed to `Axes.set_title`.
-                - xlabel_kwargs: keyword arguments to be passed to `Axes.set_xlabel`.
-                - ylabel_kwargs: keyword arguments to be passed to `Axes.set_ylabel`.
-                - additional keyword arguments get passed to wrapped function, which is meant to be a seaborn-style function.
-
-        Returns:
-            ax, or optional return arguments from wrapped function (usually in the form of ax + extra).
-        """
-        kwargs = deepcopy(kwargs)
-
-        # Filter df
-        if conds is None:
-            conds = {}
-        else:
-            conds = deepcopy(conds)
-        df = filter_df(df, conds, attempt_index=attempt_index)
-
-        # Context dependent plot settings
-        if hue and palette:
-            hue_keys = (
-                sorted(df[hue].unique()) if hue in df.columns else df.index.unique(hue)
-            )
-            palette = palette_handler(palette, hue_keys)
-
-            # Control hue order based on inputs
-            if type(palette) is dict:
-                kwargs["hue_order"] = list(palette.keys())
-            else:
-                kwargs["hue_order"] = hue_keys
-
-        if single_block:  # If only plotting individual block
-            kappa = df.index.unique("kappa")
-            stim_type = df.index.unique("stimulus type")
-            shape = df.index.unique("shape")
-            if len(kappa) > 1 or len(stim_type) > 1 or len(shape) > 1:
-                logger.debug(
-                    f"length of kappa: {len(kappa)}, length of stim_type: {len(stim_type)}, length of shape: {len(shape)}"
-                )
-                raise Exception(
-                    "Multiple experiment parameters found for single block. Make sure only single block is being supplied, or set collapse to True."
-                )
-
-            # For titling purposes, add block metadata
-            conds["kappa"] = kappa[0]
-            conds["stim type"] = stim_type[0]
-            conds["shape"] = shape[0]
-
-        # If plotting kappa on x-axis, create dummy column in order to plot kappa data evenly
-        old_x = None
-        if x == "kappa":
-            df["stimulus reliability"] = pd.Series(
-                df["kappa"].rank(method="dense") - 1, index=df.index
-            )
-            x = "stimulus reliability"
-            old_x = True
-
-        # Create ax if none
-        fig, ax = fig_init(ax, **kwargs_handler(kwargs, "fig_kwargs"))
-
-        # Pop any last keyword args not needed for seaborn here before running function
-        legend_kwargs = kwargs_handler(kwargs, "legend_kwargs", dict(title=hue))
-        title_kwargs = kwargs_handler(kwargs, "title_kwargs")
-        xlabel_kwargs = kwargs_handler(kwargs, "xlabel_kwargs")
-        ylabel_kwargs = kwargs_handler(kwargs, "ylabel_kwargs")
-
-        # Run function, assuming seaborn plotting func
-        if min_obs:
-            if hue:
-                ret = func(
-                    df.groupby([x, hue], observed=True, as_index=False).filter(
-                        lambda g: len(g) >= min_obs
-                    ),
-                    x=x,
-                    hue=hue,
-                    palette=palette,
-                    ax=ax,
-                    legend=legend,
-                    **kwargs,
-                )
-            else:
-                ret = func(
-                    df.groupby(x, observed=True, as_index=False).filter(
-                        lambda g: len(g) >= min_obs
-                    ),
-                    x=x,
-                    ax=ax,
-                    legend=legend,
-                    **kwargs,
-                )
-        else:
-            ret = func(
-                df, x=x, hue=hue, palette=palette, ax=ax, legend=legend, **kwargs
-            )
-
-        # Adjust xticks to only show actual data
-        if x == "stimulus reliability" and old_x:
-            xticks = df.index.unique("kappa")
-            [_ax.set_xticks(range(len(xticks)), xticks) for _ax in flatten(ax)]
-
-        # Set title (if multiple axes, this does the first one)
-        title = titler(title=title, conds=conds, title_override=title_override)
-        _ax = np.atleast_1d(ax)
-        if title:
-            _ax[0].set_title(title, **title_kwargs)
-
-        # Set units if specified
-        if x_unit:
-            _ax[0].set_xlabel(unitler(_ax[0].get_xlabel(), x_unit), **xlabel_kwargs)
-        else:
-            _ax[0].set_xlabel(_ax[0].get_xlabel(), **xlabel_kwargs)
-
-        if y_unit:
-            _ax[0].set_ylabel(unitler(_ax[0].get_ylabel(), y_unit), **ylabel_kwargs)
-        else:
-            _ax[0].set_ylabel(_ax[0].get_ylabel(), **ylabel_kwargs)
-
-        # Modify legend
-        if legend:
-            for _ax in flatten(ax):
-                if not _ax.get_legend_handles_labels() == ([], []):
-                    _ax.legend(**legend_kwargs)
-                # try:
-                #     legend = _ax.get_legend()
-                #     handles = legend.legend_handles
-                #     _ax.legend(handles, box_labels, **legend_kwargs)
-                # except Exception as e:
-                #     print(e)
-                #     _ax.legend(box_labels, **legend_kwargs)
-        if ret is None:
-            return ax
-        return ret  # Assume there is usually an ax in here
-
-    return wrapper
 
 
 def multiplot(_func=None, figsize=MULTIPLOT_FIGSIZE):
@@ -380,13 +225,16 @@ def multiplot(_func=None, figsize=MULTIPLOT_FIGSIZE):
     return _inner
 
 
-def legend_handler(_func=None, loc="upper left", bbox=(1, 1)):
+def legend_corrector(
+    _func: Callable = None, loc: str = "upper left", bbox: tuple = (1, 1)
+):
     """
     A decorator to set the legend location to 'upper left' and bbox_to_anchor to (1, 1).
 
     Args:
         func: The plotting function to wrap.
-
+        loc: Location of the legend.
+        bbox: Bounding box of the legend.
     Returns:
         The wrapped function with the legend location set.
     """
@@ -407,12 +255,20 @@ def legend_handler(_func=None, loc="upper left", bbox=(1, 1)):
     return _inner
 
 
-def update_legend(ax: plt.Axes, elements: list):
+def update_legend(ax: plt.Axes, elements: Iterable[Artist]):
+    """
+    Update the legend of an axis with new elements.
+
+    Args:
+        ax: Axis to update the legend of.
+        elements: Iterable of elements to add to the legend.
+    """
     # Get existing legend handles and labels
     existing_legend = ax.get_legend()
     if existing_legend is not None:
         existing_handles = existing_legend.legend_handles
         existing_labels = [text.get_text() for text in existing_legend.get_texts()]
+
         # Combine existing and new handles/labels
         all_handles = existing_handles + elements
         all_labels = existing_labels + [e.get_label() for e in elements]
@@ -472,15 +328,375 @@ def _figure_saver(
         figure_path: path to save figure
         bbox_inches: bbox_inches argument for plt.savefig
         facecolor: facecolor argument for plt.savefig
-
-    Returns:
-
     """
     Path(figure_path).parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(figure_path, facecolor=facecolor, bbox_inches=bbox_inches)
     [x.clear() for x in flatten(ax)]
 
 
+def across_conditions_plotter(
+    cond_name: str,
+    conditions: Iterable[Any],
+    plot_func: SupportsEmbeddables,
+    cond_kwargs: dict = None,
+    embeddables: Iterable[Embeddable] = None,
+    **kwargs,
+) -> Iterable[Any]:
+    """
+    Generates plots across each condition
+
+    Args:
+        cond_name: name of the condition
+        conditions: iterable of conditions
+        plot_func: plotting function
+        cond_kwargs: dictionary of keyword arguments to `plot_func` for each condition, where each key is a condition. Each condition-specific kwargs is merged with `kwargs`.
+        embeddables: Pre-existing iterable of embeddables. If None, then a new iterable of embeddables is created.
+        **kwargs: keyword arguments to `plot_func`
+            - if a dictionary containing conditions as keys, then the value of each key is a dictionary of keyword arguments to `plot_func`
+
+    Returns:
+        list of any returned output from `plot_func`
+    """
+    if cond_kwargs is None:
+        cond_kwargs = {}
+    returns = []
+    for i, cond in enumerate(conditions):
+        embeddable = Embeddable(cond_name, cond, i)
+
+        # Create new embeddables if none are provided, or update existing embeddables
+        if embeddables is None:
+            embeddables = [embeddable]
+        else:
+            embeddables.append(embeddable)
+
+        if cond in cond_kwargs:
+            ret = plot_func(embeddables=embeddables, **(cond_kwargs[cond] | kwargs))
+        else:
+            ret = plot_func(embeddables=embeddables, **kwargs)
+        returns.append(ret)
+    return returns
+
+
+class BasePlotter:
+    """Base class for all plotters."""
+
+    def __init__(self, experiment: Experiment, config: dict | Iterable):
+        self.experiment = experiment
+        self.config = SuperDict(config)
+
+    def get_config_value(self, key: str, default: Any = None) -> Any:
+        return self.config.get(key.upper(), default)
+
+    def _init_vars(self, **kwargs):
+        """Initialize variables by populating with default values."""
+        if "dataset" in kwargs and kwargs["dataset"] is None:
+            kwargs["dataset"] = self.experiment
+        if "conds" in kwargs and kwargs["conds"] is None:
+            kwargs["conds"] = {}
+        for key, value in self.config.items():
+            key = key.lower()
+            if key in kwargs and kwargs[key] is None:
+                kwargs[key] = value
+        return kwargs
+
+    @legend_corrector
+    @multiplot
+    def _plot_conditions_grid(
+        self,
+        plot_func: SupportsEmbeddables,
+        row_condition: str,
+        col_condition: str,
+        cond_kwargs: dict = None,
+        fig_title: str = None,
+        row_is_figure: bool = True,
+        **kwargs,
+    ) -> Iterable[Any]:
+        """
+        Apply a plotting function over a grid of conditions.
+
+        One figure is created per row condition. Within each figure, there will be
+        a row of subplots for each column condition.
+
+        Args:
+            plot_func: Function that draws into a 1D array of axes.
+            row_conditions: Conditions enumerating figures.
+            col_conditions: Conditions enumerating subplot rows within each figure.
+            cond_kwargs: Dictionary of keyword arguments to `plot_func` for each condition, where each key is a condition. Each condition-specific kwargs is merged with `kwargs`.
+            fig_title: Title for the figure.
+            row_is_figure: If True, then each row is its own figure. If False, then each row is an axis in the same figure.
+            **kwargs: Keyword arguments passed to seaborn. May also contain nested kwargs.
+                - 'fig_kwargs': Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
+
+        Returns:
+            List of any returned output from `plot_func`.
+        """
+        kwargs = deepcopy(kwargs)
+        if cond_kwargs is None:
+            cond_kwargs = {}
+        row_conditions = self.experiment.get_unique(row_condition)
+
+        # Assume fixed number of columns
+        if not row_is_figure:
+            n_cols = len(self.experiment.get_unique(col_condition))
+            n_rows = len(row_conditions)
+            fig, axes = fig_init(
+                **kwargs_handler(
+                    kwargs, "fig_kwargs", {"ncols": n_cols, "nrows": n_rows}
+                )
+            )
+
+        def _plot_row(embeddable: Embeddable, **kwargs):
+            kwargs = deepcopy(kwargs)
+            row_data = self.experiment.filter({row_condition: embeddable.value})
+            col_conditions = row_data.get_unique(col_condition)
+            if row_is_figure:
+                fig, axes = fig_init(
+                    **kwargs_handler(
+                        kwargs, "fig_kwargs", {"ncols": len(col_conditions)}
+                    )
+                )
+                embeddables = None
+            else:
+                axes = axes[embeddable.index]
+                embeddables = [embeddable]
+
+            cond_kwargs.update(
+                {
+                    col: {"legend": i == len(col_conditions) - 1, "ax": axes[i]}
+                    for i, col in enumerate(col_conditions)
+                }
+            )
+
+            # Plot each column
+            res = across_conditions_plotter(
+                col_condition,
+                col_conditions,
+                plot_func,
+                cond_kwargs=cond_kwargs,
+                dataset=row_data,
+                embeddables=embeddables,
+                **kwargs,
+            )
+
+            # Set row title
+            if row_is_figure and fig_title is not None:
+                fig.suptitle(f"{fig_title} for {row_condition}={embeddable.value}")
+                fig.tight_layout()
+            return res
+
+        # Plot each row
+        res = across_conditions_plotter(
+            row_condition, row_conditions, _plot_row, cond_kwargs=cond_kwargs, **kwargs
+        )
+        if not row_is_figure:
+            fig.tight_layout()
+            if fig_title is not None:
+                fig.suptitle(fig_title)
+        return res
+
+    def plot_quantity_across_block(
+        self,
+        x: str,
+        y: str,
+        y_name: str = None,
+        x_name: str = None,
+        dataset: Experiment = None,
+        conds: dict[str, Any] = None,
+        by_box: bool = False,
+        show_traces: bool = False,
+        auxiliary_plot: callable = None,
+        **kwargs,
+    ) -> plt.Axes:
+        """Plot the quantity across the block.
+
+        Args:
+            x: Name of x variable in DataFrame.
+            y: Name of y variable in DataFrame.
+            y_name: Name of y variable in DataFrame. Defaults to  "mean" + y.
+            x_name: Name of x variable in DataFrame. Defaults to "time".
+            dataset: Experiment dataset. Defaults to self.experiment.
+            conds: Dictionary to filter df.
+            by_box: If True, then plot the quantity by the boxes.
+            show_traces: If True, then show the traces.
+            auxiliary_plot: Function to plot the auxiliary plot. Defaults to None.
+            **kwargs: Additional keyword arguments.
+                - smooth_kwargs: Dictionary to specify window properties for smoothing the reward rate (passed to `moving_average`).
+                - additional keyword arguments get passed to `plot_average_or_traces`.
+
+        Returns:
+            The axes.
+        """
+
+        kwargs = deepcopy(kwargs)
+        dataset = self._init_vars(dataset=dataset)
+        data = dataset.filter(conds).df
+
+        if y_name is None:
+            y_name = "mean " + y
+
+        if x_name is None:
+            x_name = "time"
+
+        # Average data over time
+        groupers = ["block_id"]
+        if by_box:
+            groupers.append("box")
+
+        # Plot reward rates
+        kwargs.update({"x": x_name, "y": y_name, "x_unit": "s"})
+
+        if by_box:
+            kwargs.update({"hue": "box", "palette": self.get_config_value("palette")})
+        else:
+            kwargs.update({"color": "black"})
+
+        smooth_kwargs = kwargs_handler(
+            kwargs,
+            "smooth_kwargs",
+        )
+        ma = moving_average(
+            data,
+            x=x,
+            y=y,
+            y_name=y_name,
+            x_name=x_name,
+            groupers=groupers,
+            **smooth_kwargs,
+        )
+        if auxiliary_plot:
+            auxiliary_plot(ma, **kwargs)
+        return plot_average_or_traces(
+            ma, show_traces=show_traces, conds=conds, **kwargs
+        )
+
+    @legend_corrector
+    def plot_block_events(
+        self,
+        dataset: Experiment = None,
+        conds: dict[str, Any] = None,
+        x: str = "push times",
+        y: str = "box position",
+        x_unit: str = "s",
+        y_unit: str = None,
+        title: str = "Block activity",
+        palette: dict[str, Any] = None,
+        legend: bool = True,
+        ax: plt.Axes = None,
+        **kwargs,
+    ) -> plt.Axes:
+        """
+        Plot the push-related variable in the block.
+
+        Args:
+            dataset: Experiment dataset.
+            conds: Dictionary to filter df.
+            x: Name of x variable in DataFrame. Defaults to `push times`.
+            y: Name of y variable in DataFrame. Defaults to `box rank`.
+            x_unit: Unit to assign to x. Defaults to `s` for seconds. Ignored if None.
+            y_unit: Unit to assign to y. Defaults to None. Ignored if None.
+            title: Title of figure.
+            palette: Dictionary mapping box schedules to colors. Can also be a list of just colors.
+            legend: If True, display legend. Specify keyword arguments in `legend_kwargs`.
+            ax: Axes to plot on. If None, a new figure and axes are created using plt.subplots. Specify keyword arguments in `fig_kwargs`.
+            **kwargs: Additional keyword arguments.
+                - 'fig_kwargs': Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
+                - 'line_kwargs': Dictionary to specify line properties (passed to 'LineCollection').
+                - 'legend_kwargs': Dictionary of keyword arguments for customizing the legend (passed to `ax.legend`).
+
+        Returns:
+            The axes.
+        """
+        kwargs = deepcopy(kwargs)
+        dataset, palette = self._init_vars(dataset=dataset, palette=palette)
+
+        schedules = dataset.get_unique("assigned schedules")[0]
+
+        # Create ax if none provided
+        fig_kwargs = kwargs_handler(kwargs, "fig_kwargs")
+        fig, ax = fig_init(ax, **fig_kwargs)
+
+        # kappa = df_block.index.unique("kappa")
+        # stim_type = df_block.index.unique("stimulus type")
+        # shape = df_block.index.unique("shape")
+
+        # if conds is None:
+        #     conds = {}
+        # else:
+        #     conds = deepcopy(conds)
+        # conds["kappa"] = kappa[0]
+        # conds["stim type"] = stim_type[0]
+        # conds["shape"] = shape[0]
+
+        # Create switch segments (x, y) pairs for LineCollection
+        x_vals = dataset.get(x)
+        y_vals = dataset.get(y)
+        colors = np.array(["black"] * (len(y_vals) - 1))
+        segments = [
+            [(x_vals[i], y_vals[i]), (x_vals[i + 1], y_vals[i + 1])]
+            for i in range(len(x_vals) - 1)
+        ]
+
+        # Create the LineCollection
+        line_kwargs = kwargs_handler(
+            kwargs, "line_kwargs", dict(linestyles="--", linewidth=1, zorder=0)
+        )
+        lc = LineCollection(segments, colors=colors, **line_kwargs)
+
+        # Set labels
+        ax.add_collection(lc)
+        ax.autoscale()
+        ax.set_title(titler(title=title, conds=conds))
+        ax.set_ylabel(unitler(y, y_unit))
+        ax.set_xlabel(unitler(x, x_unit))
+
+        # Add reward outcomes with shaded (rewarded) and empty (not rewarded) markers
+        colors = np.array([palette[i] for i in dataset.get("box")])
+        mask = dataset.get("reward outcomes")
+        ax.scatter(
+            x_vals[mask], y_vals[mask], c=colors[mask], marker="^", s=80, zorder=2
+        )
+        ax.scatter(
+            x_vals[~mask],
+            y_vals[~mask],
+            edgecolors=colors[~mask],
+            marker="v",
+            s=80,
+            zorder=2,
+            facecolors="none",
+        )
+        ax.spines["left"].set_visible(False)
+        ax.spines["bottom"].set_visible(False)
+
+        # Create legend manually with proxy artists
+        if legend:
+            legend_kwargs = kwargs_handler(
+                kwargs,
+                "legend_kwargs",
+                {"loc": "upper left", "bbox_to_anchor": (1.05, 1)},
+            )
+            palette = palette_corrector(palette, dataset.get_unique("box"))
+            legend_elements = [
+                Line2D([0], [0], color=palette[j], linestyle="-", label=schedules[i])
+                for i, j in enumerate(palette.keys())
+            ] + [
+                Line2D(
+                    [0], [0], color="black", linestyle="", marker="^", label="rewarded"
+                ),
+                Line2D(
+                    [0],
+                    [0],
+                    color="black",
+                    linestyle="",
+                    marker="v",
+                    markerfacecolor="none",
+                    label="no reward",
+                ),
+            ]
+            ax.legend(handles=legend_elements, **legend_kwargs)
+        return ax
+
+
+# TODO: these need to be refactored and moved inside a Plotter class later
 def per_block(
     func: callable,
     df: pd.DataFrame,
@@ -612,30 +828,160 @@ def across_blocks(
     _inner()
 
 
-def across_conditions_plotter(conditions, plot_func, cond_kwargs=None, **kwargs):
+def bp(func: Callable):
     """
-    Generates plots for each subject
+    Wraps seaborn-style function with custom figure settings
 
     Args:
-        conditions: iterable of conditions
-        plot_func: plotting function
-        cond_kwargs: dictionary of keyword arguments to `plot_func` for each condition, where each key is a condition. Each condition-specific kwargs is merged with `kwargs`.
-        **kwargs: keyword arguments to `plot_func`
-            - if a dictionary containing conditions as keys, then the value of each key is a dictionary of keyword arguments to `plot_func`
+        func: function to wrap, typically seaborn-style function that takes the following as input:
+            - df: DataFrame.
+            - x: Name of x variable to be plotted.
+            - hue (Optional): Name of variable to color-code data by.
+            - hue_order (Optional): List specifying the order to assign colors to the `hue` variable.
+            - palette (Optional): List of colors to map onto `hue` ordered by `hue_order`.
+            - ax (Optional): axes to plot on.
 
     Returns:
-        list of any returned output from `plot_func`
+        wrapped function
     """
-    if cond_kwargs is None:
-        cond_kwargs = {}
-    returns = []
-    for i, cond in enumerate(conditions):
-        if cond in cond_kwargs:
-            ret = plot_func(i, cond, **(cond_kwargs[cond] | kwargs))
+
+    @wraps(func)
+    @legend_corrector
+    def wrapper(
+        df: pd.DataFrame = None,
+        x: str = None,
+        hue: str = None,
+        palette: list = None,
+        conds: dict = None,
+        title: str = "",
+        title_override: str = None,
+        legend: Any = "auto",
+        x_unit: str = None,
+        y_unit: str = None,
+        min_obs: int = None,
+        attempt_index: bool = True,
+        ax: plt.Axes = None,
+        **kwargs,
+    ) -> Any:
+        """
+        Convenience decorator that customizes figure in formulaic fashion
+
+        Args:
+            df: DataFrame of block(s) data.
+            x: Name of x variable to be plotted.
+            hue: Name of hue variable to be plotted.
+            palette: List or dictionary mapping hue levels to colors.
+            conds: Dictionary mapping level keys to values to be used to filter `df`.
+            title: Title for figure.
+            title_override: Override title for figure.
+            legend: If True, display figure.
+            x_unit: Unit of the x-axis. If None, then ignored.
+            y_unit: Unit of the y-axis. If None, then ignored.
+            min_obs: Threshold for min number of observations a bin must have to be displayed. Only used if not None.
+            attempt_index: Refer to `filter_df` for more details.
+            ax: Axis to plot on (not None if reusing premade figure and axis object).
+            **kwargs: Additional keyword arguments.
+                - fig_kwargs: keyword arguments to be passed to `plt.subplots`.
+                - legend_kwargs: keyword arguments to be passed to `Axes.legend`.
+                - title_kwargs: keyword arguments to be passed to `Axes.set_title`.
+                - xlabel_kwargs: keyword arguments to be passed to `Axes.set_xlabel`.
+                - ylabel_kwargs: keyword arguments to be passed to `Axes.set_ylabel`.
+                - additional keyword arguments get passed to wrapped function, which is meant to be a seaborn-style function.
+
+        Returns:
+            ax, or optional return arguments from wrapped function (usually in the form of ax + extra).
+        """
+        kwargs = deepcopy(kwargs)
+
+        # Filter df
+        if conds is None:
+            conds = {}
         else:
-            ret = plot_func(i, cond, **kwargs)
-        returns.append(ret)
-    return returns
+            conds = deepcopy(conds)
+        df = filter_df(df, conds, attempt_index=attempt_index)
+
+        # Correct color settings
+        if hue and palette:
+            hue_keys = (
+                sorted(df[hue].unique()) if hue in df.columns else df.index.unique(hue)
+            )
+            palette = palette_corrector(palette, hue_keys)
+
+            # Control hue order based on inputs
+            if type(palette) is dict:
+                kwargs["hue_order"] = list(palette.keys())
+            else:
+                kwargs["hue_order"] = hue_keys
+
+        # Create ax if none
+        _, ax = fig_init(ax, **kwargs_handler(kwargs, "fig_kwargs"))
+
+        # Pop any last keyword args not needed for seaborn here before running function
+        legend_kwargs = kwargs_handler(kwargs, "legend_kwargs", dict(title=hue))
+        title_kwargs = kwargs_handler(kwargs, "title_kwargs")
+        xlabel_kwargs = kwargs_handler(kwargs, "xlabel_kwargs")
+        ylabel_kwargs = kwargs_handler(kwargs, "ylabel_kwargs")
+
+        # Run function, assuming seaborn plotting func
+        if min_obs:
+
+            def _filter_obs(df: pd.DataFrame) -> pd.DataFrame:
+                return df.filter(lambda g: len(g) >= min_obs)
+
+            if hue:
+                ret = func(
+                    _filter_obs(df.groupby([x, hue], observed=True, as_index=False)),
+                    x=x,
+                    hue=hue,
+                    palette=palette,
+                    ax=ax,
+                    legend=legend,
+                    **kwargs,
+                )
+            else:
+                ret = func(
+                    _filter_obs(df.groupby(x, observed=True, as_index=False)),
+                    x=x,
+                    ax=ax,
+                    legend=legend,
+                    **kwargs,
+                )
+        else:
+            ret = func(
+                df, x=x, hue=hue, palette=palette, ax=ax, legend=legend, **kwargs
+            )
+
+        # Set title (if multiple axes, this does the first one)
+        title = titler(title=title, conds=conds, title_override=title_override)
+        _ax = np.atleast_1d(ax)[0]
+        if title:
+            _ax.set_title(title, **title_kwargs)
+
+        # Set units if specified
+        if x_unit:
+            _ax.set_xlabel(unitler(_ax.get_xlabel(), x_unit), **xlabel_kwargs)
+        else:
+            _ax.set_xlabel(_ax.get_xlabel(), **xlabel_kwargs)
+
+        if y_unit:
+            _ax.set_ylabel(unitler(_ax.get_ylabel(), y_unit), **ylabel_kwargs)
+        else:
+            _ax.set_ylabel(_ax.get_ylabel(), **ylabel_kwargs)
+
+        # Modify legend
+        if legend:
+            for _ax in flatten(ax):
+                if not _ax.get_legend_handles_labels() == (
+                    [],
+                    [],
+                ):  # If there is a legend, modify it
+                    _ax.legend(**legend_kwargs)
+
+        if ret is None:
+            return ax
+        return ret  # Assume there is usually an ax in here
+
+    return wrapper
 
 
 ## Common routines
@@ -744,100 +1090,15 @@ def enhanced_violinplot(
     return ax
 
 
-@multiplot
-def plot_quantity_across_block(
+def plot_average_or_traces(
     df: pd.DataFrame,
-    x: str,
-    y: str,
-    y_name: str = None,
-    x_name: str = None,
-    fig_title: str = None,
-    stim_reliabilities: dict = KAPPA_LEVELS,
-    palette: dict = PALETTE,
-    by_box: bool = False,
     show_traces: bool = False,
-    auxiliary_plot: callable = None,
-    **kwargs,
-) -> list[plt.Axes]:
-    kwargs = kwargs.copy()
-    if y_name is None:
-        y_name = "mean " + y
-
-    if x_name is None:
-        x_name = "time"
-
-    # Average data over time
-    groupers = ["stimulus reliability", "block_id"]
-    if by_box:
-        groupers.append("box")
-
-    # Plot reward rates
-    fig_kwargs = kwargs_handler(kwargs, "fig_kwargs", {"sharey": True, "sharex": True})
-    kwargs.update({"x": x_name, "y": y_name, "x_unit": "s"})
-
-    if by_box:
-        kwargs.update({"hue": "box", "palette": palette})
-    else:
-        kwargs.update({"color": "black"})
-
-    def _by_kappa(i: int, kappa: str, df2: pd.DataFrame, axes: ArrayLike, **kwargs):
-        kwargs.update(
-            {
-                "conds": {"stimulus reliability": kappa},
-                "ax": axes[i],
-            }
-        )
-        plot_block_average_or_traces(df2, show_traces=show_traces, **kwargs)
-        if auxiliary_plot:
-            auxiliary_plot(
-                df,
-                **kwargs,
-            )
-        return axes[i]
-
-    @legend_handler
-    def _plot(i, subj, **kwargs):
-        kwargs = kwargs.copy()
-        smooth_kwargs = kwargs_handler(
-            kwargs,
-            "smooth_kwargs",
-        )
-        df_subj = filter_df(df, {"subject": subj})
-        ma = moving_average(
-            df_subj,
-            x=x,
-            y=y,
-            y_name=y_name,
-            x_name=x_name,
-            groupers=groupers,
-            **smooth_kwargs,
-        )
-
-        kappas = stim_reliabilities[subj].keys()
-        fig_kwargs["ncols"] = len(kappas)
-        fig, axes = fig_init(**fig_kwargs)
-        legend = {
-            kappa: {"legend": i == len(kappas) - 1} for i, kappa in enumerate(kappas)
-        }
-        across_conditions_plotter(
-            kappas, _by_kappa, df2=ma, axes=axes, cond_kwargs=legend, **kwargs
-        )
-        if fig_title:
-            fig.suptitle(f"{fig_title} for {subj}")
-        fig.tight_layout()
-        return axes
-
-    return across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
-
-
-def plot_block_average_or_traces(
-    df: pd.DataFrame,
-    show_traces: bool,
+    show_average: bool = True,
     units: str = "block_id",
     alpha: float = 0.1,
     linewidth: float = 5,
     **kwargs,
-):
+) -> plt.Axes:
     kwargs = kwargs.copy()
     if show_traces:
         legend_flag = True
@@ -861,35 +1122,42 @@ def plot_block_average_or_traces(
             kwargs.pop("y_unit")
         kwargs["legend"] = legend_flag
         kwargs["ax"] = ax
+        legend_content = [
+            Line2D(
+                [0],
+                [0],
+                color="black",
+                alpha=alpha,
+                linewidth=1,
+                label="individual blocks",
+            ),
+        ]
+        if show_average:
+            legend_content.append(
+                Line2D(
+                    [0],
+                    [0],
+                    color="black",
+                    linewidth=linewidth,
+                    label="average over blocks",
+                ),
+            )
 
         # Average
-        bp(sns.lineplot)(df, **kwargs, errorbar=None, lw=linewidth)
+        if show_average:
+            res = bp(sns.lineplot)(df, **kwargs, errorbar=None, lw=linewidth)
 
         # Update legend to include traces and average
         if legend_flag:
             update_legend(
                 ax,
-                [
-                    Line2D(
-                        [0],
-                        [0],
-                        color="black",
-                        alpha=alpha,
-                        linewidth=1,
-                        label="individual blocks",
-                    ),
-                    Line2D(
-                        [0],
-                        [0],
-                        color="black",
-                        linewidth=linewidth,
-                        label="average over blocks",
-                    ),
-                ],
+                legend_content,
             )
 
     else:
-        bp(sns.lineplot)(df, **kwargs)
+        res = bp(sns.lineplot)(df, **kwargs)
+
+    return res
 
 
 # Credit to https://stackoverflow.com/questions/22852244/how-to-get-the-numerical-fitting-results-when-plotting-a-regression-in-seaborn
@@ -956,6 +1224,7 @@ def regplot(
     return fit_results
 
 
+# legacy function, will be removed later
 def plot_variable_subplots(
     df: pd.DataFrame,
     func: callable,
@@ -1032,37 +1301,6 @@ def plot_variable_subplots(
     return axes
 
 
-def set_intelligent_xticks(ax, data, max_ticks=10):
-    """
-    Intelligently sets x-axis ticks based on data density.
-
-    Args:
-        ax: matplotlib Axes object
-        data: array-like data to plot
-        max_ticks: maximum number of ticks to show (default: 10)
-    """
-    # Get unique values and sort them
-    unique_vals = np.sort(np.unique(data))
-
-    # If we have fewer unique values than max_ticks, show them all
-    if len(unique_vals) <= max_ticks:
-        ax.set_xticks(unique_vals)
-        return
-
-    # Calculate the density of data points
-    hist, bin_edges = np.histogram(data, bins=len(unique_vals))
-
-    # Find the most populated bins
-    sorted_bins = np.argsort(hist)[::-1]
-    selected_bins = sorted_bins[:max_ticks]
-
-    # Get the corresponding unique values
-    selected_vals = unique_vals[selected_bins]
-
-    # Set the ticks
-    ax.set_xticks(selected_vals)
-
-
 def stacked_barplot(
     df: pd.DataFrame,
     x: str,
@@ -1080,6 +1318,7 @@ def stacked_barplot(
         x: Column name to be used for the x-axis.
         y: Column name to be used for the y-axis.
         hue: Column name to be used for the hue.
+        palette: Palette to be used for the hue.
         ax: Axes to plot on. If none, a new figure and axes are created using plt.subplots.
         **kwargs: Additional keyword arguments passed to seaborn's barplot.
 
@@ -1105,6 +1344,7 @@ def stacked_barplot(
     return ax
 
 
+# TODO: massively redo this
 def toggle_plot(
     plot_func1: callable,
     plot_func2: callable,
@@ -1170,6 +1410,7 @@ def toggle_plot(
     ...             inline=True)
     """
 
+    # TODO: best strategy is to keep the figure and cache the axes objects, swapping out the axes objects on the same figure objects
     kwargs1 = kwargs1 or {}
     kwargs2 = kwargs2 or {}
 
