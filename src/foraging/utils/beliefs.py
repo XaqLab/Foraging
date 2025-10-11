@@ -1,6 +1,9 @@
+"""
+This module contains functions for computing beliefs.
+"""
+
 import logging
-from copy import deepcopy
-from typing import Any, Callable, Type
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd

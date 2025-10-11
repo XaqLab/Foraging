@@ -8,6 +8,8 @@ This is where I perform all my analyses of the behavioral data in the box foragi
    + start with the `Data Cleaning` notebook first to get an overview of the data and how it's cleaned. Then proceed to the `Data Exploration` and then the `Learning` notebook.
 5. `src` - this folder contains the `foraging` package, which you should install locally in your environment. See steps to setup below.
 
+To solely read through results, navigate the `docs` folder. To generate or modify figures, go to `notebooks`.
+
 # <span style='color:#fa5cbe'> Dependencies </span>
 You can see the full list in the `pyproject.toml` under the `dependencies` field. There are also optional dev dependencies listed under `project.optional-dependencies`.
 

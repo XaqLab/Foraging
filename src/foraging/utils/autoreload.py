@@ -42,13 +42,15 @@ def setup_auto_reload(mode: int = 2):
 
         if not autoreload_loaded:
             # Enable automatic reloading
-            ipython.magic("load_ext autoreload")
+            ipython.run_line_magic("load_ext", "autoreload")
             print("✅ Auto-reload extension loaded!")
         else:
             print("✅ Auto-reload extension already loaded!")
 
         # Set autoreload mode (this can be run multiple times safely)
-        ipython.magic(f"autoreload {mode}")  # Reload all modules automatically
+        ipython.run_line_magic(
+            "autoreload", str(mode)
+        )  # Reload all modules automatically
         print(
             f"✅ Auto-reload w/ {mode} mode enabled! Changes to all packages will be automatically loaded."
         )

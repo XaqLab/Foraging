@@ -4,14 +4,17 @@ Frame to Video Converter for Jupyter Notebooks
 This module converts arrays of frames to videos that can be embedded in Jupyter notebooks.
 """
 
+import io
+import os
 import warnings
-from typing import List, Optional, Tuple, Union
+from typing import Any, Callable, List, Optional, Tuple, Union
 
 import matplotlib.animation as animation
 import matplotlib.pyplot as plt
 import numpy as np
 from IPython.display import HTML, display
 from matplotlib.patches import Rectangle
+from PIL import Image
 
 
 class FrameVideoConverter:

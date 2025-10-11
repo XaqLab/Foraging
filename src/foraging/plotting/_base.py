@@ -1,4 +1,10 @@
+"""
+This module contains the base classes and functions for plotting.
+"""
+
+import base64
 import gc
+import io
 import logging
 import math
 import os
@@ -8,13 +14,11 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Iterable, Protocol, Union
 
-import ipywidgets as widgets
 import numpy as np
 import pandas as pd
 import seaborn as sns
 import statsmodels.api as sm
-from IPython.display import clear_output, display
-from kneed import KneeLocator
+from IPython.display import HTML, clear_output, display
 from matplotlib import pyplot as plt
 from matplotlib.artist import Artist
 from matplotlib.collections import LineCollection, PolyCollection
@@ -22,6 +26,7 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 from matplotlib.ticker import FuncFormatter
 from numpy.typing import ArrayLike
+from PIL import Image
 from scipy.optimize import curve_fit
 from scipy.spatial.distance import euclidean
 from tqdm import tqdm
@@ -69,7 +74,11 @@ def embeddable_to_conds(func: SupportsConds):
         embeddables: Iterable[Embeddable],
         **kwargs,
     ) -> Any:
-        conds = {embeddable.name: embeddable.value for embeddable in embeddables}
+        conds = (
+            {embeddable.name: embeddable.value for embeddable in embeddables}
+            if embeddables is not None
+            else None
+        )
         return func(conds=conds, **kwargs)
 
     return wrapper
@@ -123,11 +132,85 @@ def titler(
     return conds_str
 
 
-def unitler(label: str, unit: str) -> str:
+def unitler(label: str, unit: str = None) -> str:
     """Adds unit to label if specified."""
     if unit is None:
         return label
     return label + " (" + unit + ")"
+
+
+# Enhanced gifler function that embeds GIFs directly in the notebook
+def gifler(time_bins, func, fps=1, embed_in_notebook=True, output_path=None) -> str:
+    """
+    Create a GIF from a plotting function across different time bins.
+
+    Parameters:
+    -----------
+    time_bins : list
+        List of (start, end) tuples for time windows
+    func : callable
+        Function that takes a time_bin parameter and returns plot axes
+    fps : int, default=1
+        Frames per second for the GIF
+    embed_in_notebook : bool, default=True
+        If True, displays the GIF directly in the notebook cell
+    output_path : str, optional
+        Path to save the GIF file. If None, saves as 'animation.gif'
+
+    Returns:
+    --------
+    str : Path to the saved GIF file
+    """
+    frames = []
+
+    for i, tb in enumerate(time_bins):
+        # Clear any existing figures to prevent overlay
+        plt.close("all")
+        ret = func(time_bin=tb)
+        fig = list(get_figure_from_axes(ret))[0]
+
+        # Add time bin text to the figure
+        fig.text(
+            0.02,
+            0.98,
+            f"Time: {tb[0]}-{tb[1]}s",
+            transform=fig.transFigure,
+            fontsize=10,
+            verticalalignment="top",
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8),
+        )
+
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=100, bbox_inches="tight", facecolor="white")
+        buf.seek(0)
+        img = Image.open(buf)
+        frames.append(img)
+        plt.close(fig)  # Close each figure immediately after saving
+        plt.close("all")
+
+    # Save the GIF
+    if output_path is None:
+        output_path = "animation.gif"
+
+    if frames:
+        frames[0].save(
+            output_path,
+            save_all=True,
+            append_images=frames[1:],
+            duration=int(1000 / fps),
+            loop=0,
+        )
+        print(f"GIF saved to: {output_path}")
+
+        # Embed in notebook if requested
+        if embed_in_notebook:
+            with open(output_path, "rb") as f:
+                gif_data = f.read()
+
+            gif_base64 = base64.b64encode(gif_data).decode("utf-8")
+            display(HTML(f'<img src="data:image/gif;base64,{gif_base64}">'))
+
+    return output_path
 
 
 def format_yticks(axes: Iterable[plt.Axes], func: Callable) -> None:
@@ -138,8 +221,20 @@ def format_yticks(axes: Iterable[plt.Axes], func: Callable) -> None:
 
 def get_bar_positions(
     ax: plt.Axes, hue_order: list = None, x_centers: ArrayLike = None
-):
-    """Gets the positions of the bars in the plot."""
+) -> dict:
+    """
+    Calculate the x-coordinate positions of grouped bar chart bars organized by hue categories.
+
+    Args:
+        ax: The matplotlib axes containing the bar chart
+        hue_order: List of hue category names in the desired order
+        x_centers: Array of x-coordinates for the center of each bar group. If None,
+                  uses sequential integers starting from 0.
+
+    Returns:
+        Dictionary mapping hue category names to arrays of x-coordinate positions
+        for the left edge of each bar in that category.
+    """
     bars = ax.patches
 
     # Group bar patches by hue group
@@ -159,8 +254,22 @@ def get_bar_positions(
     return {k: np.array(v) for k, v in positions_by_group.items()}
 
 
-def get_bar_heights(ax: plt.Axes, hue_order: list = None, x_centers: ArrayLike = None):
-    """Gets the heights of the bars in the plot."""
+def get_bar_heights(
+    ax: plt.Axes, hue_order: list = None, x_centers: ArrayLike = None
+) -> dict:
+    """
+    Calculate the heights of the bars in the plot organized by hue categories.
+
+    Args:
+        ax: The matplotlib axes containing the bar chart
+        hue_order: List of hue category names in the desired order
+        x_centers: Array of x-coordinates for the center of each bar group. If None,
+                  uses sequential integers starting from 0.
+
+    Returns:
+        Dictionary mapping hue category names to arrays of bar heights
+        for each bar in that category.
+    """
     # First map bar positions to heights
     bars = ax.patches
     bar_width = bars[0].get_width()  # Width of one bar
@@ -199,7 +308,7 @@ def palette_corrector(palette: dict | list, categories: list) -> dict | list:
 
 def multiplot(_func=None, figsize=MULTIPLOT_FIGSIZE):
     """
-    A decorator to set figures containing multiple plots to a default figsize.
+    A decorator to set figures containing multiple plots to a default figsize by adding `figsize` to `fig_kwargs`.
 
     Args:
         func: The plotting function to wrap.
@@ -229,7 +338,7 @@ def legend_corrector(
     _func: Callable = None, loc: str = "upper left", bbox: tuple = (1, 1)
 ):
     """
-    A decorator to set the legend location to 'upper left' and bbox_to_anchor to (1, 1).
+    A decorator to set the legend location to 'upper left' and bbox_to_anchor to (1, 1) by calling `sns.move_legend`.
 
     Args:
         func: The plotting function to wrap.
@@ -244,8 +353,10 @@ def legend_corrector(
         def wrapper(*args, **kwargs):
             ax = func(*args, **kwargs)
             for _ax in flatten(ax):
-                if _ax.get_legend() is not None:
+                try:
                     sns.move_legend(_ax, loc, bbox_to_anchor=bbox)
+                except:
+                    pass
             return ax
 
         return wrapper
@@ -257,7 +368,7 @@ def legend_corrector(
 
 def update_legend(ax: plt.Axes, elements: Iterable[Artist]):
     """
-    Update the legend of an axis with new elements.
+    Update the legend of an axis with new elements by calling `ax.legend`.
 
     Args:
         ax: Axis to update the legend of.
@@ -283,7 +394,7 @@ def update_legend(ax: plt.Axes, elements: Iterable[Artist]):
 
 def _figure_handler(**kwargs):
     """
-    Decorator for creating and closing figures. Use this to avoid memory leaks when creating multiple plots that can be drawn on the same figure object
+    Decorator for creating and closing figures. Use this to avoid memory leaks when creating multiple plots that can be drawn on the same figure object by calling `fig.clf()` and `plt.close(fig)`.
 
     Args:
         **kwargs: keyword arguments for plt.subplots
@@ -320,7 +431,7 @@ def _figure_saver(
     facecolor: str = "white",
 ):
     """
-    Save figure and clear it for later reuse
+    Save figure and clear it for later reuse.
 
     Args:
         fig: figure to be drawn on
@@ -343,7 +454,7 @@ def across_conditions_plotter(
     **kwargs,
 ) -> Iterable[Any]:
     """
-    Generates plots across each condition
+    Generates plots across each condition.
 
     Args:
         cond_name: name of the condition
@@ -361,27 +472,34 @@ def across_conditions_plotter(
         cond_kwargs = {}
     returns = []
     for i, cond in enumerate(conditions):
-        embeddable = Embeddable(cond_name, cond, i)
+        try:
+            embeddable = Embeddable(cond_name, cond, i)
 
-        # Create new embeddables if none are provided, or update existing embeddables
-        if embeddables is None:
-            embeddables = [embeddable]
-        else:
-            embeddables.append(embeddable)
+            # Create new embeddables if none are provided, or update existing embeddables
+            if embeddables is None:
+                next_embeddables = [embeddable]
+            else:
+                next_embeddables = deepcopy(embeddables)
+                next_embeddables.append(embeddable)
 
-        if cond in cond_kwargs:
-            ret = plot_func(embeddables=embeddables, **(cond_kwargs[cond] | kwargs))
-        else:
-            ret = plot_func(embeddables=embeddables, **kwargs)
-        returns.append(ret)
+            if cond in cond_kwargs:
+                ret = plot_func(
+                    embeddables=next_embeddables, **(cond_kwargs[cond] | kwargs)
+                )
+            else:
+                ret = plot_func(embeddables=next_embeddables, **kwargs)
+            returns.append(ret)
+        except:
+            logger.error(f"Error plotting {cond}")
+            continue
     return returns
 
 
 class BasePlotter:
     """Base class for all plotters."""
 
-    def __init__(self, experiment: Experiment, config: dict | Iterable):
-        self.experiment = experiment
+    def __init__(self, dataset: Experiment, config: dict | Iterable):
+        self.dataset = dataset
         self.config = SuperDict(config)
 
     def get_config_value(self, key: str, default: Any = None) -> Any:
@@ -390,22 +508,26 @@ class BasePlotter:
     def _init_vars(self, **kwargs):
         """Initialize variables by populating with default values."""
         if "dataset" in kwargs and kwargs["dataset"] is None:
-            kwargs["dataset"] = self.experiment
+            kwargs["dataset"] = self.dataset
         if "conds" in kwargs and kwargs["conds"] is None:
             kwargs["conds"] = {}
         for key, value in self.config.items():
             key = key.lower()
             if key in kwargs and kwargs[key] is None:
                 kwargs[key] = value
-        return kwargs
+        ret = tuple(kwargs.values())
+        if len(ret) == 1:
+            return ret[0]
+        return ret
 
     @legend_corrector
-    @multiplot
-    def _plot_conditions_grid(
+    def plot_conditions(
         self,
         plot_func: SupportsEmbeddables,
         row_condition: str,
-        col_condition: str,
+        col_condition: str = None,
+        aux_condition: str = None,
+        dataset: Experiment = None,
         cond_kwargs: dict = None,
         fig_title: str = None,
         row_is_figure: bool = True,
@@ -414,13 +536,12 @@ class BasePlotter:
         """
         Apply a plotting function over a grid of conditions.
 
-        One figure is created per row condition. Within each figure, there will be
-        a row of subplots for each column condition.
-
         Args:
             plot_func: Function that draws into a 1D array of axes.
             row_conditions: Conditions enumerating figures.
             col_conditions: Conditions enumerating subplot rows within each figure.
+            aux_condition: Condition to plot on the auxiliary axis. Use only when row_is_figure is True, so that each row's figure is a grid of plots where the inner row is specified by `aux_condition`.
+            dataset: Experiment dataset. Defaults to self.dataset.
             cond_kwargs: Dictionary of keyword arguments to `plot_func` for each condition, where each key is a condition. Each condition-specific kwargs is merged with `kwargs`.
             fig_title: Title for the figure.
             row_is_figure: If True, then each row is its own figure. If False, then each row is an axis in the same figure.
@@ -431,13 +552,14 @@ class BasePlotter:
             List of any returned output from `plot_func`.
         """
         kwargs = deepcopy(kwargs)
+        dataset = self._init_vars(dataset=dataset)
         if cond_kwargs is None:
             cond_kwargs = {}
-        row_conditions = self.experiment.get_unique(row_condition)
+        row_conditions = dataset.get_unique(row_condition)
 
         # Assume fixed number of columns
         if not row_is_figure:
-            n_cols = len(self.experiment.get_unique(col_condition))
+            n_cols = len(dataset.get_unique(col_condition))
             n_rows = len(row_conditions)
             fig, axes = fig_init(
                 **kwargs_handler(
@@ -445,38 +567,81 @@ class BasePlotter:
                 )
             )
 
-        def _plot_row(embeddable: Embeddable, **kwargs):
+        def _plot_col(
+            embeddables: Iterable[Embeddable],
+            col_conditions: Iterable[Any],
+            axes: Iterable[plt.Axes],
+            **kwargs,
+        ):
+            cond_kwargs = {
+                col: {"legend": i == len(col_conditions) - 1, "ax": axes[i]}
+                for i, col in enumerate(col_conditions)
+            }
+
+            # Plot each column
+            return across_conditions_plotter(
+                col_condition,
+                col_conditions,
+                plot_func,
+                cond_kwargs=cond_kwargs,
+                embeddables=embeddables,
+                **kwargs,
+            )
+
+        def _plot_aux(embeddables: Iterable[Embeddable], **kwargs):
+            return _plot_col(embeddables, **kwargs)
+
+        def _plot_row(embeddables: Iterable[Embeddable], **kwargs):
             kwargs = deepcopy(kwargs)
-            row_data = self.experiment.filter({row_condition: embeddable.value})
-            col_conditions = row_data.get_unique(col_condition)
+            embeddable = embeddables[0]
+            row_data = dataset.filter({row_condition: embeddable.value})
+            col_conditions = dataset.get_unique(name=col_condition)
+            aux_conditions = dataset.get_unique(name=aux_condition)
+            if col_conditions is not None:
+                n_cols = len(col_conditions)
+            else:
+                n_cols = 1
+            if aux_conditions is not None:
+                n_rows = len(aux_conditions)
+            else:
+                n_rows = 1
+
+            # Initialize figure for row
             if row_is_figure:
                 fig, axes = fig_init(
                     **kwargs_handler(
-                        kwargs, "fig_kwargs", {"ncols": len(col_conditions)}
+                        kwargs, "fig_kwargs", {"ncols": n_cols, "nrows": n_rows}
                     )
                 )
                 embeddables = None
             else:
                 axes = axes[embeddable.index]
-                embeddables = [embeddable]
 
-            cond_kwargs.update(
-                {
-                    col: {"legend": i == len(col_conditions) - 1, "ax": axes[i]}
-                    for i, col in enumerate(col_conditions)
-                }
-            )
-
-            # Plot each column
-            res = across_conditions_plotter(
-                col_condition,
-                col_conditions,
-                plot_func,
-                cond_kwargs=cond_kwargs,
-                dataset=row_data,
-                embeddables=embeddables,
-                **kwargs,
-            )
+            # Iterate over col conditions
+            if col_conditions is not None:
+                # Iterate over aux conditions
+                if aux_conditions is not None:
+                    cond_kwargs.update(
+                        {row: {"axes": axes[i]} for i, row in enumerate(aux_conditions)}
+                    )
+                    res = across_conditions_plotter(
+                        aux_condition,
+                        aux_conditions,
+                        _plot_aux,
+                        cond_kwargs=cond_kwargs,
+                        embeddables=embeddables,
+                        col_conditions=col_conditions,
+                        dataset=row_data,
+                        **kwargs,
+                    )
+                else:
+                    res = _plot_col(
+                        embeddables, col_conditions, axes, dataset=row_data, **kwargs
+                    )
+            else:
+                res = plot_func(
+                    dataset=row_data, embeddables=embeddables, ax=axes, **kwargs
+                )
 
             # Set row title
             if row_is_figure and fig_title is not None:
@@ -485,14 +650,36 @@ class BasePlotter:
             return res
 
         # Plot each row
-        res = across_conditions_plotter(
-            row_condition, row_conditions, _plot_row, cond_kwargs=cond_kwargs, **kwargs
-        )
+        if col_condition is not None:
+            res = multiplot(across_conditions_plotter)(
+                row_condition,
+                row_conditions,
+                _plot_row,
+                cond_kwargs=cond_kwargs,
+                **kwargs,
+            )
+        else:
+            res = across_conditions_plotter(
+                row_condition,
+                row_conditions,
+                _plot_row,
+                cond_kwargs=cond_kwargs,
+                **kwargs,
+            )
+
         if not row_is_figure:
             fig.tight_layout()
             if fig_title is not None:
                 fig.suptitle(fig_title)
         return res
+
+    def plot_conditions_by_subject(
+        self, plot_func, row_condition: str = "subject", **kwargs
+    ):
+        """Convenience wrapper around `plot_conditions` that by default plots by subject and wraps `plot_func` in `embeddable_to_conds` so that `plot_func` can be called with a dictionary of conditions."""
+        return self.plot_conditions(
+            embeddable_to_conds(plot_func), row_condition=row_condition, **kwargs
+        )
 
     def plot_quantity_across_block(
         self,
@@ -502,9 +689,11 @@ class BasePlotter:
         x_name: str = None,
         dataset: Experiment = None,
         conds: dict[str, Any] = None,
+        palette: dict[str, Any] = None,
         by_box: bool = False,
         show_traces: bool = False,
         auxiliary_plot: callable = None,
+        ax: plt.Axes = None,
         **kwargs,
     ) -> plt.Axes:
         """Plot the quantity across the block.
@@ -516,9 +705,11 @@ class BasePlotter:
             x_name: Name of x variable in DataFrame. Defaults to "time".
             dataset: Experiment dataset. Defaults to self.experiment.
             conds: Dictionary to filter df.
+            palette: Dictionary mapping box schedules to colors. Can also be a list of just colors.
             by_box: If True, then plot the quantity by the boxes.
             show_traces: If True, then show the traces.
             auxiliary_plot: Function to plot the auxiliary plot. Defaults to None.
+            ax: Axes to plot on. If None, a new figure and axes are created using plt.subplots. Specify keyword arguments in `fig_kwargs`.
             **kwargs: Additional keyword arguments.
                 - smooth_kwargs: Dictionary to specify window properties for smoothing the reward rate (passed to `moving_average`).
                 - additional keyword arguments get passed to `plot_average_or_traces`.
@@ -526,11 +717,9 @@ class BasePlotter:
         Returns:
             The axes.
         """
-
         kwargs = deepcopy(kwargs)
-        dataset = self._init_vars(dataset=dataset)
-        data = dataset.filter(conds).df
-
+        dataset, palette = self._init_vars(dataset=dataset, palette=palette)
+        dataset = dataset.filter(conds)
         if y_name is None:
             y_name = "mean " + y
 
@@ -546,7 +735,7 @@ class BasePlotter:
         kwargs.update({"x": x_name, "y": y_name, "x_unit": "s"})
 
         if by_box:
-            kwargs.update({"hue": "box", "palette": self.get_config_value("palette")})
+            kwargs.update({"hue": "box", "palette": palette})
         else:
             kwargs.update({"color": "black"})
 
@@ -555,7 +744,7 @@ class BasePlotter:
             "smooth_kwargs",
         )
         ma = moving_average(
-            data,
+            dataset,
             x=x,
             y=y,
             y_name=y_name,
@@ -563,10 +752,12 @@ class BasePlotter:
             groupers=groupers,
             **smooth_kwargs,
         )
+
         if auxiliary_plot:
-            auxiliary_plot(ma, **kwargs)
+            auxiliary_plot(dataset, ax=ax, **kwargs)
+
         return plot_average_or_traces(
-            ma, show_traces=show_traces, conds=conds, **kwargs
+            ma, show_traces=show_traces, conds=conds, ax=ax, **kwargs
         )
 
     @legend_corrector
@@ -608,24 +799,13 @@ class BasePlotter:
         """
         kwargs = deepcopy(kwargs)
         dataset, palette = self._init_vars(dataset=dataset, palette=palette)
+        dataset = dataset.filter(conds)
 
         schedules = dataset.get_unique("assigned schedules")[0]
 
         # Create ax if none provided
         fig_kwargs = kwargs_handler(kwargs, "fig_kwargs")
         fig, ax = fig_init(ax, **fig_kwargs)
-
-        # kappa = df_block.index.unique("kappa")
-        # stim_type = df_block.index.unique("stimulus type")
-        # shape = df_block.index.unique("shape")
-
-        # if conds is None:
-        #     conds = {}
-        # else:
-        #     conds = deepcopy(conds)
-        # conds["kappa"] = kappa[0]
-        # conds["stim type"] = stim_type[0]
-        # conds["shape"] = shape[0]
 
         # Create switch segments (x, y) pairs for LineCollection
         x_vals = dataset.get(x)
@@ -891,7 +1071,7 @@ def bp(func: Callable):
         Returns:
             ax, or optional return arguments from wrapped function (usually in the form of ax + extra).
         """
-        kwargs = deepcopy(kwargs)
+        kwargs = kwargs.copy()
 
         # Filter df
         if conds is None:
@@ -899,6 +1079,8 @@ def bp(func: Callable):
         else:
             conds = deepcopy(conds)
         df = filter_df(df, conds, attempt_index=attempt_index)
+        if len(df) == 0:
+            return ax
 
         # Correct color settings
         if hue and palette:
@@ -1090,6 +1272,7 @@ def enhanced_violinplot(
     return ax
 
 
+@legend_corrector
 def plot_average_or_traces(
     df: pd.DataFrame,
     show_traces: bool = False,
@@ -1097,9 +1280,26 @@ def plot_average_or_traces(
     units: str = "block_id",
     alpha: float = 0.1,
     linewidth: float = 5,
+    ax: plt.Axes = None,
     **kwargs,
 ) -> plt.Axes:
-    kwargs = kwargs.copy()
+    """
+    Plot individual traces and/or average lines for data grouped by units, with customizable styling and legend handling.
+
+    Args:
+        df: DataFrame containing the data to plot
+        show_traces: Whether to show individual trace lines for each unit
+        show_average: Whether to show the average line across all units
+        units: Column name to use for grouping individual traces (default: "block_id")
+        alpha: Transparency level for individual traces (0-1, default: 0.1)
+        linewidth: Width of the average line in points (default: 5)
+        ax: Existing matplotlib axes to plot on. If None, creates new axes.
+        **kwargs: Additional arguments passed to seaborn lineplot function
+
+    Returns:
+        The matplotlib axes object containing the plot
+    """
+    kwargs = deepcopy(kwargs)
     if show_traces:
         legend_flag = True
         if "legend" in kwargs:
@@ -1114,6 +1314,7 @@ def plot_average_or_traces(
             estimator=None,
             errorbar=None,
             alpha=alpha,
+            ax=ax,
         )
 
         if "x_unit" in kwargs:
@@ -1145,7 +1346,7 @@ def plot_average_or_traces(
 
         # Average
         if show_average:
-            res = bp(sns.lineplot)(df, **kwargs, errorbar=None, lw=linewidth)
+            res = bp(sns.lineplot)(df, errorbar=None, lw=linewidth, **kwargs)
 
         # Update legend to include traces and average
         if legend_flag:
@@ -1155,8 +1356,7 @@ def plot_average_or_traces(
             )
 
     else:
-        res = bp(sns.lineplot)(df, **kwargs)
-
+        res = bp(sns.lineplot)(df, ax=ax, **kwargs)
     return res
 
 
@@ -1224,83 +1424,6 @@ def regplot(
     return fit_results
 
 
-# legacy function, will be removed later
-def plot_variable_subplots(
-    df: pd.DataFrame,
-    func: callable,
-    row_cond: str,
-    col_cond: str,
-    axes: Iterable[plt.Axes] = None,
-    legend: bool = True,
-    simplify_row_title: bool = False,
-    savefig: str = None,
-    **kwargs,
-):
-    def _group_size(g, group):
-        if group in g.columns:
-            return g[group].nunique()
-        return len(g.index.unique(group))
-
-    max_cols = df.groupby(row_cond).apply(lambda g: _group_size(g, col_cond)).max()
-    num_rows = len(df.groupby(row_cond))  # Compute rows needed
-    fig_kwargs = kwargs_handler(
-        kwargs,
-        "fig_kwargs",
-        dict(figsize=(5 * max_cols, 5 * num_rows), nrows=num_rows, ncols=max_cols),
-    )
-    fig, axes = fig_init(axes, **fig_kwargs)
-    axes = np.atleast_2d(axes)
-    for i, row_val in enumerate(df.groupby(row_cond).groups.keys()):
-        df_row = filter_df(df, {row_cond: row_val})
-        for j, col_val in enumerate(df_row.groupby(col_cond).groups.keys()):
-            conds = {col_cond: col_val}
-            df_group = filter_df(df_row, conds)
-            func(df_group, conds=conds, ax=axes[i, j], **kwargs)
-            if j > 0:
-                axes[i, j].set_ylabel("")
-            if simplify_row_title:
-                axes[i, j].set_title(f"{col_cond}={col_val}")
-        axes[i, 0].set_ylabel(row_val)
-        for k in range(
-            j + 1, max_cols
-        ):  # intentially using the last j from previous loop
-            fig.delaxes(axes[i, k])
-
-    # Customize global legend
-    # Get unique labels/handles across all subplots
-    handles, labels = plt.gca().get_legend_handles_labels()  # Get from the current axis
-
-    # Remove the automatic legend
-    for ax in axes.flatten():
-        try:
-            ax.legend_.remove()
-        except:
-            continue
-
-    # Add a custom legend with extracted artists
-    if legend:
-        legend_kwargs = kwargs_handler(
-            kwargs,
-            "legend_kwargs",
-            dict(loc="upper right", bbox_to_anchor=(0.05, 0.05)),
-        )
-        lgd = fig.legend(handles, labels, **legend_kwargs)
-    fig.tight_layout()
-
-    if savefig:
-        if legend:
-            fig.savefig(
-                savefig,
-                bbox_extra_artists=(lgd,),
-                facecolor="white",
-                bbox_inches="tight",
-            )
-        else:
-            fig.savefig(savefig, facecolor="white", bbox_inches="tight")
-
-    return axes
-
-
 def stacked_barplot(
     df: pd.DataFrame,
     x: str,
@@ -1342,169 +1465,3 @@ def stacked_barplot(
 
     ax.legend(handles=legend_content, title=hue)
     return ax
-
-
-# TODO: massively redo this
-def toggle_plot(
-    plot_func1: callable,
-    plot_func2: callable,
-    kwargs1: dict = None,
-    kwargs2: dict = None,
-    default_plot: int = 1,
-    button_labels: tuple = ("Show Plot 1", "Show Plot 2"),
-    inline: bool = False,
-    cache_plots: bool = False,
-):
-    """
-    Create a toggle widget to switch between two plotting functions, or render as inline figure.
-
-    Parameters
-    ----------
-    plot_func1 : callable
-        First plotting function to display (should return axes object or list of axes)
-    plot_func2 : callable
-        Second plotting function to display (should return axes object or list of axes)
-    kwargs1 : dict, optional
-        Keyword arguments for the first plotting function
-    kwargs2 : dict, optional
-        Keyword arguments for the second plotting function
-    default_plot : int, default=1
-        Which plot to show by default (1 or 2)
-    button_labels : tuple of str, default=("Show Plot 1", "Show Plot 2")
-        Labels for the toggle button (label alternates between these two)
-    inline : bool, default=False
-        If True, renders the default plot as a normal inline figure without widget behavior.
-        Useful for converting notebooks to static HTML.
-    cache_plots : bool, default=False
-        #TODO: fix this
-        If True, cache the rendered figures and redisplay them instead of re-rendering.
-        This improves performance and ensures consistent ordering.
-
-    Returns
-    -------
-    widget or axes
-        Jupyter widget with toggle functionality if inline=False,
-        or axes object if inline=True
-
-    Examples
-    --------
-    >>> def plot1(data, color='blue'):
-    ...     fig, ax = plt.subplots()
-    ...     ax.scatter(data['x'], data['y'], color=color)
-    ...     ax.set_title('Plot 1')
-    ...     return ax
-    >>> def plot2(data, bins=20):
-    ...     fig, ax = plt.subplots()
-    ...     ax.hist(data['x'], bins=bins)
-    ...     ax.set_title('Plot 2')
-    ...     return ax
-    >>> # Interactive widget
-    >>> toggle_plot(plot1, plot2,
-    ...             kwargs1={'data': df, 'color': 'red'},
-    ...             kwargs2={'data': df, 'bins': 30},
-    ...             button_labels=("Show Plot 1", "Show Plot 2"))
-    >>> # Static inline figure
-    >>> toggle_plot(plot1, plot2,
-    ...             kwargs1={'data': df, 'color': 'red'},
-    ...             kwargs2={'data': df, 'bins': 30},
-    ...             inline=True)
-    """
-
-    # TODO: best strategy is to keep the figure and cache the axes objects, swapping out the axes objects on the same figure objects
-    kwargs1 = kwargs1 or {}
-    kwargs2 = kwargs2 or {}
-
-    # If inline mode is requested, just return the default plot as a normal figure
-    if inline:
-        if default_plot == 1:
-            plot_func1(**kwargs1)
-        else:
-            plot_func2(**kwargs2)
-        return
-
-    # Otherwise, create the interactive widget
-    output = widgets.Output()
-    current_plot = 1 if default_plot == 1 else 2
-
-    # Cache for storing display outputs
-    cached_outputs = {1: None, 2: None}
-
-    def render_and_cache_plot(plot_func, kwargs, plot_num):
-        """Render a plot and cache the display output"""
-        # Create a temporary output to capture the display
-        temp_output = widgets.Output()
-        with temp_output:
-            axes = plot_func(**kwargs)
-            figs = get_figure_from_axes(axes)
-            if figs is not None:
-                for fig in flatten(figs):
-                    display(fig)
-                    plt.close(fig)
-
-        # Store the captured output
-        cached_outputs[plot_num] = temp_output
-        return axes
-
-    def show_cached_plot(plot_num):
-        """Display cached output without re-rendering"""
-        with output:
-            output.clear_output(wait=True)
-            if cached_outputs[plot_num] is not None:
-                # Display the cached output
-                display(cached_outputs[plot_num])
-            else:
-                # Fallback: render if not cached
-                if plot_num == 1:
-                    render_and_cache_plot(plot_func1, kwargs1, 1)
-                else:
-                    render_and_cache_plot(plot_func2, kwargs2, 2)
-
-    def show_plot(plot_func, kwargs, plot_num):
-        """Show plot with optional caching"""
-        if cache_plots:
-            show_cached_plot(plot_num)
-        else:
-            # Original behavior: render fresh each time
-            with output:
-                output.clear_output(wait=True)
-                axes = plot_func(**kwargs)
-                figs = get_figure_from_axes(axes)
-                if figs is not None:
-                    for fig in flatten(figs):
-                        display(fig)
-                        plt.close(fig)
-                return axes
-
-    # Set initial button label
-    if not button_labels or len(button_labels) != 2:
-        button_labels = ("Show Plot 1", "Show Plot 2")
-    label_map = {1: button_labels[0], 2: button_labels[1]}
-
-    toggle_button = widgets.Button(
-        description=label_map[current_plot],
-        disabled=False,
-        button_style="info",
-        tooltip="Click to switch between plots",
-        icon="refresh",
-    )
-
-    def on_button_click(b):
-        nonlocal current_plot
-        if current_plot == 1:
-            show_plot(plot_func2, kwargs2, 2)
-            current_plot = 2
-        else:
-            show_plot(plot_func1, kwargs1, 1)
-            current_plot = 1
-        toggle_button.description = label_map[current_plot]
-
-    toggle_button.on_click(on_button_click)
-    container = widgets.VBox([toggle_button, output])
-
-    # Initial plot
-    if current_plot == 1:
-        show_plot(plot_func1, kwargs1, 1)
-    else:
-        show_plot(plot_func2, kwargs2, 2)
-
-    return container

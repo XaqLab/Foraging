@@ -1,5 +1,5 @@
 """
-These functions are used to load and process the data, including useful data manipulations to perform on experiment data.
+This module contains functions used to load and process the data, including useful data manipulations to perform on experiment data.
 """
 
 import fnmatch
@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 from IPython.core.display import Markdown
 from IPython.core.display_functions import DisplayHandle, display
+from IPython.display import HTML
 from numpy.typing import ArrayLike
 from pandas.core.groupby import DataFrameGroupBy
 from scipy.io import loadmat
@@ -58,10 +59,19 @@ def display_df(df: pd.DataFrame, cols: list[str]) -> DisplayHandle:
         cols: The columns of dataframe to print.
 
     Returns:
-        A markdown display object
+        A display object (HTML or Markdown)
     """
+    # Option 1: Use HTML formatting (no external dependencies)
+    # return display(HTML(df.head()[cols].to_html(classes='table table-striped')))
 
-    return display(Markdown(df.head()[cols].to_markdown()))
+    # Option 2: Simple markdown without tabulate (uncomment to use)
+    table_data = df.head().reset_index()[cols]
+    markdown_lines = []
+    markdown_lines.append("| " + " | ".join(cols) + " |")
+    markdown_lines.append("| " + " | ".join(["---"] * len(cols)) + " |")
+    for _, row in table_data.iterrows():
+        markdown_lines.append("| " + " | ".join(str(val) for val in row) + " |")
+    return display(Markdown("\n".join(markdown_lines)))
 
 
 def map_box_positions_to_ranks(df: pd.DataFrame) -> pd.DataFrame:
@@ -323,22 +333,6 @@ def get_continuous_from_df_to_dict(
     return data, errors
 
 
-def get_angelaki_subjects(path: str) -> list[str]:
-    """
-    Retrieve the names of all subjects from experiment matfiles.
-
-    Args:
-        path: Path to experiment data directory.
-
-    Returns:
-        A list of subject names extracted from file names.
-    """
-
-    subject_files = fnmatch.filter(os.listdir(path), "data_*.mat")
-    subjects = [subject_file.split(".")[0][5:] for subject_file in subject_files]
-    return subjects
-
-
 def open_angelaki_subject_file(subject: str, path: str = ".") -> h5py.File:
     """
     Open an HDF5 subject file. Remember to close this on your own as you would any regular file.
@@ -388,7 +382,8 @@ def make_angelaki_experiment(
         config = AngelakiExperimentConstants()
 
     # Identify all subjects in the given directory
-    subjects = get_angelaki_subjects(path)
+    subject_files = fnmatch.filter(os.listdir(path), "data_*.mat")
+    subjects = [subject_file.split(".")[0][5:] for subject_file in subject_files]
     df_dict = {
         "subject": [],
         "session": [],
@@ -403,6 +398,7 @@ def make_angelaki_experiment(
         "stimulus type": [],
         "kappa": [],
         "stimulus reliability": [],
+        "stimulus reliability order": [],
         "eye tracking": [],
         "position tracking": [],
         "duration": [],
@@ -479,6 +475,9 @@ def make_angelaki_experiment(
 
                         kappa = block_meta["stimulusNoise"]
                         stim_reliability = config.KAPPA_LEVELS[subject][kappa]
+                        stim_reliability_order = config.KAPPA_LEVELS_ORDER[
+                            stim_reliability
+                        ]
                         shape = block_meta["GammaShape"]
                         stim_type = block_meta["stimulusCueType"]
                         eye_tracking = block_meta["eyeTracking"]
@@ -541,6 +540,9 @@ def make_angelaki_experiment(
                             )
                             staging_dict["stimulus reliability"].extend(
                                 [stim_reliability for _ in range(n_events)]
+                            )
+                            staging_dict["stimulus reliability order"].extend(
+                                [stim_reliability_order for _ in range(n_events)]
                             )
                             staging_dict["shape"].extend(
                                 [shape for _ in range(n_events)]
@@ -652,6 +654,12 @@ def make_angelaki_experiment(
         "stay"  # Count first push of each block as 'stay' push, so that stay pushes are a subset of same-box push intervals
     )
 
+    # Finally, denote the label order for some columns
+    label_order = {
+        "stimulus reliability": "stimulus reliability order",
+        "box": "box rank",
+    }
+
     # Drop all push intervals with value 0 as these are bad data
     df = df[df["consecutive push intervals"] > 0]
     return Experiment(
@@ -659,8 +667,9 @@ def make_angelaki_experiment(
         config.to_dict(),
         ["subject", "session", "block"],
         ["push #"],
-        ["stimulus reliability", "stimulus type", "kappa"],
+        ["stimulus reliability", "stimulus type", "kappa", "shape"],
         ["assigned schedules", "weekday"],
+        label_order=label_order,
     )
 
 
@@ -757,9 +766,20 @@ def angelaki_exclusion_criteria(experiment: Experiment, data_dir: str) -> Experi
     return experiment.wrap(df_filtered)
 
 
+# TODO: combine all subject files
 def make_valentin_experiment(
     path: str, config: ValentinExperimentConstants = None
 ) -> Experiment:
+    """
+    Given experiment matfiles and metadata, construct a DataFrame.
+
+    Args:
+        path: Path to the folder containing the experiment data.
+        config: Configuration object for the experiment.
+
+    Returns:
+        An Experiment dataset containing a configuration and DataFrame.
+    """
     if config is None:
         config = ValentinExperimentConstants()
 
@@ -771,58 +791,63 @@ def make_valentin_experiment(
         "n boxes": [],
         "schedule": [],
         "assigned schedules": [],
-        "stimulus reliability": [],
         "box position": [],
         "push times": [],
         "reward outcomes": [],
         "reward intervals": [],
         "duration": [],
+        "eye tracking": [],
+        "position tracking": [],
     }
-    subj_file = loadmat(path)
+    mat_filenames = fnmatch.filter(os.listdir(path), "*.mat")
+    mat_files = [loadmat(os.path.join(path, _file)) for _file in mat_filenames]
 
     box_labels = dict(zip(range(len(config.BOX_LABELS)), config.BOX_LABELS))
     box_pos_labels = dict(zip(range(len(config.BOX_POSITIONS)), config.BOX_POSITIONS))
+    for mat_file in mat_files:
+        session_names = mat_file["sessionName"][:, 0]
+        sessions = []
+        for s in session_names:
+            if not "MonitorsOff" in s.item():
+                sessions.append(int(s.item()[:8]))
 
-    session_names = subj_file["sessionName"][:, 0]
-    sessions = []
-    for s in session_names:
-        if not "MonitorsOff" in s.item():
-            sessions.append(int(s.item()[:8]))
+        for sess_idx, sess in enumerate(sessions):
+            sess_data = mat_file["data"][:, sess_idx].item()[0]
+            push_times = sess_data[:, 0]
+            n_pushes = len(push_times)
+            # push_intervals = np.diff(push_times)
+            # push_intervals = np.insert(push_intervals, 0, push_times[0])
+            box_positions = sess_data[:, 1].astype(int)
+            schedules = sess_data[:, 2]
+            n_boxes = len(np.unique(schedules))
+            reward_outcomes = sess_data[:, 5].astype(bool)
+            # TODO: check if reward intervals are correct
+            reward_intervals = sess_data[:, 3:5]
+            reward_intervals = reward_intervals[np.arange(n_pushes), box_positions - 1]
 
-    for sess_idx, sess in enumerate(sessions):
-        sess_data = subj_file["data"][:, sess_idx].item()[0]
-        push_times = sess_data[:, 0]
-        n_pushes = len(push_times)
-        # push_intervals = np.diff(push_times)
-        # push_intervals = np.insert(push_intervals, 0, push_times[0])
-        box_positions = sess_data[:, 1].astype(int)
-        schedules = sess_data[:, 2]
-        n_boxes = len(np.unique(schedules))
-        reward_outcomes = sess_data[:, 5].astype(bool)
-        reward_intervals = sess_data[:, 3:5]
-        reward_intervals = reward_intervals[np.arange(n_pushes), box_positions - 1]
+            assigned_schedules = tuple(
+                [schedules[box_positions == 1][0], schedules[box_positions == 2][0]]
+            )
 
-        assigned_schedules = tuple(
-            [schedules[box_positions == 1][0], schedules[box_positions == 2][0]]
-        )
+            df_dict["subject"].extend(["Rum" for _ in range(n_pushes)])
+            df_dict["session"].extend([sess for _ in range(n_pushes)])
+            df_dict["block"].extend([1 for _ in range(n_pushes)])
+            df_dict["_session"].extend([sess_idx for _ in range(n_pushes)])
+            df_dict["n boxes"].extend([n_boxes for _ in range(n_pushes)])
+            df_dict["schedule"].extend(schedules)
+            df_dict["assigned schedules"].extend(
+                [assigned_schedules for _ in range(n_pushes)]
+            )
+            df_dict["box position"].extend(box_positions)
+            df_dict["push times"].extend(push_times)
+            df_dict["reward outcomes"].extend(reward_outcomes)
+            df_dict["reward intervals"].extend(reward_intervals)
+            df_dict["duration"].extend(
+                [push_times[-1] + 30 for _ in range(n_pushes)]
+            )  # placeholder for duration
 
-        df_dict["subject"].extend(["Rum" for _ in range(n_pushes)])
-        df_dict["session"].extend([sess for _ in range(n_pushes)])
-        df_dict["block"].extend([1 for _ in range(n_pushes)])
-        df_dict["_session"].extend([sess_idx for _ in range(n_pushes)])
-        df_dict["n boxes"].extend([n_boxes for _ in range(n_pushes)])
-        df_dict["schedule"].extend(schedules)
-        df_dict["assigned schedules"].extend(
-            [assigned_schedules for _ in range(n_pushes)]
-        )
-        df_dict["stimulus reliability"].extend(["low" for _ in range(n_pushes)])
-        df_dict["box position"].extend(box_positions)
-        df_dict["push times"].extend(push_times)
-        df_dict["reward outcomes"].extend(reward_outcomes)
-        df_dict["reward intervals"].extend(reward_intervals)
-        df_dict["duration"].extend(
-            [push_times[-1] + 30 for _ in range(n_pushes)]
-        )  # placeholder for duration
+            df_dict["eye tracking"].extend([False for _ in range(n_pushes)])
+            df_dict["position tracking"].extend([True for _ in range(n_pushes)])
 
     df = pd.DataFrame(df_dict).sort_values(by=["subject", "session", "push times"])
     df["reward outcomes"] = df["reward outcomes"].astype(bool)
@@ -851,6 +876,16 @@ def make_valentin_experiment(
         df["box rank"].diff().astype(bool).map({False: "stay", True: "switch"})
     )
 
+    # Add stimulus reliability column
+    df_meta = pd.read_excel(
+        os.path.join(path, "ForagingData_FileMasterlist.xlsx"), "session_reliability"
+    )
+    df = df.merge(df_meta, on="session", how="left")
+    df["stimulus reliability order"] = df["stimulus reliability"].map(
+        config.KAPPA_LEVELS_ORDER
+    )
+    df[r"$\kappa$"] = df["stimulus reliability"]
+
     # Convenience columns
     df["time"] = df["push times"]
     df["_time"] = pd.to_datetime(df["time"], unit="s")
@@ -866,6 +901,13 @@ def make_valentin_experiment(
 
     # Drop all push intervals with value 0 as these are bad data
     df = df[df["consecutive push intervals"] > 0]
+
+    # Finally, denote the label order for some columns
+    label_order = {
+        "stimulus reliability": "stimulus reliability order",
+        "box": "box rank",
+    }
+
     return Experiment(
         df,
         config.to_dict(),
@@ -873,4 +915,5 @@ def make_valentin_experiment(
         ["push #"],
         ["stimulus reliability"],
         ["assigned schedules"],
+        label_order=label_order,
     )

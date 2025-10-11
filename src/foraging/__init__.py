@@ -13,7 +13,7 @@ with open(current_dir / os.getenv("LOGCONFIG_PATH"), "rb") as fp:
 
 # Define top-level constants
 # Plotting parameters
-MULTIPLOT_FIGSIZE: tuple[int, int] = (15, 5)
+MULTIPLOT_FIGSIZE: tuple[int, int] = (20, 5)
 
 # Time series analysis parameters
 BIN_WIDTH: float = 0.5  # seconds

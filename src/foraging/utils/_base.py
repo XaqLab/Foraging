@@ -1,7 +1,11 @@
+"""
+This module contains the base classes and functions for the utils.
+"""
+
 import logging
 from collections.abc import Iterable
 from datetime import datetime
-from typing import Any, Callable, Optional, Protocol
+from typing import Any, Protocol
 
 import numpy as np
 import pandas as pd
@@ -34,7 +38,9 @@ def flatten(x: Iterable):
             yield x
 
 
-def kwargs_handler(kwargs: dict, key: str, default: dict = None) -> dict:
+def kwargs_handler(
+    kwargs: dict, key: str, default: dict = None, no_pop: bool = False
+) -> dict:
     """
     Intelligently extract keyword arguments from kwargs object, merging with default arguments specified inside the function. This is helpful when a single function accepts a nested kwargs dictionary that may contain the
     kwargs for several different subroutines.
@@ -43,13 +49,13 @@ def kwargs_handler(kwargs: dict, key: str, default: dict = None) -> dict:
         kwargs: Keyword arguments object to extract arguments from.
         key: The keyword argument to extract. Assumed to be a dictionary.
         default: The default behavior of the argument
-
+        no_pop: If True, the keyword argument is not popped from the dictionary.
     Returns:
         The extracted keyword argument merged with default, if specified.
     """
     if default is None:
         default = {}
-    result = kwargs.pop(key, {})
+    result = kwargs.pop(key, {}) if not no_pop else kwargs.get(key, {})
     if not type(result) == dict:
         raise ValueError("Keyword argument is not dictionary.")
     return default | result

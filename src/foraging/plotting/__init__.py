@@ -6,21 +6,28 @@ from matplotlib import pyplot as plt
 
 from foraging.plotting._base import (
     BasePlotter,
+    Embeddable,
     across_blocks,
     across_conditions_plotter,
     bp,
+    embeddable_to_conds,
     enhanced_violinplot,
     fig_init,
     format_yticks,
     get_figure_from_axes,
+    gifler,
     legend_corrector,
     multiplot,
     per_block,
     plot_average_or_traces,
-    plot_variable_subplots,
     titler,
-    toggle_plot,
     unitler,
+)
+from foraging.plotting.video import (
+    FrameVideoConverter,
+    display_frames_video,
+    frames_to_video,
+    save_frames_video,
 )
 
 # Get the current directory
