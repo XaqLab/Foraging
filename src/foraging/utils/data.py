@@ -22,8 +22,8 @@ from scipy.io import loadmat
 from tqdm import tqdm
 
 from foraging.config.experiments import (
-    AngelakiExperimentConstants,
-    ValentinExperimentConstants,
+    AngelakiExperimentConfig,
+    ValentinExperimentConfig,
 )
 from foraging.models import Experiment, HashableDict
 
@@ -144,6 +144,7 @@ def bin_data(
             If a list of floats is provided, it will specify the bin edges.
             Defaults to 20.
         bin_width: If specified, this is the width of each bin. Bins will be determined by dividing the range into equal-sized bins of this width.
+        include_lowest: Whether to include the lowest value in the first bin. Defaults to True.
         strategy: Labeling strategy for the bins.
             - 'full': Labels the bins using the full interval (i.e., both left and right edges).
             - 'left': Labels the bins using only the left edge.
@@ -366,7 +367,8 @@ def open_angelaki_meta_file(subject: str, path: str = ".") -> pd.DataFrame:
 
 def make_angelaki_experiment(
     path: str,
-    config: AngelakiExperimentConstants = None,
+    config: AngelakiExperimentConfig = None,
+    bin_pushes: float = None,
 ) -> Experiment:
     """
     Given experiment matfiles and metadata, construct a DataFrame.
@@ -374,12 +376,13 @@ def make_angelaki_experiment(
     Args:
         path: Path to the folder containing the experiment data.
         config: Configuration object for the experiment.
+        bin_pushes: if not None, then specifies the binning width for binning the push times
 
     Returns:
         An Experiment dataset containing a configuration and DataFrame.
     """
     if config is None:
-        config = AngelakiExperimentConstants()
+        config = AngelakiExperimentConfig()
 
     # Identify all subjects in the given directory
     subject_files = fnmatch.filter(os.listdir(path), "data_*.mat")
@@ -607,11 +610,50 @@ def make_angelaki_experiment(
                             f"Could not parse ({subject}, {sess_id}, {block_idx + 1})"
                         )
                         logger.debug(e)
-
+    
     # Make DataFrame and sort by relevant fields
     df = pd.DataFrame(df_dict).sort_values(
         by=["subject", "session", "block", "push times"]
     )
+
+    # Bin push times if bin_pushes is specified
+    if bin_pushes is not None:
+        # Group by subject, session, and block to bin within each block
+        def bin_pushes_in_group(group):
+            """Bin pushes within a group, keeping first rewarded push per bin, or first unrewarded if none."""
+            push_times = group["push times"].values
+            reward_outcomes = group["reward outcomes"].values
+            
+            # Create bins based on push times
+            # Use floor division to assign each push time to a bin
+            # min_time = push_times.min()
+            min_time = 0
+            bin_indices = ((push_times - min_time) // bin_pushes).astype(int)
+            
+            # For each bin, find the index to keep
+            keep_indices = []
+            for bin_idx in np.unique(bin_indices):
+                bin_mask = bin_indices == bin_idx
+                bin_rewards = reward_outcomes[bin_mask]
+                bin_original_indices = np.where(bin_mask)[0]
+                
+                # Find first rewarded push in bin
+                rewarded_mask = bin_rewards == True
+                if np.any(rewarded_mask):
+                    # Keep first rewarded push
+                    first_rewarded_idx = bin_original_indices[rewarded_mask][0]
+                    keep_indices.append(first_rewarded_idx)
+                else:
+                    # Keep first unrewarded push
+                    keep_indices.append(bin_original_indices[0])
+            
+            # Return only the rows to keep
+            return group.iloc[keep_indices]
+        
+        # Apply binning to each group
+        df = df.groupby(["subject", "session", "block"], observed=True, group_keys=False).apply(
+            bin_pushes_in_group
+        ).reset_index(drop=True)
 
     # Add some more columns
     df["box"] = df["box rank"].map(box_labels)
@@ -714,6 +756,13 @@ def angelaki_exclusion_criteria(experiment: Experiment, data_dir: str) -> Experi
         df_filtered[df_filtered["consecutive push intervals"] > 30].index
     )
 
+    # Exclude blocks where the schedules are not 3 unique values
+    indices_to_drop = []
+    for _, block in df_filtered.groupby(experiment.block_identifiers):
+        if np.unique(block.index.get_level_values(block.index.names.index("assigned schedules"))[0]).size < 3:
+            indices_to_drop.extend(block.index)
+    df_filtered = df_filtered.drop(indices_to_drop)
+
     # Get blocks with valid position data
     continuous_data, _ = get_continuous_from_df_to_dict(
         experiment.wrap(df_filtered), data_dir
@@ -766,9 +815,10 @@ def angelaki_exclusion_criteria(experiment: Experiment, data_dir: str) -> Experi
     return experiment.wrap(df_filtered)
 
 
-# TODO: combine all subject files
+# TODO: revise data interpretation per Ally's response-- column 4 is rew. prob, column 5 is consecutive push interval, column 9 same thing as 5 but switches are 0
+# TODO: also add session duration info from sessionStartAndEndTimes struct. technically start time can be deduced from subtracting first item of col 5 from first push time
 def make_valentin_experiment(
-    path: str, config: ValentinExperimentConstants = None
+    path: str, config: ValentinExperimentConfig = None
 ) -> Experiment:
     """
     Given experiment matfiles and metadata, construct a DataFrame.
@@ -781,7 +831,7 @@ def make_valentin_experiment(
         An Experiment dataset containing a configuration and DataFrame.
     """
     if config is None:
-        config = ValentinExperimentConstants()
+        config = ValentinExperimentConfig()
 
     df_dict = {
         "subject": [],

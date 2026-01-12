@@ -14,11 +14,10 @@ To solely read through results, navigate the `docs` folder. To generate or modif
 You can see the full list in the `pyproject.toml` under the `dependencies` field. There are also optional dev dependencies listed under `project.optional-dependencies`.
 
 # <span style='color:#fa0c9f'> Setup </span>
-## Environment
 Here are a couple tested ways to quickly set up an environment
 
 ### 1. Unidep
-With [Unidep](https://github.com/basnijholt/unidep/tree/main?tab=readme-ov-file#jigsaw-build-system-integration), you can install conda + pip dependencies in one line. It can even install the `foraging` project using `pyproject.toml`. Just run:
+With [Unidep](https://github.com/basnijholt/unidep/tree/main?tab=readme-ov-file#jigsaw-build-system-integration), you can install the `foraging` package along with conda + pip dependencies in one line. It first tries to install whatever packages it can using conda, setting up a conda environment in the process, then installs remaining packages using pip, and then finally installs the `foraging` package. Just run:
 
 ```
 unidep install -n <YOUR_ENV> pyproject.toml
@@ -32,28 +31,31 @@ unidep install -e -n <YOUR_ENV> pyproject.toml
 
 to install in editable mode.
 
-## 2. Conda
+### 2. Conda
 Create a conda environment from `environment.yml` by running:
 
 ```
 conda env create --name <YOUR_ENV> --file environment.yml
 ```
 
-Note you'll still need to install the `foraging` package locally.
+then use pip to install the `foraging` package as in option 3. Make sure to activate the newly created conda environment so that pip can detect the installed dependencies, otherwise it will install those from scratch, too.
 
-## Install `foraging`
-+ **This step assumes you have built a functional environment and are ready to install the package**
-+ Cd to the root of this repo and just run:
+### 3. Pip
+To install the package and its dependencies, cd to the root of the repo and run:
 
 ```
 pip install .
 ```
 
-+ To install in editable mode, where you may wish to edit the package files, run:
+or in editable mode, where you may wish to edit the package files, run:
 
 ```
 pip install -e .
 ```
+
+## Testing
+
+Unit tests can be found in `src/foraging/tests` and run in terminal with the command `pytest src/foraging/tests`
 
 # <span style='color:#22c793'> Task </span>
 

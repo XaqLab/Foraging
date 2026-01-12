@@ -139,7 +139,6 @@ def unitler(label: str, unit: str = None) -> str:
     return label + " (" + unit + ")"
 
 
-# Enhanced gifler function that embeds GIFs directly in the notebook
 def gifler(time_bins, func, fps=1, embed_in_notebook=True, output_path=None) -> str:
     """
     Create a GIF from a plotting function across different time bins.
@@ -489,8 +488,8 @@ def across_conditions_plotter(
             else:
                 ret = plot_func(embeddables=next_embeddables, **kwargs)
             returns.append(ret)
-        except:
-            logger.error(f"Error plotting {cond}")
+        except Exception as e:
+            logger.error(f"Error plotting {cond}: {str(e)}")
             continue
     return returns
 
@@ -507,6 +506,7 @@ class BasePlotter:
 
     def _init_vars(self, **kwargs):
         """Initialize variables by populating with default values."""
+        orig_keys = list(kwargs.keys())
         if "dataset" in kwargs and kwargs["dataset"] is None:
             kwargs["dataset"] = self.dataset
         if "conds" in kwargs and kwargs["conds"] is None:
@@ -515,7 +515,7 @@ class BasePlotter:
             key = key.lower()
             if key in kwargs and kwargs[key] is None:
                 kwargs[key] = value
-        ret = tuple(kwargs.values())
+        ret = tuple(kwargs[key] for key in orig_keys)
         if len(ret) == 1:
             return ret[0]
         return ret
@@ -701,8 +701,8 @@ class BasePlotter:
         Args:
             x: Name of x variable in DataFrame.
             y: Name of y variable in DataFrame.
-            y_name: Name of y variable in DataFrame. Defaults to  "mean" + y.
-            x_name: Name of x variable in DataFrame. Defaults to "time".
+            y_name: Name to assign to y variable in moving average DataFrame. Defaults to  "mean" + y.
+            x_name: Name to assign to x variable in moving average DataFrame. Defaults to "time".
             dataset: Experiment dataset. Defaults to self.experiment.
             conds: Dictionary to filter df.
             palette: Dictionary mapping box schedules to colors. Can also be a list of just colors.
@@ -1052,8 +1052,8 @@ def bp(func: Callable):
             hue: Name of hue variable to be plotted.
             palette: List or dictionary mapping hue levels to colors.
             conds: Dictionary mapping level keys to values to be used to filter `df`.
-            title: Title for figure.
-            title_override: Override title for figure.
+            title: Title for axes.
+            title_override: Override title for axes.
             legend: If True, display figure.
             x_unit: Unit of the x-axis. If None, then ignored.
             y_unit: Unit of the y-axis. If None, then ignored.
@@ -1346,7 +1346,7 @@ def plot_average_or_traces(
 
         # Average
         if show_average:
-            res = bp(sns.lineplot)(df, errorbar=None, lw=linewidth, **kwargs)
+            ax = bp(sns.lineplot)(df, errorbar=None, lw=linewidth, **kwargs)
 
         # Update legend to include traces and average
         if legend_flag:
@@ -1354,10 +1354,9 @@ def plot_average_or_traces(
                 ax,
                 legend_content,
             )
-
     else:
-        res = bp(sns.lineplot)(df, ax=ax, **kwargs)
-    return res
+        ax = bp(sns.lineplot)(df, ax=ax, **kwargs)
+    return ax
 
 
 # Credit to https://stackoverflow.com/questions/22852244/how-to-get-the-numerical-fitting-results-when-plotting-a-regression-in-seaborn

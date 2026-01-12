@@ -2,33 +2,46 @@
 This module contains functions for computing beliefs.
 """
 
+from copy import deepcopy
 import logging
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
 
 import numpy as np
+from foraging.models._base import HashableDict
 import pandas as pd
 from numpy.typing import ArrayLike
 from scipy.stats import entropy, gamma, uniform
 from sklearn.linear_model import LogisticRegression
 from sklearn.utils.class_weight import compute_sample_weight
 
-from foraging.utils import discrete_time
 from foraging.utils.data import map_box_positions_to_ranks
-from foraging.utils.models import (
+from foraging.models.distribution import (
     FactorizedPosterior,
     IndexedObservation,
     Posterior,
-    RewardObservation,
-    UpdatesByBox,
+    RewardInterval,
+    RewardOutcome,
+    SupportsUpdatesByBox,
 )
-from foraging.utils.stats import mcfadden_pseudo_rsquared, permutation_test_logistic
+from foraging.models.experiment import Experiment
+# from foraging.utils.stats import mcfadden_pseudo_rsquared, permutation_test_logistic
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 
 # Calculate fisher information
-def fisher_info_reward_observations(t, schedule, alpha):
+def fisher_info_reward_observations(t: float | ArrayLike, schedule: float, alpha: float) -> float:
+    """Calculate the Fisher information for reward observations.
+
+    Args:
+        t: Time(s) since last push of the observation.
+        schedule: Reward schedule of the observation.
+        alpha: Alpha parameter of the Gamma distribution.
+
+    Returns:
+        Fisher information for the reward observations.
+    """
     scale = schedule / alpha
     cdf = gamma.cdf(t, a=alpha, scale=scale)
 
@@ -47,13 +60,9 @@ def fisher_info_reward_observations(t, schedule, alpha):
             return result
 
 
-# @process_block_safely
-# TODO: make filtering block consistent with rest of code
-
-
-def _create_box_observation(
+def _create_observation(
     box: int, is_available: bool, time: float
-) -> IndexedObservation[RewardObservation]:
+) -> IndexedObservation[RewardOutcome]:
     """
     Factory function that creates an IndexedObservation with RewardObservation.
 
@@ -66,44 +75,60 @@ def _create_box_observation(
         IndexedObservation[RewardObservation] that can be used anywhere an IndexedObservation is expected
     """
     return IndexedObservation(
-        i=box, observation=RewardObservation(is_available=is_available, time=time)
+        i=box, observation=RewardOutcome(is_available=is_available, time=time)
     )
 
+def _create_perfect_observation(
+    box: int, time: float
+) -> IndexedObservation[RewardOutcome]:
+    """
+    Factory function that creates an IndexedObservation with RewardObservation.
+
+    Args:
+        box: Box position/index
+        is_available: Whether reward is available
+        time: Time value for the observation
+
+    Returns:
+        IndexedObservation[RewardObservation] that can be used anywhere an IndexedObservation is expected
+    """
+    return IndexedObservation(
+        i=box, observation=RewardInterval(time=time)
+    )
 
 def compute_posterior(
-    df: pd.DataFrame,
-    index: tuple,
-    posterior_maker: Callable[Any, UpdatesByBox],
+    dataset: Experiment,
+    block_key: dict[str, Any],
+    block: pd.DataFrame,
+    posterior_maker: Callable[[Experiment, dict[str, Any], pd.DataFrame], SupportsUpdatesByBox],
     *args,
     **kwargs,
-) -> Posterior:
+) -> dict[HashableDict, FactorizedPosterior]:
     """
     Computes the posterior belief over reward schedules for each box, updating after each push.
 
     Args:
-        df: DataFrame containing session data.
-        index: Multi-index selector for retrieving block-specific data.
+        dataset: Experiment containing session data.
+        block_key: Key for the block.
+        block: DataFrame containing block data.
         posterior_maker: Function that instantiates the posterior.
         *args, **kwargs: Additional arguments to pass to the posterior_maker.
     Returns:
-        BeliefModule: the computed beliefs about reward schedules.
+        dict[HashableDict, FactorizedPosterior]: the computed beliefs about reward schedules.
     """
-    # Extract data corresponding to the given index
-    block_data = df.loc[index]
-
     # Iterate over each box in order from fastest to slowest
-    n_obs = len(block_data)
-    push_times = block_data["push times"].values
-    push_intervals = block_data["push intervals"].values
-    reward_outcomes = block_data["reward outcomes"].values
-    box_positions = block_data["box position"].values.astype(int)
+    n_obs = len(block)
+    push_times = block["push times"].values
+    push_intervals = block["push intervals"].values
+    reward_outcomes = block["reward outcomes"].values
+    box_positions = block["box position"].values.astype(int)
 
     # Construct posterior
-    beliefs = posterior_maker(df, index, *args, **kwargs)
+    beliefs = posterior_maker(dataset, block_key, block, *args, **kwargs)
     for i in range(n_obs):
         beliefs.update(
-            index + (push_times[i],),
-            _create_box_observation(
+            block_key.update("push time", push_times[i]),
+            _create_observation(
                 box=box_positions[i],
                 is_available=reward_outcomes[i],
                 time=push_intervals[i],
@@ -111,53 +136,162 @@ def compute_posterior(
         )
     return beliefs
 
-
-@process_block_safely
-def compute_accuracy(
-    df: pd.DataFrame,
-    index: tuple,
-    schedule_beliefs: dict[tuple, FactorizedPosterior],
+def compute_perfect_posterior(
+    dataset: Experiment,
+    block_key: dict[str, Any],
+    block: pd.DataFrame,
+    posterior_maker: Callable[[Experiment, dict[str, Any], pd.DataFrame], SupportsUpdatesByBox],
     *args,
-    seed: int = 42,
-    n_samples: int = 100,
     **kwargs,
-) -> ArrayLike:
+) -> dict[HashableDict, FactorizedPosterior]:
     """
     Computes the posterior belief over reward schedules for each box, updating after each push.
 
     Args:
-        df: DataFrame containing session data.
-        index: Multi-index selector for retrieving block-specific data.
-        schedule_beliefs: BeliefModule containing the schedule beliefs.
+        dataset: Experiment containing session data.
+        block_key: Key for the block.
+        block: DataFrame containing block data.
+        posterior_maker: Function that instantiates the posterior.
+        *args, **kwargs: Additional arguments to pass to the posterior_maker.
+    Returns:
+        dict[HashableDict, FactorizedPosterior]: the computed beliefs about reward schedules.
+    """
+    # Iterate over each box in order from fastest to slowest
+    n_obs = len(block)
+    push_times = block["push times"].values
+    push_intervals = block["push intervals"].values
+    reward_intervals = block["reward intervals"].values
+    box_positions = block["box position"].values.astype(int)
+
+    # Construct posterior
+    beliefs = posterior_maker(dataset, block_key, block, *args, **kwargs)
+    for i in range(n_obs):
+        beliefs.update(
+            block_key.update("push time", push_times[i]),
+            _create_perfect_observation(
+                box=box_positions[i],
+                time=reward_intervals[i],
+            ),
+        )
+    return beliefs
+
+def compute_accuracy(
+    dataset: Experiment,
+    block_key: dict[str, Any],
+    block: pd.DataFrame,
+    beliefs: dict[HashableDict, FactorizedPosterior],
+    *args,
+    seed: int = 42,
+    n_samples: int = 100,
+    n_correct: int = -1,
+    **kwargs,
+) -> ArrayLike:
+    """
+    Computes the accuracy of the beliefs over reward schedules for each box, updating after each push.
+
+    Args:
+        dataset: Experiment containing session data.
+        block_key: Key for the block.
+        block: DataFrame containing block data.
+        beliefs: dict[HashableDict, FactorizedPosterior] containing the schedule beliefs.
         seed: Random seed for reproducibility.
         n_samples: Number of samples to draw for Monte Carlo estimation.
-
+        n_correct: Number of correct relations to require for accuracy calculation. If -1, all relations must be correct.
     Returns:
-        BeliefModule: the computed beliefs about reward schedules.
+        ArrayLike: the computed accuracy of the beliefs over reward schedules.
     """
     # Extract data corresponding to the given index
-    df_block = df.loc[index]
-    box_ranks = map_box_positions_to_ranks(df_block)
-    belief_block = schedule_beliefs[index]
+    box_ranks = map_box_positions_to_ranks(block)
+    belief_block = beliefs[block_key]
     n_boxes = len(box_ranks)
+    if n_correct == -1:
+        n_correct = n_boxes
     n_steps = len(belief_block)
-    push_times = df_block["push times"].values
+    push_times = block["push times"].values
     samples = np.zeros((n_steps, n_boxes, n_samples))
-    samples[0] = belief_block[index + (0,)].sample(n_samples)
+
+    rng = np.random.default_rng(seed)
+    samples[0] = belief_block[block_key.update("push time", 0)].sample(n_samples, rng)
 
     # Estimate accuracy via Monte Carlo sampling
     for i, pt in enumerate(push_times):
-        belief = belief_block[index + (pt,)]
-        samples[i + 1] = belief.sample(n_samples)
+        belief = belief_block[block_key.update("push time", pt)]
+        samples[i + 1] = belief.sample(n_samples, rng)
 
     # Count the fraction of samples that match the true order
     sampled_orders = np.argsort(np.argsort(samples, axis=1), axis=1)
     true_order = box_ranks["box rank"].values
-    return (
-        (sampled_orders == true_order[np.newaxis, :, np.newaxis])
-        .all(axis=1)
-        .mean(axis=1)
-    )
+
+    # Count correct pairwise order relations per sample, and compute fraction meeting >= n_correct.
+    true_rel = true_order[:, None] < true_order[None, :]                # (boxes, boxes)
+    sampled_rel = sampled_orders[:, :, None, :] < sampled_orders[:, None, :, :]  # (steps, boxes, boxes, samples)
+
+    pair_mask = np.triu(np.ones(true_rel.shape, dtype=bool), 1)         # (boxes, boxes)
+
+    # count correct relations per (step, sample)
+    correct_counts = ((sampled_rel == true_rel[None, :, :, None]) & pair_mask[None, :, :, None]).sum(axis=(1, 2))  # (steps, samples)
+    accuracies = (correct_counts >= n_correct).mean(axis=1)
+    return accuracies
+
+
+def compute_per_box_accuracy(
+    dataset: Experiment,
+    block_key: dict[str, Any],
+    block: pd.DataFrame,
+    beliefs: dict[HashableDict, FactorizedPosterior],
+    *args,
+    seed: int = 42,
+    n_samples: int = 100,
+    n_correct: int = -1,
+    **kwargs,
+) -> ArrayLike:
+    """
+    Computes the accuracy of the beliefs over reward schedules for each box, updating after each push.
+
+    Args:
+        dataset: Experiment containing session data.
+        block_key: Key for the block.
+        block: DataFrame containing block data.
+        beliefs: dict[HashableDict, FactorizedPosterior] containing the schedule beliefs.
+        seed: Random seed for reproducibility.
+        n_samples: Number of samples to draw for Monte Carlo estimation.
+        n_correct: Number of correct relations to require for accuracy calculation. If -1, all relations must be correct.
+    Returns:
+        ArrayLike: the computed accuracy of the beliefs over reward schedules.
+    """
+    # Extract data corresponding to the given index
+    box_ranks = map_box_positions_to_ranks(block)
+    belief_block = beliefs[block_key]
+    n_boxes = len(box_ranks)
+    if n_correct == -1:
+        n_correct = (n_boxes * (n_boxes - 1)) // 2
+    n_steps = len(belief_block)
+    push_times = block["push times"].values
+    samples = np.zeros((n_steps, n_boxes, n_samples))
+    samples[0] = belief_block[block_key.update("push time", 0)].sample(n_samples)
+
+    # sort fast > medium > slow
+    sorted_idx = np.argsort(block.index.unique("assigned schedules")[0])
+
+    # Estimate accuracy via Monte Carlo sampling
+    for i, pt in enumerate(push_times):
+        belief = belief_block[block_key.update("push time", pt)]
+        samples[i + 1] = belief.sample(n_samples)
+
+    # Count the fraction of samples that match the true order
+    sampled_orders = np.argsort(np.argsort(samples, axis=1), axis=1)
+    sampled_orders = sampled_orders[:,sorted_idx,:]
+    true_order = box_ranks["box rank"].values[sorted_idx]
+
+    # Count correct pairwise order relations per sample, and compute fraction meeting >= n_correct.
+    true_rel = true_order[:, None] < true_order[None, :]                # (boxes, boxes)
+    sampled_rel = (sampled_orders[:, :, None, :] < sampled_orders[:, None, :, :]).mean(axis=3)  # (steps, boxes, boxes, samples)
+    return {"correct_counts": sampled_rel, "time": np.insert(push_times, 0, 0)}
+    # return (
+    #     (sampled_orders == true_order[np.newaxis, :, np.newaxis])
+    #     .all(axis=1)
+    #     .mean(axis=1)
+    # ) # cute one-liner
 
 
 # @process_block_safely
@@ -651,50 +785,50 @@ def compute_surprise(
 #     return belief_joint_event
 
 
-def predict_pushed_box(
-    df: pd.DataFrame,
-    x: str | list[str],
-    y: str = "box rank",
-    perm_test: bool = False,
-    weight: bool = False,
-    n_perms: int = 500,
-    disp: bool = False,
-) -> tuple[float, float, Any] | None:
-    """
-    Predicts the pushed box using multinomial logistic regression and evaluates the accuracy of predictions.
+# def predict_pushed_box(
+#     df: pd.DataFrame,
+#     x: str | list[str],
+#     y: str = "box rank",
+#     perm_test: bool = False,
+#     weight: bool = False,
+#     n_perms: int = 500,
+#     disp: bool = False,
+# ) -> tuple[float, float, Any] | None:
+#     """
+#     Predicts the pushed box using multinomial logistic regression and evaluates the accuracy of predictions.
 
-    Args:
-        df: pandas DataFrame containing session data, including a column with the target labels (box rank).
-        x: A 2D numpy array containing the features (independent variables) used for prediction.
-        y: The name of the column in `df` that contains the target labels (default is 'box rank').
+#     Args:
+#         df: pandas DataFrame containing session data, including a column with the target labels (box rank).
+#         x: A 2D numpy array containing the features (independent variables) used for prediction.
+#         y: The name of the column in `df` that contains the target labels (default is 'box rank').
 
-    Returns:
-        A tuple containing:
-            - A float representing the accuracy of the predictions (mean of correct predictions).
-            - The fitted multinomial logistic regression model (`MNLogitResults` object).
-    """
-    X = df[x]
-    y = df[y]
-    try:
-        # mdl = smf.mnlogit("y ~ X", {'y': y, 'X': X}).fit(disp = disp)
-        # yhat = np.argmax(mdl.predict(), axis=1)
-        # accuracy = (yhat == y).mean()
-        weights = (
-            compute_sample_weight(class_weight="balanced", y=y) if weight else None
-        )
-        mdl = LogisticRegression()
-        mdl.fit(X, y, sample_weight=weights)
-        accuracy = mdl.score(X, y, sample_weight=weights)
-        rsq = mcfadden_pseudo_rsquared(mdl, X, y)
-        if perm_test:
-            pval_accu, pval_rsq = permutation_test_logistic(
-                X, y, accuracy, rsq, weights=weights, n_perms=n_perms
-            )
-            return accuracy, rsq, pval_accu, pval_rsq, mdl
-        return accuracy, rsq, mdl
-    except Exception as e:
-        logger.debug(e)
-        return None
+#     Returns:
+#         A tuple containing:
+#             - A float representing the accuracy of the predictions (mean of correct predictions).
+#             - The fitted multinomial logistic regression model (`MNLogitResults` object).
+#     """
+#     X = df[x]
+#     y = df[y]
+#     try:
+#         # mdl = smf.mnlogit("y ~ X", {'y': y, 'X': X}).fit(disp = disp)
+#         # yhat = np.argmax(mdl.predict(), axis=1)
+#         # accuracy = (yhat == y).mean()
+#         weights = (
+#             compute_sample_weight(class_weight="balanced", y=y) if weight else None
+#         )
+#         mdl = LogisticRegression()
+#         mdl.fit(X, y, sample_weight=weights)
+#         accuracy = mdl.score(X, y, sample_weight=weights)
+#         rsq = mcfadden_pseudo_rsquared(mdl, X, y)
+#         if perm_test:
+#             pval_accu, pval_rsq = permutation_test_logistic(
+#                 X, y, accuracy, rsq, weights=weights, n_perms=n_perms
+#             )
+#             return accuracy, rsq, pval_accu, pval_rsq, mdl
+#         return accuracy, rsq, mdl
+#     except Exception as e:
+#         logger.debug(e)
+#         return None
 
 
 def get_mean_beliefs_over_time(
