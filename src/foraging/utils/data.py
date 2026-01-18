@@ -393,9 +393,11 @@ def make_angelaki_experiment(
         "_session": [],  # the original session number in sequential order inside the matlab struct
         "weekday": [],
         "n boxes": [],
+        "n unique boxes": [],
         "block": [],
         "schedule": [],
         "assigned schedules": [],
+        "unique schedules": [],
         "box rank": [],
         "shape": [],
         "stimulus type": [],
@@ -529,11 +531,17 @@ def make_angelaki_experiment(
                             staging_dict["n boxes"].extend(
                                 [len(schedules) for _ in range(n_events)]
                             )
+                            staging_dict["n unique boxes"].extend(
+                                [len(np.unique(schedules)) for _ in range(n_events)]
+                            )
                             staging_dict["schedule"].extend(
                                 [schedules[i] for _ in range(n_events)]
                             )
                             staging_dict["assigned schedules"].extend(
                                 [schedules for _ in range(n_events)]
+                            )
+                            staging_dict["unique schedules"].extend(
+                                [np.unique(schedules) for _ in range(n_events)]
                             )
                             staging_dict["box rank"].extend(
                                 [box_ranks[i] for _ in range(n_events)]
@@ -610,7 +618,7 @@ def make_angelaki_experiment(
                             f"Could not parse ({subject}, {sess_id}, {block_idx + 1})"
                         )
                         logger.debug(e)
-    
+
     # Make DataFrame and sort by relevant fields
     df = pd.DataFrame(df_dict).sort_values(
         by=["subject", "session", "block", "push times"]
@@ -623,20 +631,20 @@ def make_angelaki_experiment(
             """Bin pushes within a group, keeping first rewarded push per bin, or first unrewarded if none."""
             push_times = group["push times"].values
             reward_outcomes = group["reward outcomes"].values
-            
+
             # Create bins based on push times
             # Use floor division to assign each push time to a bin
             # min_time = push_times.min()
             min_time = 0
             bin_indices = ((push_times - min_time) // bin_pushes).astype(int)
-            
+
             # For each bin, find the index to keep
             keep_indices = []
             for bin_idx in np.unique(bin_indices):
                 bin_mask = bin_indices == bin_idx
                 bin_rewards = reward_outcomes[bin_mask]
                 bin_original_indices = np.where(bin_mask)[0]
-                
+
                 # Find first rewarded push in bin
                 rewarded_mask = bin_rewards == True
                 if np.any(rewarded_mask):
@@ -646,14 +654,16 @@ def make_angelaki_experiment(
                 else:
                     # Keep first unrewarded push
                     keep_indices.append(bin_original_indices[0])
-            
+
             # Return only the rows to keep
             return group.iloc[keep_indices]
-        
+
         # Apply binning to each group
-        df = df.groupby(["subject", "session", "block"], observed=True, group_keys=False).apply(
-            bin_pushes_in_group
-        ).reset_index(drop=True)
+        df = (
+            df.groupby(["subject", "session", "block"], observed=True, group_keys=False)
+            .apply(bin_pushes_in_group)
+            .reset_index(drop=True)
+        )
 
     # Add some more columns
     df["box"] = df["box rank"].map(box_labels)
@@ -757,11 +767,12 @@ def angelaki_exclusion_criteria(experiment: Experiment, data_dir: str) -> Experi
     )
 
     # Exclude blocks where the schedules are not 3 unique values
-    indices_to_drop = []
-    for _, block in df_filtered.groupby(experiment.block_identifiers):
-        if np.unique(block.index.get_level_values(block.index.names.index("assigned schedules"))[0]).size < 3:
-            indices_to_drop.extend(block.index)
-    df_filtered = df_filtered.drop(indices_to_drop)
+    df_filtered = df_filtered.drop(df_filtered[df_filtered["n unique boxes"] < 3].index)
+    # indices_to_drop = []
+    # for _, block in df_filtered.groupby(experiment.block_identifiers):
+    #     if np.unique(block.index.get_level_values(block.index.names.index("assigned schedules"))[0]).size < 3:
+    #         indices_to_drop.extend(block.index)
+    # df_filtered = df_filtered.drop(indices_to_drop)
 
     # Get blocks with valid position data
     continuous_data, _ = get_continuous_from_df_to_dict(

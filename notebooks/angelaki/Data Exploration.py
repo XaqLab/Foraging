@@ -23,22 +23,27 @@
 import logging
 import os
 
+# Supress annoying warnings and filter out logs that aren't useful here
+import warnings
+
+import numpy as np
 import pandas as pd
 import seaborn as sns
 from matplotlib import pyplot as plt
-import numpy as np
 
-from foraging import SEED, MULTIPLOT_FIGSIZE, BIN_WIDTH, WINDOW_SIZE, STEP
+from foraging import BIN_WIDTH, MULTIPLOT_FIGSIZE, SEED, STEP, WINDOW_SIZE
+from foraging.config.experiments import AngelakiPlottingConfig
+from foraging.models.experiment import Experiment
 from foraging.plotting import bp, embeddable_to_conds, enhanced_violinplot, gifler
 from foraging.plotting.behavior import BehaviorPlotter
-
-from foraging.config.experiments import AngelakiPlottingConfig
 from foraging.utils.autoreload import setup_auto_reload
-from foraging.utils.data import display_df, filter_df, make_angelaki_experiment, angelaki_exclusion_criteria
-from foraging.models.experiment import Experiment
+from foraging.utils.data import (
+    angelaki_exclusion_criteria,
+    display_df,
+    filter_df,
+    make_angelaki_experiment,
+)
 
-# Supress annoying warnings and filter out logs that aren't useful here
-import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 mlogger = logging.getLogger("matplotlib")
 mlogger.setLevel(logging.WARNING)
@@ -117,7 +122,7 @@ print(df.groupby("subject")["schedule"].unique())
 # %%
 sns.histplot(df, x="duration")
 plt.title("Duration of block")
-plt.xlabel("duration (s)");
+plt.xlabel("duration (s)")
 
 # %%
 block_summary = (
@@ -126,7 +131,7 @@ block_summary = (
     .reset_index(name="n pushes per block")
 )
 sns.violinplot(block_summary, x="subject", y="n pushes per block", cut=0)
-plt.title("# pushes per block");
+plt.title("# pushes per block")
 
 # %% [markdown]
 # Here is a bird's eye view of one subject's behavioral data over the course of the entire experiment. Each row is a session of consecutive blocks. Each block's pushes are displayed as a raster plot over the duration of that block, and the pushes at each box position are stacked on top of each other (top to bottom is 3, 2, 1). Finally, pushes are colored by box schedule, so we can see how the schedules are assigned to each box over consecutive blocks.
@@ -137,7 +142,7 @@ plotter.plot_experiment_overview(
     conds=conds,
     annotate_block=[r"$\kappa$", r"$\alpha$"],
     fig_kwargs=dict(figsize=(40, 50)),
-);
+)
 
 # %% [markdown]
 # # Explore Data
@@ -156,7 +161,11 @@ plotter.plot_experiment_overview(
 # Here we show activity in an example block unfolding over time. Blue = fast box, yellow = medium box, red = slow box. Filled markers indicate rewarded pushes, unfilled unrewarded.
 
 # %%
-plotter.plot_pushes(conds = dict(subject="viktor", session=20230811, block=3), fig_kwargs=dict(figsize=(30, 2.2)), legend=False);
+plotter.plot_pushes(
+    conds=dict(subject="viktor", session=20230811, block=3),
+    fig_kwargs=dict(figsize=(30, 2.2)),
+    legend=False,
+)
 
 # %% [markdown]
 # ## Pushes
@@ -191,7 +200,7 @@ bp(enhanced_violinplot)(
     log_scale=True,
     common_norm=True,
     ax=ax,
-);
+)
 
 # %% [markdown]
 # There is a bimodality present in a couple subjects. Below, we split the data into the exponential schedule and gamma schedule.
@@ -225,7 +234,7 @@ bp(enhanced_violinplot)(
     log_scale=True,
     common_norm=True,
     ax=ax,
-);
+)
 
 # %%
 fig, ax = plt.subplots(figsize=MULTIPLOT_FIGSIZE)
@@ -256,14 +265,14 @@ bp(enhanced_violinplot)(
     log_scale=True,
     common_norm=True,
     ax=ax,
-);
+)
 
 # %% [markdown]
 # It's clear the bimodality results from some property of the exponential schedule. To confirm this and see if there are any other trends that emerge throughout the experiment, we'll next show the distribution of push intervals in each session. Since humans do not have session data, they are omitted for now.
 
 # %%
 # %%capture --no-display
-plotter.plot_push_intervals_by_sessions();
+plotter.plot_push_intervals_by_sessions()
 
 # %% [markdown]
 # These swarmplots are useful for visualizing individual data points by jittering the ones that collide, to the limit that the data points aren't too cluttered and impede comprehension. The x-axis denotes days since the first session (with day 0 corresponding to the first session) and the y-axis are the log push intervals in each session. For Dylan and Marco, the number of data points is manageable but for Viktor they are so numerous that you can see where the plot struggles to fit all the data points. Each swarmplot is preceded by an experiment overview where, for each session, we denote how many blocks had a certain parameter value, which gives us a sense of the timeline for how the experiment evolved and when decisions were made to change the experiment. The x-axes for a swarmplot and its corresponding experiment overview are aligned for ease of comparison.
@@ -284,7 +293,11 @@ plotter.dataset = dataset = dataset.wrap(df)
 # Here are the distributions of push intervals at each box as a function of stimulus reliability.
 
 # %%
-plotter.plot_conditions_by_subject(plotter.plot_push_intervals, fig_title = "Distribution of push intervals by stimulus reliability", cond_kwargs = {'humans': dict(swarm_kwargs={'size': 1})});
+plotter.plot_conditions_by_subject(
+    plotter.plot_push_intervals,
+    fig_title="Distribution of push intervals by stimulus reliability",
+    cond_kwargs={"humans": dict(swarm_kwargs={"size": 1})},
+)
 
 # %% [markdown]
 # The distributions are very similar across stimulus reliabilities, suggesting subjects are able to differentiate the boxes to a similar degree regardless of task difficulty. The distributions seem to grow slightly sharper as reliability increases.
@@ -292,7 +305,7 @@ plotter.plot_conditions_by_subject(plotter.plot_push_intervals, fig_title = "Dis
 # Next, we show the distribution of consecutive push intervals between all pairs of boxes simultaneously, similar to a transition matrix where the rows are the boxes the subject first pushes and the columns are where they push next.
 
 # %%
-plotter.plot_stay_switch_pushes();
+plotter.plot_stay_switch_pushes()
 
 # %% [markdown]
 # First, the switch times are qualitatively similar across all pairs of boxes. Second, the stay times across all boxes share bimodal features covering about the same range, but the fast box looks qualitatively different from the other boxes.
@@ -305,7 +318,11 @@ plotter.plot_stay_switch_pushes();
 # To get a sense of the statistics of *sequences* of pushes, we can gather the runlengths, that is the number of consecutive pushes at the same box before the subject switches.
 
 # %%
-plotter.plot_conditions_by_subject(plotter.plot_runlengths, col_condition = 'stimulus reliability', fig_title='Runlengths');
+plotter.plot_conditions_by_subject(
+    plotter.plot_runlengths,
+    col_condition="stimulus reliability",
+    fig_title="Runlengths",
+)
 
 # %% [markdown]
 # Subjects fit in more pushes at the fast box before switching.
@@ -316,19 +333,36 @@ plotter.plot_conditions_by_subject(plotter.plot_runlengths, col_condition = 'sti
 # Here, we show each push interval along with the corresponding reward interval of the box that was pushed. Basically, we want to see how accurately the subjects timed their pushes to the reward interval of the box-- if they push before the reward interval is up, then they miss the reward, but if they push after the reward interval, then they get the reward. Our expectation is that as the stimulus reliability increases, the subjects should be able to time their pushes more reliably to occur after the reward interval has elapsed.
 
 # %%
-plotter.plot_conditions_by_subject(plotter.plot_push_intervals_vs_reward_intervals, col_condition = 'stimulus reliability', fig_title='Push Intervals vs Reward Intervals', annotate_reg = True);
+plotter.plot_conditions_by_subject(
+    plotter.plot_push_intervals_vs_reward_intervals,
+    col_condition="stimulus reliability",
+    fig_title="Push Intervals vs Reward Intervals",
+    annotate_reg=True,
+)
 
 # %% [markdown]
 # As expected, the correlation and slope between the push intervals and reward intervals increases with stimulus reliability. We can further decompose the pushes into stay pushes and switch pushes.
 
 # %%
-plotter.plot_conditions_by_subject(plotter.plot_push_intervals_vs_reward_intervals, dataset = dataset.filter({"stay/switch": "stay"}), col_condition = 'stimulus reliability', fig_title='(Stay Pushes) Push Intervals vs Reward Intervals', annotate_reg = True);
+plotter.plot_conditions_by_subject(
+    plotter.plot_push_intervals_vs_reward_intervals,
+    dataset=dataset.filter({"stay/switch": "stay"}),
+    col_condition="stimulus reliability",
+    fig_title="(Stay Pushes) Push Intervals vs Reward Intervals",
+    annotate_reg=True,
+)
 
 # %% [markdown]
 # Most of the stay pushes occur at the fast box, and they explain the cluster of inaccurate pushes that occur at the bottom of the earlier figure.
 
 # %%
-plotter.plot_conditions_by_subject(plotter.plot_push_intervals_vs_reward_intervals, dataset = dataset.filter({"stay/switch": "switch"}), col_condition = 'stimulus reliability', fig_title='(Switch Pushes) Push Intervals vs Reward Intervals', annotate_reg = True);
+plotter.plot_conditions_by_subject(
+    plotter.plot_push_intervals_vs_reward_intervals,
+    dataset=dataset.filter({"stay/switch": "switch"}),
+    col_condition="stimulus reliability",
+    fig_title="(Switch Pushes) Push Intervals vs Reward Intervals",
+    annotate_reg=True,
+)
 
 # %% [markdown]
 # The majority of pushes are switch pushes, including the cluster of longer pushes.
@@ -340,7 +374,15 @@ plotter.plot_conditions_by_subject(plotter.plot_push_intervals_vs_reward_interva
 
 # %%
 df["rewarded"] = df["reward outcomes"].map({True: "yes", False: "no"})
-plotter.plot_conditions_by_subject(plotter.plot_next_push_surprise, col_condition = 'stimulus reliability', aux_condition = 'rewarded', fig_title='Change in push intervals as a function of reward outcome', legend_kwargs=dict(title=None), fig_kwargs = dict(figsize=(20,10)), s=10);
+plotter.plot_conditions_by_subject(
+    plotter.plot_next_push_surprise,
+    col_condition="stimulus reliability",
+    aux_condition="rewarded",
+    fig_title="Change in push intervals as a function of reward outcome",
+    legend_kwargs=dict(title=None),
+    fig_kwargs=dict(figsize=(20, 10)),
+    s=10,
+)
 
 # %% [markdown]
 # Across both rewarded and unrewarded cases, there is a transition point at 20-25 s between waiting longer and going sooner the next push that is roughly preserved across all conditions. As reliability increases, the push intervals on the x-axis cluster by boxes. There is a distinct string of stay pushes that occur near the bottom of the graph where the subject pushes a few seconds after the current push. Visually, it appears that the subject switches a lot more across both reward outcomes, possibly switching more the longer they've waited, but when choosing to stay and push again, does so more after being rewarded. We confirm this below by counting how many times they stay or switch depending on how long they waited to push and the reward outcome.
@@ -351,7 +393,12 @@ plotter.plot_conditions_by_subject(plotter.plot_next_push_surprise, col_conditio
 # Here we calculate the probability of staying and pushing the same box again as a function of push interval. We do this separately for the rewarded and unrewarded case.
 
 # %%
-plotter.plot_conditions_by_subject(plotter.plot_stay_probabilities, col_condition = 'stimulus reliability', fig_title='P(stay) as a function of push intervals', min_obs=10);
+plotter.plot_conditions_by_subject(
+    plotter.plot_stay_probabilities,
+    col_condition="stimulus reliability",
+    fig_title="P(stay) as a function of push intervals",
+    min_obs=10,
+)
 
 # %% [markdown]
 # Clearly, the probability of staying is greater after receiving reward, but it generally goes down the longer the subject waits, with the exception of some weird quirks that could be due to low data volume.
@@ -374,7 +421,7 @@ bp(sns.violinplot)(
     title="Distribution of block initiation times",
     y_unit="s",
     legend=False,
-);
+)
 
 # %% [markdown]
 # Looks like a bin size of 20-30 seconds should be big enough to prevent accidentally creating artifical transients in the first bin of each block. If we make the bin size too small, then we will be capturing trivial failures in the beginning of the block that aren't really reflective of anything important.
@@ -382,7 +429,12 @@ bp(sns.violinplot)(
 # ### Push Rate
 
 # %%
-plotter.plot_conditions_by_subject(plotter.plot_push_rates_across_block, col_condition = 'stimulus reliability', fig_title='Push rate', by_box = True);
+plotter.plot_conditions_by_subject(
+    plotter.plot_push_rates_across_block,
+    col_condition="stimulus reliability",
+    fig_title="Push rate",
+    by_box=True,
+)
 
 # %% [markdown]
 # When the stimulus reliability is low, the subjects initially struggle to distinguish the boxes. As time goes on in the block, they learn.
@@ -391,13 +443,23 @@ plotter.plot_conditions_by_subject(plotter.plot_push_rates_across_block, col_con
 # ### Reward Rate
 
 # %%
-plotter.plot_conditions_by_subject(plotter.plot_reward_rates_across_block, col_condition = 'stimulus reliability', fig_title='Reward rate', show_traces = True);
+plotter.plot_conditions_by_subject(
+    plotter.plot_reward_rates_across_block,
+    col_condition="stimulus reliability",
+    fig_title="Reward rate",
+    show_traces=True,
+)
 
 # %% [markdown]
 # Reward rate increases as subjects gain more experience in the block. As reliablity increases, the total reward rate combined across all boxes also increases. Next, we decompose the reward rate into different boxes.
 
 # %%
-plotter.plot_conditions_by_subject(plotter.plot_reward_rates_across_block, col_condition = 'stimulus reliability', fig_title='Reward rate', by_box = True);
+plotter.plot_conditions_by_subject(
+    plotter.plot_reward_rates_across_block,
+    col_condition="stimulus reliability",
+    fig_title="Reward rate",
+    by_box=True,
+)
 
 # %% [markdown]
 # Clearly, the reward rates are ordered the way we would expect them, fast > medium > slow.
@@ -420,11 +482,21 @@ def _auxiliary_plot(
         ax.axhline(schedule, color=palette[box], linestyle="--")
     ax.set_ylim(0, ax.get_ylim()[1] + 10)
 
-plotter.plot_conditions_by_subject(plotter.plot_quantity_across_block, col_condition = 'stimulus reliability', x = "push times", y = "push intervals", fig_title='Push intervals', auxiliary_plot = _auxiliary_plot, min_obs = 10, by_box = True, smooth_kwargs=dict(
+
+plotter.plot_conditions_by_subject(
+    plotter.plot_quantity_across_block,
+    col_condition="stimulus reliability",
+    x="push times",
+    y="push intervals",
+    fig_title="Push intervals",
+    auxiliary_plot=_auxiliary_plot,
+    min_obs=10,
+    by_box=True,
+    smooth_kwargs=dict(
         fill_value=np.nan,
         min_periods=1,
-    )
-);
+    ),
+)
 
 # %% [markdown]
 # When reliability is low, the push intervals are similar across boxes and differentiation occurs slowly compared to higher reliabilities. When reliability is high, pushes are largely driven by the color cue, so the pushes distinguish the boxes early in the block. Next, we will see how this translates to reward-per-push by counting the fraction of rewarded pushes in each time bin across blocks.
@@ -432,7 +504,13 @@ plotter.plot_conditions_by_subject(plotter.plot_quantity_across_block, col_condi
 # ### Reward-per-push
 
 # %%
-plotter.plot_conditions_by_subject(plotter.plot_reward_per_push_across_block, col_condition = 'stimulus reliability', fig_title='Reward-per-push', by_box = True, min_obs = 10);
+plotter.plot_conditions_by_subject(
+    plotter.plot_reward_per_push_across_block,
+    col_condition="stimulus reliability",
+    fig_title="Reward-per-push",
+    by_box=True,
+    min_obs=10,
+)
 
 # %% [markdown]
 # The reward-per-push starts off low but increase over time in the block. As reliability increases, they start off higher.
@@ -449,14 +527,26 @@ plotter.plot_conditions_by_subject(plotter.plot_reward_per_push_across_block, co
 # *Note, the matching law may appear for seemingly trivial behavior. Imagine a subject that waits long enough to push each box at a fixed push interval, then their relative reward will largely be driven by their relative push rate, resulting in close to perfect matching. In the supplementary notebook for the exponential schedule, we observe exactly this scenario.
 
 # %%
-time_bins = list(zip(np.arange(0, 600, 60), np.arange(0, 600, 60) + 60)) 
-func = lambda time_bin: plotter.plot_conditions_by_subject(plotter.plot_matching_law, dataset = plotter.dataset.filter({"subject": "viktor"}), col_condition = 'stimulus reliability', fig_title = "Matching law", time_bin = time_bin);
-gifler(time_bins, func);
+time_bins = list(zip(np.arange(0, 600, 60), np.arange(0, 600, 60) + 60))
+func = lambda time_bin: plotter.plot_conditions_by_subject(
+    plotter.plot_matching_law,
+    dataset=plotter.dataset.filter({"subject": "viktor"}),
+    col_condition="stimulus reliability",
+    fig_title="Matching law",
+    time_bin=time_bin,
+)
+gifler(time_bins, func)
 
 # %%
 time_bins = list(zip(np.arange(0, 300, 60), np.arange(0, 300, 60) + 60))
-func = lambda time_bin: plotter.plot_conditions_by_subject(plotter.plot_matching_law, dataset = plotter.dataset.filter({"subject": "humans"}), col_condition = 'stimulus reliability', fig_title = "Matching law", time_bin = time_bin);
-gifler(time_bins, func);
+func = lambda time_bin: plotter.plot_conditions_by_subject(
+    plotter.plot_matching_law,
+    dataset=plotter.dataset.filter({"subject": "humans"}),
+    col_condition="stimulus reliability",
+    fig_title="Matching law",
+    time_bin=time_bin,
+)
+gifler(time_bins, func)
 
 # %% [markdown]
 # Across all subjects, there is undermatching as indicated by slopes < 1 and bias that improves with reliability.

@@ -1,3 +1,12 @@
-from foraging.models._base import SuperDict, HashableDict
+from foraging.models._base import HashableDict, SuperDict
+from foraging.models.distribution import (
+    ExactBayesianUpdateOnProbabilities,
+    FactorizedPosterior,
+    Permutation,
+    PermutationLikelihood,
+    PossibleSchedules,
+    Posterior,
+    Probabilities,
+    RewardOutcomeLikelihood,
+)
 from foraging.models.experiment import Experiment
-from foraging.models.distribution import Posterior, FactorizedPosterior, Probabilities, RewardOutcomeLikelihood, PermutationLikelihood, ExactBayesianUpdateOnProbabilities, Permutation, PossibleSchedules

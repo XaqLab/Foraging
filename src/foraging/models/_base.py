@@ -1,10 +1,12 @@
-from typing import Any
 from itertools import islice
+from typing import Any
+
 
 class HashableDict(dict):
     """
     A dictionary that is hashable.
     """
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._hash = hash(frozenset(self.items()))
@@ -47,8 +49,11 @@ class HashableDict(dict):
         return HashableDict(mutable)
 
     # block mutation directly on object after construction
-    def _blocked(self, *a, **k): raise TypeError("HashableDict is immutable")
-    __setitem__ = __delitem__ = _blocked    
+    def _blocked(self, *a, **k):
+        raise TypeError("HashableDict is immutable")
+
+    __setitem__ = __delitem__ = _blocked
+
 
 class SuperDict(dict):
     """
@@ -70,7 +75,9 @@ class SuperDict(dict):
         try:
             return self[key]
         except KeyError:
-            raise AttributeError(f"'{type(self).__name__}' object has no attribute '{key}'")
-    
+            raise AttributeError(
+                f"'{type(self).__name__}' object has no attribute '{key}'"
+            )
+
     def __setattr__(self, key, value):
         self[key] = value

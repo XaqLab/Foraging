@@ -1,16 +1,19 @@
+import math
+from copy import deepcopy
 from dataclasses import dataclass
-from typing import Iterable, Protocol, TypeVar, Any
+from typing import Any, Iterable, Protocol, TypeVar
+
 import numpy as np
 from numpy.typing import ArrayLike
 from scipy.stats import gamma
-import math
-from copy import deepcopy
+
 from foraging import SEED
 from foraging.models import SuperDict
 
 O = TypeVar("O")
 X = TypeVar("X")
 RNG = TypeVar("RNG")
+
 
 ## Abstractions
 class Belief[X]:
@@ -43,6 +46,7 @@ class BeliefUpdate[X, O]:
 
     def __call__(self, prior: Belief[X], o: O) -> Belief[X]: ...
 
+
 ## Implementations
 class Probabilities(Belief[X]):
     """
@@ -68,7 +72,7 @@ class Probabilities(Belief[X]):
         assert np.isclose(np.sum(value), 1.0), "Probabilities must sum to 1"
         self._representation = value
 
-    def sample(self, n: int = 1, rng = None) -> Iterable[X]:
+    def sample(self, n: int = 1, rng=None) -> Iterable[X]:
         if rng is None:
             rng = np.random.default_rng(SEED)
         return rng.choice(self._support, size=n, p=self.representation)
@@ -140,6 +144,7 @@ class ExactBayesianUpdateOnProbabilities(BeliefUpdate[X, O]):
         posterior_probs = posterior_probs / np.sum(posterior_probs)
         return Probabilities(prior.support, posterior_probs)
 
+
 class RewardOutcomeLikelihood(Likelihood["GammaParameters", "RewardOutcome"]):
     """
     A likelihood for a single gamma distributed variable.
@@ -158,6 +163,7 @@ class RewardOutcomeLikelihood(Likelihood["GammaParameters", "RewardOutcome"]):
             return 1.0 - p_t
         return p_t
 
+
 class RewardIntervalLikelihood(Likelihood["GammaParameters", "RewardInterval"]):
     """
     A likelihood for a single gamma distributed variable.
@@ -174,7 +180,7 @@ class PermutationLikelihood(Likelihood["IndexedObservation", "Permutation"]):
     """
     A likelihood for a permutation of schedules.
     """
-    
+
     def __call__(self, o: "IndexedObservation", x: "Permutation"):
         # Extract the reward availability and push interval.
         i = o.i
@@ -196,7 +202,7 @@ class Posterior[X, O, RNG](Belief[X]):
     """
     Evolving beliefs over a variable X, given observations O.
     """
-    
+
     def __init__(self, init_id: Any, prior: "Belief[X]", update: "BeliefUpdate[X, O]"):
         self.data = SuperDict({init_id: prior})
         self._update = update
@@ -210,7 +216,7 @@ class Posterior[X, O, RNG](Belief[X]):
         return [self[key].representation for key in self.data.keys()]
 
     def update(self, key: Any, o: O):
-        old_belief = deepcopy(self.head)        
+        old_belief = deepcopy(self.head)
         self[key] = self._update(old_belief, o)
 
     def query(self, x: X) -> float:
@@ -225,18 +231,19 @@ class Posterior[X, O, RNG](Belief[X]):
 
     def __getitem__(self, key: Any) -> "Belief[X]":
         return self.data[key]
-    
+
     def __setitem__(self, key: Any, value: "Belief[X]"):
         self.data[key] = value
-    
+
     def __delitem__(self, key: Any):
         del self.data[key]
-    
+
     def __len__(self) -> int:
         return len(self.data)
 
     def __contains__(self, key: Any) -> bool:
         return key in self.data
+
 
 class FactorizedPosterior[X, O, RNG](Posterior):
     """
@@ -271,35 +278,46 @@ class FactorizedPosterior[X, O, RNG](Posterior):
         old_belief[i] = self._update(old_belief[i], o.observation)
         self[key] = old_belief
 
-## Convenience Data-structures    
+
+## Convenience Data-structures
 @dataclass
 class RewardOutcome:
     """A reward observation is a boolean indicating whether the reward is available and a float indicating the time the reward observation occurred."""
+
     is_available: bool
     time: float
+
 
 @dataclass
 class RewardInterval:
     """An observation of the reward interval."""
+
     time: float
+
 
 @dataclass
 class IndexedObservation[O]:
     """An indexed observation is an integer index and an observation."""
+
     i: int
     observation: O
+
 
 @dataclass
 class GammaParameters:
     """Gamma distribution parameters."""
+
     shape: float
     schedule: float
+
 
 @dataclass
 class Permutation:
     """A permutation of schedules and a shape parameter that act like GammaParameters."""
+
     permutation: list
     shape: float
+
 
 @dataclass
 class PossibleSchedules:
@@ -325,7 +343,7 @@ class PossibleSchedules:
     def __getitem__(self, i):
         return self.schedule[i]
 
-   
+
 class SupportsUpdatesByBox(Protocol):
     """Convenience protocol for updating beliefs with a box-specific observation."""
 

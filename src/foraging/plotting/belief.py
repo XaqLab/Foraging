@@ -6,8 +6,6 @@ from functools import reduce
 from typing import Any, Callable, Iterable, Optional
 
 import numpy as np
-from foraging.models._base import HashableDict
-from foraging.models.experiment import Experiment
 import pandas as pd
 import seaborn as sns
 from matplotlib import pyplot as plt
@@ -17,13 +15,16 @@ from matplotlib.patches import Patch
 from numpy.typing import ArrayLike
 from scipy.optimize import minimize_scalar
 
+from foraging.models._base import HashableDict
+from foraging.models.distribution import FactorizedPosterior, Posterior
+from foraging.models.experiment import Experiment
 from foraging.plotting import (
     bp,
     fig_init,
     legend_corrector,
     multiplot,
+    plot_average_or_traces,
     titler,
-    plot_average_or_traces
 )
 from foraging.plotting._base import (
     BasePlotter,
@@ -42,7 +43,6 @@ from foraging.utils.data import (
     filter_df,
     map_box_positions_to_ranks,
 )
-from foraging.models.distribution import FactorizedPosterior, Posterior
 from foraging.utils.stats import moving_average
 
 
@@ -200,8 +200,14 @@ def plot_cramer_rao_lb(
     plt.legend(handles=legend_elements)
     return plt.gca()
 
+
 class BeliefPlotter(BasePlotter):
-    def __init__(self, beliefs: dict[HashableDict, FactorizedPosterior], dataset: Experiment, config: dict | Iterable):
+    def __init__(
+        self,
+        beliefs: dict[HashableDict, FactorizedPosterior],
+        dataset: Experiment,
+        config: dict | Iterable,
+    ):
         super().__init__(dataset, config)
         self.beliefs = beliefs
 
@@ -246,7 +252,9 @@ class BeliefPlotter(BasePlotter):
             ax = fig.add_subplot(projection="3d")
 
         # Plot beliefs
-        plt_kwargs = {"cmap": ListedColormap(list(palette.values()))} | kwargs.pop("plt_kwargs", {})
+        plt_kwargs = {"cmap": ListedColormap(list(palette.values()))} | kwargs.pop(
+            "plt_kwargs", {}
+        )
         p = ax.scatter(
             reward_beliefs[:, 0],
             reward_beliefs[:, 1],
@@ -260,7 +268,9 @@ class BeliefPlotter(BasePlotter):
         ax.set_ylim([0, 1])
         ax.set_zlim([0, 1])
         ax.set_xlabel("Belief that reward is available at fast box", fontsize=fontsize)
-        ax.set_ylabel("Belief that reward is available at medium box", fontsize=fontsize)
+        ax.set_ylabel(
+            "Belief that reward is available at medium box", fontsize=fontsize
+        )
         ax.set_zlabel("Belief that reward is available at slow box", fontsize=fontsize)
         ax.set_title(title)
         ax.view_init(elev=20, azim=-135)
@@ -270,7 +280,6 @@ class BeliefPlotter(BasePlotter):
         cbar.set_label("Schedule")
         cbar.set_ticklabels(list(palette.keys()))
         return ax
-
 
     @legend_corrector(bbox=(1.15, 1))
     def plot_schedule_beliefs_in_block(
@@ -305,7 +314,12 @@ class BeliefPlotter(BasePlotter):
         Returns:
             ax: The matplotlib Axes object or array of Axes with the plot.
         """
-        beliefs, dataset, palette, heatmap_palette = self._init_vars(beliefs=beliefs, dataset=dataset, palette=palette, heatmap_palette=heatmap_palette)
+        beliefs, dataset, palette, heatmap_palette = self._init_vars(
+            beliefs=beliefs,
+            dataset=dataset,
+            palette=palette,
+            heatmap_palette=heatmap_palette,
+        )
         conds = HashableDict(conds)
 
         # Get block data
@@ -315,7 +329,9 @@ class BeliefPlotter(BasePlotter):
         posteriors = np.asarray(beliefs[conds].representation)
         schedule_candidates = beliefs[conds].prior[0].support
         schedules = np.sort(df_block["assigned schedules"].iloc[0])
-        mean_across_pushes = get_mean_beliefs_over_time(posteriors, schedule_candidates)[1:]
+        mean_across_pushes = get_mean_beliefs_over_time(
+            posteriors, schedule_candidates
+        )[1:]
 
         # Create a new array to hold the interpolated data
         # The new number of columns will be the difference between the max and min time points, creating 1 second time bins
@@ -381,7 +397,9 @@ class BeliefPlotter(BasePlotter):
 
             # Plot true schedule
             ax[box_pos].axhline(schedules[box_rank], color="black", linestyle="--")
-            ax[box_pos].set_title(f"Belief about schedule for {box_labels[box_rank]} box")
+            ax[box_pos].set_title(
+                f"Belief about schedule for {box_labels[box_rank]} box"
+            )
             ax[box_pos].set_xlabel("Time (s)")
             ax[box_pos].set_ylabel("Possible schedules")
             current_yticks = ax[box_pos].get_yticks()
@@ -415,9 +433,16 @@ class BeliefPlotter(BasePlotter):
             # Add legend
             if box_pos == 0:
                 handles = [
-                    Line2D([0], [0], color="black", linestyle="--", label="true schedule"),
                     Line2D(
-                        [0], [0], color="black", linestyle="", marker="^", label="rewarded"
+                        [0], [0], color="black", linestyle="--", label="true schedule"
+                    ),
+                    Line2D(
+                        [0],
+                        [0],
+                        color="black",
+                        linestyle="",
+                        marker="^",
+                        label="rewarded",
                     ),
                     Line2D(
                         [0],
@@ -466,12 +491,20 @@ class BeliefPlotter(BasePlotter):
         Returns:
             ax: The matplotlib Axes object with the plot.
         """
-        beliefs, dataset, palette = self._init_vars(beliefs=beliefs, dataset=dataset, palette=palette)
+        beliefs, dataset, palette = self._init_vars(
+            beliefs=beliefs, dataset=dataset, palette=palette
+        )
         dataset = dataset.filter(conds)
         df = dataset.df
 
         # Get beliefs of each block
-        def _inner(dataset: "Experiment", block_key: dict[str, Any], block: pd.DataFrame, *args, **kwargs):
+        def _inner(
+            dataset: "Experiment",
+            block_key: dict[str, Any],
+            block: pd.DataFrame,
+            *args,
+            **kwargs,
+        ):
             block = block.reset_index()
             posteriors = np.asarray(beliefs[block_key].representation)
             schedule_candidates = beliefs[block_key].prior[0].support
@@ -500,7 +533,13 @@ class BeliefPlotter(BasePlotter):
             # Add prior
             box_labels = list(palette.keys())
             for i in block["box position"].unique():
-                res[(index + (-i,))] = [mean[0, i], std[0, i], 0, box_labels[i], block_id]
+                res[(index + (-i,))] = [
+                    mean[0, i],
+                    std[0, i],
+                    0,
+                    box_labels[i],
+                    block_id,
+                ]
             return res
 
         res, _ = dataset.process_blocks(_inner)
@@ -512,9 +551,12 @@ class BeliefPlotter(BasePlotter):
         )
 
         df_beliefs.index = pd.MultiIndex.from_tuples(
-            df_beliefs.index, names=dataset.block_identifiers + dataset.within_block_identifiers
+            df_beliefs.index,
+            names=dataset.block_identifiers + dataset.within_block_identifiers,
         )
-        fig_kwargs = kwargs_handler(kwargs, "fig_kwargs", {"nrows": 2, "ncols": 1, "figsize": (10, 10)})
+        fig_kwargs = kwargs_handler(
+            kwargs, "fig_kwargs", {"nrows": 2, "ncols": 1, "figsize": (10, 10)}
+        )
 
         @legend_corrector
         def _plot(embeddables: Iterable[Embeddable], **kwargs):
@@ -563,12 +605,14 @@ class BeliefPlotter(BasePlotter):
                 }
             )
             plot_average_or_traces(df_subj, **params)
-            
+
             fig.suptitle(titler(title="Beliefs about schedule", conds=conds))
             fig.tight_layout()
             return ax
 
-        across_conditions_plotter("subject", df.index.unique("subject"), _plot, **kwargs)
+        across_conditions_plotter(
+            "subject", df.index.unique("subject"), _plot, **kwargs
+        )
 
     def plot_accuracy_across_block(
         self,
@@ -601,7 +645,13 @@ class BeliefPlotter(BasePlotter):
         dataset = dataset.filter(conds)
 
         # Get beliefs of each block
-        def _inner(dataset: Experiment, block_key: dict[str, Any], block: pd.DataFrame, *args, **kwargs):
+        def _inner(
+            dataset: Experiment,
+            block_key: dict[str, Any],
+            block: pd.DataFrame,
+            *args,
+            **kwargs,
+        ):
             block = block.reset_index()
             accuracy = accuracies[block_key]
 
@@ -630,7 +680,8 @@ class BeliefPlotter(BasePlotter):
         )
 
         df_beliefs.index = pd.MultiIndex.from_tuples(
-            df_beliefs.index, names=dataset.block_identifiers + dataset.within_block_identifiers
+            df_beliefs.index,
+            names=dataset.block_identifiers + dataset.within_block_identifiers,
         )
 
         params = {
@@ -663,6 +714,7 @@ class BeliefPlotter(BasePlotter):
         #     return ax
 
         # across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
+
 
 # def plot_schedule_beliefs_efficiency_across_block(
 #     df: pd.DataFrame,

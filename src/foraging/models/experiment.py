@@ -1,22 +1,27 @@
+import logging
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import Generic, Iterable, Protocol, TypeVar, Any
+from typing import Any, Generic, Iterable, Protocol, TypeVar
+
 import numpy as np
 import pandas as pd
 from numpy.typing import ArrayLike
 from tqdm import tqdm
-import logging
+
 from foraging.models import HashableDict, SuperDict
 
 # Lazilyy import filter_df to avoid circular dependency
 _filter_df = None
 
+
 def _get_filter_df():
     global _filter_df
     if _filter_df is None:
         from foraging.utils.data import filter_df
+
         _filter_df = filter_df
     return _filter_df
+
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -26,6 +31,7 @@ class SupportsDataFrame(Protocol):
     """
     A protocol for being compliant with the Dataframe Interchange Protocol.
     """
+
     @abstractmethod
     def __dataframe__(self, nan_as_null: bool = False, allow_copy: bool = True): ...
 
@@ -35,14 +41,33 @@ class SupportsBlocks:
     A protocol for a function that takes in a `dataset`, `block_key`, `block`, and returns a result.
     `block_key` and `block` are the outputs of `Experiment.blocks`.
     """
-    def __call__(self, dataset: "Experiment", block_key: dict[str, Any], block: pd.DataFrame, *args, **kwargs) -> Any: ...
+
+    def __call__(
+        self,
+        dataset: "Experiment",
+        block_key: dict[str, Any],
+        block: pd.DataFrame,
+        *args,
+        **kwargs,
+    ) -> Any: ...
 
 
 class Experiment:
     """
-    Dataset to store experiment data and metadata. 
+    Dataset to store experiment data and metadata.
     """
-    def __init__(self, data: "SupportsDataFrame", constants: dict | Iterable, block_identifiers: Iterable[str], within_block_identifiers: Iterable[str], experiment_conditions: Iterable[str], block_metadata: Iterable[str] = None, skip_index: bool = False, label_order: dict[str, str] = None):
+
+    def __init__(
+        self,
+        data: "SupportsDataFrame",
+        constants: dict | Iterable,
+        block_identifiers: Iterable[str],
+        within_block_identifiers: Iterable[str],
+        experiment_conditions: Iterable[str],
+        block_metadata: Iterable[str] = None,
+        skip_index: bool = False,
+        label_order: dict[str, str] = None,
+    ):
         """
         Args:
             data: DataFrame containing experiment data.
@@ -66,13 +91,15 @@ class Experiment:
         # Create multi-index for faster queries
         if "block_id" not in self.df.index.names:
             self.df["block_id"] = (
-                self.df[block_identifiers]
-                .astype(str)
-                .agg("_".join, axis=1)
-                .apply(hash)
+                self.df[block_identifiers].astype(str).agg("_".join, axis=1).apply(hash)
             )
 
-        self.index = block_identifiers + ["block_id"] + within_block_identifiers + experiment_conditions
+        self.index = (
+            block_identifiers
+            + ["block_id"]
+            + within_block_identifiers
+            + experiment_conditions
+        )
         if block_metadata is not None:
             self.index += block_metadata
         if not skip_index:
@@ -83,14 +110,15 @@ class Experiment:
     def blocks(self) -> pd.core.groupby.DataFrameGroupBy:
         return self.get_blocks()
 
-    def get_blocks(self, groupers: list = None, observed: bool = True, **kwargs) -> pd.core.groupby.DataFrameGroupBy:
+    def get_blocks(
+        self, groupers: list = None, observed: bool = True, **kwargs
+    ) -> pd.core.groupby.DataFrameGroupBy:
         """Return DataFrame grouped by blocks and additonal variables specified in `groupers`."""
         if groupers is None:
             groupers = []
         return self.df.groupby(
             self.block_identifiers + groupers, observed=observed, **kwargs
         )
-
 
     def get(self, name: str | Iterable[str]) -> ArrayLike:
         """Get values of an identifier or a column from the DataFrame."""
@@ -100,11 +128,15 @@ class Experiment:
             return self.df[name].values
         return None
 
-
     def get_unique(self, name: str | Iterable[str], order: bool = True) -> ArrayLike:
         """Get the unique values of an identifier or a column from the DataFrame."""
         if order and self.label_order is not None and name in self.label_order:
-            return self.df.reset_index()[[name, self.label_order[name]]].drop_duplicates().sort_values(self.label_order[name])[name].tolist()
+            return (
+                self.df.reset_index()[[name, self.label_order[name]]]
+                .drop_duplicates()
+                .sort_values(self.label_order[name])[name]
+                .tolist()
+            )
         if name in self.index:
             return self.df.index.unique(name)
         if name in self.df.columns:
@@ -113,17 +145,22 @@ class Experiment:
 
     def wrap(self, df: pd.DataFrame) -> "Experiment":
         """Wrap a DataFrame into an Experiment. Usually this is because you did some operations to the DataFrame of the original Experiment instance and want to maintain the Experiment semantics."""
-        return Experiment(df, self.constants, self.block_identifiers, self.within_block_identifiers, self.experiment_conditions, self.block_metadata, True, self.label_order)
-
+        return Experiment(
+            df,
+            self.constants,
+            self.block_identifiers,
+            self.within_block_identifiers,
+            self.experiment_conditions,
+            self.block_metadata,
+            True,
+            self.label_order,
+        )
 
     def filter(self, conds: dict[str, Any]) -> "Experiment":
         """Filter the experiment according to conditions specified in a dictionary."""
         return self.wrap(_get_filter_df()(self.df, conds))
-    
 
-    def extend(
-        self, data_dict: dict, col_name: str
-    ):
+    def extend(self, data_dict: dict, col_name: str):
         """
         Extend the DataFrame in place by adding a new column with values from the provided dictionary.
 
@@ -139,7 +176,6 @@ class Experiment:
         for key, value in data_dict.items():
             _df = _get_filter_df()(self.df, key)
             self.df.loc[_df.index, col_name] = value
-
 
     def process_blocks(
         self,
@@ -166,16 +202,16 @@ class Experiment:
         for index, block in tqdm(self.blocks, disable=not use_tqdm):
             block_key = HashableDict(dict(zip(self.block_identifiers, index)))
             try:
-                results[block_key] = compute_function(self, block_key, block, *args, **kwargs)
+                results[block_key] = compute_function(
+                    self, block_key, block, *args, **kwargs
+                )
             except Exception as e:
                 logger.debug(f"Could not process ({block_key}): {str(e)}")
                 err_blocks.add(block_key)
         return results, err_blocks
 
-
     def __dataframe__(self, nan_as_null: bool = False, allow_copy: bool = True):
         return self.df.reset_index()
-
 
     def __len__(self):
         return len(self.df)

@@ -2,19 +2,18 @@
 This module contains functions for computing beliefs.
 """
 
-from copy import deepcopy
 import logging
+from copy import deepcopy
 from typing import Any, Callable, Protocol
 
 import numpy as np
-from foraging.models._base import HashableDict
 import pandas as pd
 from numpy.typing import ArrayLike
 from scipy.stats import entropy, gamma, uniform
 from sklearn.linear_model import LogisticRegression
 from sklearn.utils.class_weight import compute_sample_weight
 
-from foraging.utils.data import map_box_positions_to_ranks
+from foraging.models._base import HashableDict
 from foraging.models.distribution import (
     FactorizedPosterior,
     IndexedObservation,
@@ -24,6 +23,8 @@ from foraging.models.distribution import (
     SupportsUpdatesByBox,
 )
 from foraging.models.experiment import Experiment
+from foraging.utils.data import map_box_positions_to_ranks
+
 # from foraging.utils.stats import mcfadden_pseudo_rsquared, permutation_test_logistic
 
 logger = logging.getLogger(__name__)
@@ -31,7 +32,9 @@ logger.setLevel(logging.DEBUG)
 
 
 # Calculate fisher information
-def fisher_info_reward_observations(t: float | ArrayLike, schedule: float, alpha: float) -> float:
+def fisher_info_reward_observations(
+    t: float | ArrayLike, schedule: float, alpha: float
+) -> float:
     """Calculate the Fisher information for reward observations.
 
     Args:
@@ -78,6 +81,7 @@ def _create_observation(
         i=box, observation=RewardOutcome(is_available=is_available, time=time)
     )
 
+
 def _create_perfect_observation(
     box: int, time: float
 ) -> IndexedObservation[RewardOutcome]:
@@ -92,15 +96,16 @@ def _create_perfect_observation(
     Returns:
         IndexedObservation[RewardObservation] that can be used anywhere an IndexedObservation is expected
     """
-    return IndexedObservation(
-        i=box, observation=RewardInterval(time=time)
-    )
+    return IndexedObservation(i=box, observation=RewardInterval(time=time))
+
 
 def compute_posterior(
     dataset: Experiment,
     block_key: dict[str, Any],
     block: pd.DataFrame,
-    posterior_maker: Callable[[Experiment, dict[str, Any], pd.DataFrame], SupportsUpdatesByBox],
+    posterior_maker: Callable[
+        [Experiment, dict[str, Any], pd.DataFrame], SupportsUpdatesByBox
+    ],
     *args,
     **kwargs,
 ) -> dict[HashableDict, FactorizedPosterior]:
@@ -136,11 +141,14 @@ def compute_posterior(
         )
     return beliefs
 
+
 def compute_perfect_posterior(
     dataset: Experiment,
     block_key: dict[str, Any],
     block: pd.DataFrame,
-    posterior_maker: Callable[[Experiment, dict[str, Any], pd.DataFrame], SupportsUpdatesByBox],
+    posterior_maker: Callable[
+        [Experiment, dict[str, Any], pd.DataFrame], SupportsUpdatesByBox
+    ],
     *args,
     **kwargs,
 ) -> dict[HashableDict, FactorizedPosterior]:
@@ -175,6 +183,7 @@ def compute_perfect_posterior(
         )
     return beliefs
 
+
 def compute_accuracy(
     dataset: Experiment,
     block_key: dict[str, Any],
@@ -196,7 +205,8 @@ def compute_accuracy(
         beliefs: dict[HashableDict, FactorizedPosterior] containing the schedule beliefs.
         seed: Random seed for reproducibility.
         n_samples: Number of samples to draw for Monte Carlo estimation.
-        n_correct: Number of correct relations to require for accuracy calculation. If -1, all relations must be correct.
+        n_correct: Number of correct pairwise order relations required for counting a sample as "correct".
+            If -1, all pairwise relations must be correct (i.e. the sampled total order matches the true order).
     Returns:
         ArrayLike: the computed accuracy of the beliefs over reward schedules.
     """
@@ -205,7 +215,7 @@ def compute_accuracy(
     belief_block = beliefs[block_key]
     n_boxes = len(box_ranks)
     if n_correct == -1:
-        n_correct = n_boxes
+        n_correct = (n_boxes * (n_boxes - 1)) // 2
     n_steps = len(belief_block)
     push_times = block["push times"].values
     samples = np.zeros((n_steps, n_boxes, n_samples))
@@ -223,13 +233,19 @@ def compute_accuracy(
     true_order = box_ranks["box rank"].values
 
     # Count correct pairwise order relations per sample, and compute fraction meeting >= n_correct.
-    true_rel = true_order[:, None] < true_order[None, :]                # (boxes, boxes)
-    sampled_rel = sampled_orders[:, :, None, :] < sampled_orders[:, None, :, :]  # (steps, boxes, boxes, samples)
+    true_rel = true_order[:, None] < true_order[None, :]  # (boxes, boxes)
+    sampled_rel = (
+        sampled_orders[:, :, None, :] < sampled_orders[:, None, :, :]
+    )  # (steps, boxes, boxes, samples)
 
-    pair_mask = np.triu(np.ones(true_rel.shape, dtype=bool), 1)         # (boxes, boxes)
+    pair_mask = np.triu(np.ones(true_rel.shape, dtype=bool), 1)  # (boxes, boxes)
 
     # count correct relations per (step, sample)
-    correct_counts = ((sampled_rel == true_rel[None, :, :, None]) & pair_mask[None, :, :, None]).sum(axis=(1, 2))  # (steps, samples)
+    correct_counts = (
+        (sampled_rel == true_rel[None, :, :, None]) & pair_mask[None, :, :, None]
+    ).sum(
+        axis=(1, 2)
+    )  # (steps, samples)
     accuracies = (correct_counts >= n_correct).mean(axis=1)
     return accuracies
 
@@ -280,12 +296,14 @@ def compute_per_box_accuracy(
 
     # Count the fraction of samples that match the true order
     sampled_orders = np.argsort(np.argsort(samples, axis=1), axis=1)
-    sampled_orders = sampled_orders[:,sorted_idx,:]
+    sampled_orders = sampled_orders[:, sorted_idx, :]
     true_order = box_ranks["box rank"].values[sorted_idx]
 
     # Count correct pairwise order relations per sample, and compute fraction meeting >= n_correct.
-    true_rel = true_order[:, None] < true_order[None, :]                # (boxes, boxes)
-    sampled_rel = (sampled_orders[:, :, None, :] < sampled_orders[:, None, :, :]).mean(axis=3)  # (steps, boxes, boxes, samples)
+    true_rel = true_order[:, None] < true_order[None, :]  # (boxes, boxes)
+    sampled_rel = (sampled_orders[:, :, None, :] < sampled_orders[:, None, :, :]).mean(
+        axis=3
+    )  # (steps, boxes, boxes, samples)
     return {"correct_counts": sampled_rel, "time": np.insert(push_times, 0, 0)}
     # return (
     #     (sampled_orders == true_order[np.newaxis, :, np.newaxis])
