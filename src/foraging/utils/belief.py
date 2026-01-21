@@ -867,6 +867,49 @@ def get_mean_beliefs_over_time(
     return [x @ supp for x in beliefs]
 
 
+def get_map_over_time(
+    beliefs: ArrayLike | list, supp: ArrayLike | list
+) -> ArrayLike | list:
+    """
+    Computes the maximum a posteriori (MAP) beliefs over time.
+
+    Args:
+        beliefs: Matrix or list of beliefs for each box over time.
+        supp: The support for the beliefs (values over which the beliefs are computed).
+
+    Returns:
+        A vector of MAP estimates over time.
+    """
+    supp = np.asarray(supp)
+    if isinstance(beliefs, np.ndarray):
+        # Find the index of maximum probability along the support dimension
+        map_indices = np.argmax(beliefs, axis=-1)
+        # Return the corresponding support values
+        return supp[map_indices]
+    return [supp[np.argmax(x)] for x in beliefs]
+
+def get_map_indices_over_time(
+    beliefs: ArrayLike | list, supp: ArrayLike | list
+) -> ArrayLike | list:
+    """
+    Computes the indices of the maximum a posteriori (MAP) beliefs over time.
+
+    Args:
+        beliefs: Matrix or list of beliefs for each box over time.
+        supp: The support for the beliefs (values over which the beliefs are computed).
+
+    Returns:
+        A vector of MAP indices over time.
+    """
+    supp = np.asarray(supp)
+    if isinstance(beliefs, np.ndarray):
+        # Find the index of maximum probability along the support dimension
+        map_indices = np.argmax(beliefs, axis=-1)
+        # Return the corresponding support values
+        return map_indices
+    return [np.argmax(x) for x in beliefs]
+
+
 def get_std_beliefs_over_time(
     beliefs: ArrayLike | list, supp: ArrayLike | list
 ) -> np.ndarray | list:

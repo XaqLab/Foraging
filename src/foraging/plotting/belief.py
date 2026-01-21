@@ -35,6 +35,8 @@ from foraging.utils._base import kwargs_handler
 from foraging.utils.belief import (
     fisher_info_reward_observations,
     get_entropy_beliefs_over_time,
+    get_map_indices_over_time,
+    get_map_over_time,
     get_mean_beliefs_over_time,
     get_std_beliefs_over_time,
 )
@@ -290,6 +292,7 @@ class BeliefPlotter(BasePlotter):
         palette: dict[str, Any] = None,
         heatmap_palette: dict = None,
         show_stats: bool = False,
+        dt: float = 1,
         ax: plt.Axes = None,
         **kwargs,
     ) -> plt.Axes:
@@ -306,6 +309,7 @@ class BeliefPlotter(BasePlotter):
             palette: Dictionary mapping box labels to colors for plotting. If None, uses default palette.
             heatmap_palette: Dictionary mapping box labels to colormaps for heatmaps. If None, uses default.
             show_stats: If True, overlays mean and standard deviation lines on the heatmaps.
+            dt: timescale to display belief data
             ax: Optional, existing matplotlib Axes object or array of Axes. If None, a new figure will be created.
 
             kwargs:
@@ -335,14 +339,14 @@ class BeliefPlotter(BasePlotter):
 
         # Create a new array to hold the interpolated data
         # The new number of columns will be the difference between the max and min time points, creating 1 second time bins
-        new_num_cols = int(push_times[-1] + 1)
+        new_num_cols = int((push_times[-1] + 1) / dt)
         interpolated_beliefs = np.zeros(
-            (new_num_cols, posteriors.shape[1], posteriors.shape[2])
+            (new_num_cols, n_boxes, len(schedule_candidates))
         )
         start = 0
-        for box_pos, t in enumerate(push_times):
-            end = int(t)
-            interpolated_beliefs[start:end, :, :] = posteriors[box_pos, :, :]
+        for push_idx, t in enumerate(push_times):
+            end = int(t / dt)
+            interpolated_beliefs[start:end, :, :] = posteriors[push_idx, :, :]
             start = end
 
         if show_stats:
@@ -377,6 +381,16 @@ class BeliefPlotter(BasePlotter):
                 cbar_kws={"label": "probability"},
                 ax=ax[box_pos],
             )
+            
+            # Set x-tick labels to reflect actual time values
+            current_xticks = ax[box_pos].get_xticks()
+            ax[box_pos].set_xticklabels(
+                [
+                    f"{tick * dt:.1f}" if 0 <= tick < new_num_cols else ""
+                    for tick in current_xticks
+                ]
+            )
+            
             if show_stats:
                 ax[box_pos].plot(
                     mean_across_time[:, box_pos],
@@ -415,14 +429,14 @@ class BeliefPlotter(BasePlotter):
             reward_mask = df_block["reward outcomes"].values
             box_mask = df_block["box rank"].values == box_rank
             ax[box_pos].scatter(
-                push_times[reward_mask & box_mask],
+                push_times[reward_mask & box_mask] / dt,
                 mean_across_pushes[reward_mask & box_mask, box_pos],
                 c="black",
                 marker="^",
                 s=50,
             )
             ax[box_pos].scatter(
-                push_times[~reward_mask & box_mask],
+                push_times[~reward_mask & box_mask] / dt,
                 mean_across_pushes[~reward_mask & box_mask, box_pos],
                 edgecolors="black",
                 marker="v",
@@ -466,6 +480,183 @@ class BeliefPlotter(BasePlotter):
         fig.suptitle(titler("Beliefs about schedule", conds=conds))
         fig.tight_layout()
         return ax
+
+    @legend_corrector(bbox=(1.15, 1))
+    def plot_permutation_beliefs_in_block(
+        self,
+        beliefs: dict[HashableDict, Posterior] = None,
+        dataset: Experiment = None,
+        conds: dict[str, Any] = None,
+        palette: dict[str, Any] = None,
+        heatmap_palette: str = "Greys",
+        dt: float = 1,
+        ax: plt.Axes = None,
+        **kwargs,
+    ) -> plt.Axes:
+        """
+        Plots the beliefs about the permutation for a specific block in the experiment, with heatmaps showing
+        belief probabilities over time for each box, optional statistics (mean and standard deviation),
+        true permutation lines, and reward outcomes.
+
+        Args:
+            beliefs: Dictionary mapping condition tuples to Posterior objects containing
+                the belief distributions over time.
+            dataset: Experiment object containing the dataset. If None, uses the default dataset.
+            conds: Dictionary of conditions to filter the dataset. If None, uses default conditions.
+            palette: Dictionary mapping box labels to colors for plotting. If None, uses default palette.
+            heatmap_palette: Colormap for the heatmap. Defaults to "Greys".
+            show_stats: If True, overlays mean and standard deviation lines on the heatmaps.
+            dt: timescale to display belief data
+            ax: Optional, existing matplotlib Axes object or array of Axes. If None, a new figure will be created.
+
+            kwargs:
+                - 'fig_kwargs': Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
+
+        Returns:
+            ax: The matplotlib Axes object or array of Axes with the plot.
+        """
+        #TODO: change 
+        beliefs, dataset, palette, heatmap_palette = self._init_vars(
+            beliefs=beliefs,
+            dataset=dataset,
+            palette=palette,
+            heatmap_palette=heatmap_palette,
+        )
+        conds = HashableDict(conds)
+
+        # Get block data
+        df_block = dataset.filter(conds).df.reset_index()
+        n_boxes = df_block["n boxes"].values[0]
+        push_times = df_block["push times"].values
+        posteriors = np.asarray(beliefs[conds].representation)
+        permutation_candidates = beliefs[conds].prior.support
+
+        # Get the true permutation from assigned schedules
+        assigned_schedules = df_block["assigned schedules"].iloc[0]
+        # Find which permutation matches the assigned schedules
+        true_permutation_idx = None
+        for idx, perm in enumerate(permutation_candidates):
+            if hasattr(perm, 'permutation') and list(perm.permutation) == list(assigned_schedules):
+                true_permutation_idx = idx + 0.5
+                break
+
+        map_across_pushes = get_map_indices_over_time(
+            posteriors, permutation_candidates
+        )[1:] + 0.5
+
+        # Create a new array to hold the interpolated data
+        # The new number of columns will be the difference between the max and min time points, creating 1 second time bins
+        new_num_cols = int((push_times[-1] + 1) / dt)
+        interpolated_beliefs = np.zeros(
+            (new_num_cols, posteriors.shape[1])
+        )
+        start = 0
+        for push_idx, t in enumerate(push_times):
+            end = int(t / dt)
+            interpolated_beliefs[start:end, :] = posteriors[push_idx, :]
+            start = end
+
+        fig, ax = fig_init(
+            ax,
+            **kwargs.pop(
+                "fig_kwargs",
+                {
+                    "nrows": 1,
+                    "ncols": 1,
+                    "sharex": True,
+                    "sharey": True,
+                    "figsize": (15, 10),
+                },
+            ),
+        )
+
+        # Plot belief probabilities
+        sns.heatmap(
+            interpolated_beliefs.T,
+            cmap=heatmap_palette,
+            cbar_kws={"label": "probability"},
+            ax=ax,
+        )
+        
+        # Set x-tick labels to reflect actual time values
+        current_xticks = ax.get_xticks()
+        ax.set_xticklabels(
+            [
+                f"{tick * dt:.2f}" if 0 <= tick < new_num_cols else ""
+                for tick in current_xticks
+            ]
+        )
+        
+        # Plot true permutation
+        if true_permutation_idx is not None:
+            ax.axhline(true_permutation_idx, color="black", linestyle="--")
+        ax.set_title(
+            f"Belief about permutation"
+        )
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel("Possible permutations")
+        current_yticks = ax.get_yticks()
+        ax.set_yticklabels(
+            [
+                str(tuple(permutation_candidates[int(j)].permutation))
+                if hasattr(permutation_candidates[int(j)], 'permutation')
+                else str(permutation_candidates[int(j)])
+                for j in current_yticks
+                if int(j) < len(permutation_candidates)
+            ],
+            rotation=45
+        )
+
+        # Plot reward outcomes
+        pos_to_rank = map_box_positions_to_ranks(df_block)
+        box_labels = list(palette.keys())
+        for box_pos in range(n_boxes):
+            box_rank = pos_to_rank.loc[box_pos].values[0]
+            box_mask = df_block["box rank"].values == box_rank
+            reward_mask = df_block["reward outcomes"].values
+            ax.scatter(
+                push_times[reward_mask & box_mask] / dt,
+                map_across_pushes[reward_mask & box_mask],
+                color=palette[box_labels[box_rank]],
+                marker="^",
+                s=50,
+            )
+            ax.scatter(
+                push_times[~reward_mask & box_mask] / dt,
+                map_across_pushes[~reward_mask & box_mask],
+                edgecolors=palette[box_labels[box_rank]],
+                marker="v",
+                s=50,
+                facecolors="none",
+            )
+
+        handles = [
+            Line2D(
+                [0], [0], color="black", linestyle="--", label="true permutation"
+            ),
+            Line2D(
+                [0],
+                [0],
+                color="black",
+                linestyle="",
+                marker="^",
+                label="rewarded",
+            ),
+            Line2D(
+                [0],
+                [0],
+                color="black",
+                linestyle="",
+                marker="v",
+                markerfacecolor="none",
+                label="no reward",
+            ),
+        ]
+        ax.legend(handles=handles)
+        fig.suptitle(titler(f"Beliefs about permutation (true schedules) {assigned_schedules}", conds=conds))
+        fig.tight_layout()
+        return ax
+
 
     def plot_schedule_beliefs_mean_and_std_across_block(
         self,
