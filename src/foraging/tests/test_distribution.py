@@ -14,7 +14,6 @@ from foraging.models.distribution import (
     FactorizedPosterior,
     GammaParameters,
     IndexedObservation,
-    Permutation,
     Permutation2SchedulesWrapper,
     PermutationLikelihood,
     PossibleSchedules,
@@ -221,126 +220,6 @@ def test_gamma_likelihood_edge_cases():
     assert abs(likelihood_large - 1.0) < 1e-5
 
 
-def test_permutation_likelihood_available_reward():
-    """Test likelihood calculation for available reward in permutation."""
-    likelihood = PermutationLikelihood()
-    permutation = Permutation(permutation=[5.0, 3.0, 7.0], shape=2.0)
-
-    obs = IndexedObservation(
-        i=1, observation=RewardOutcome(is_available=True, time=2.0)
-    )
-
-    # Calculate expected probability manually for index 1 (schedule=3.0)
-    expected_prob = gamma.cdf(2.0, 2.0, scale=3.0 / 2.0)
-
-    likelihood_value = likelihood(obs, permutation)
-    assert abs(likelihood_value - expected_prob) < 1e-10
-
-
-def test_permutation_likelihood_unavailable_reward():
-    """Test likelihood calculation for unavailable reward in permutation."""
-    likelihood = PermutationLikelihood()
-    permutation = Permutation(permutation=[5.0, 3.0, 7.0], shape=2.0)
-
-    obs = IndexedObservation(
-        i=0, observation=RewardOutcome(is_available=False, time=1.0)
-    )
-
-    # Calculate expected probability manually for index 0 (schedule=5.0)
-    expected_prob = 1.0 - gamma.cdf(1.0, 2.0, scale=5.0 / 2.0)
-
-    likelihood_value = likelihood(obs, permutation)
-    assert abs(likelihood_value - expected_prob) < 1e-10
-
-
-def test_permutation2scheduleswrapper_sample_shape_and_values():
-    """
-    The wrapper is used as a convenience belief whose *support* is Permutation hypotheses,
-    but whose samples return a (n_boxes, n_samples) matrix of schedules.
-    """
-    schedules = (3.0, 5.0)
-    shape = 2.0
-    support = [
-        Permutation(permutation=list(schedules), shape=shape),
-        Permutation(permutation=[schedules[1], schedules[0]], shape=shape),
-    ]
-    prior = Permutation2SchedulesWrapper(support=support, probabilities=[0.5, 0.5])
-
-    rng = np.random.default_rng(0)
-    samples = prior.sample(n=50, rng=rng)
-
-    assert samples.shape == (2, 50)
-
-    # Each column should be exactly one of the two permutations.
-    cols = [tuple(samples[:, j]) for j in range(samples.shape[1])]
-    assert set(cols).issubset({(3.0, 5.0), (5.0, 3.0)})
-
-
-def test_permutation_posterior_update_matches_manual_bayes_rule():
-    """
-    This is the core correctness test for the notebook construction:
-    - prior: uniform over permutations of *known* schedule values
-    - likelihood: uses only the schedule value at the observed box index
-    - posterior: proportional to likelihood * prior (and normalized)
-    """
-    schedules = (3.0, 5.0)
-    shape = 2.0
-    perms = [
-        Permutation(permutation=list(schedules), shape=shape),
-        Permutation(permutation=[schedules[1], schedules[0]], shape=shape),
-    ]
-    prior = Permutation2SchedulesWrapper(support=perms, probabilities=[0.5, 0.5])
-
-    update = ExactBayesianUpdateOnProbabilities(PermutationLikelihood())
-
-    def belief_update(prior_belief, obs):
-        p = update(prior_belief, obs)
-        return Permutation2SchedulesWrapper(p.support, p.representation)
-
-    # Observe reward availability at box 0 after t seconds since last push.
-    t = 2.0
-    obs = IndexedObservation(i=0, observation=RewardOutcome(is_available=True, time=t))
-
-    posterior = belief_update(prior, obs)
-
-    # Manual Bayes: likelihood depends on schedule at index i for each permutation
-    l0 = gamma.cdf(t, shape, scale=perms[0].permutation[0] / shape)
-    l1 = gamma.cdf(t, shape, scale=perms[1].permutation[0] / shape)
-    unnorm = np.array([l0 * 0.5, l1 * 0.5])
-    expected = unnorm / unnorm.sum()
-
-    np.testing.assert_allclose(posterior.representation, expected, rtol=0, atol=1e-12)
-
-
-def test_permutation_likelihood_uses_observation_index():
-    """
-    Sanity check that changing o.i changes which schedule is used under each permutation.
-    This catches off-by-one / wrong-index bugs in the pipeline.
-    """
-    schedules = (3.0, 5.0)
-    shape = 2.0
-    perms = [
-        Permutation(permutation=list(schedules), shape=shape),
-        Permutation(permutation=[schedules[1], schedules[0]], shape=shape),
-    ]
-    prior = Probabilities(support=perms, probabilities=[0.5, 0.5])
-    likelihood = PermutationLikelihood()
-
-    t = 1.5
-    obs0 = IndexedObservation(i=0, observation=RewardOutcome(is_available=True, time=t))
-    obs1 = IndexedObservation(i=1, observation=RewardOutcome(is_available=True, time=t))
-
-    # Under perms[0] == (3,5), i=0 uses 3.0 and i=1 uses 5.0, so likelihood should differ.
-    p0_i0 = likelihood(obs0, perms[0])
-    p0_i1 = likelihood(obs1, perms[0])
-    assert p0_i0 != p0_i1
-
-    # Under perms[1] == (5,3), the indexing should flip.
-    p1_i0 = likelihood(obs0, perms[1])
-    p1_i1 = likelihood(obs1, perms[1])
-    assert p1_i0 != p1_i1
-
-
 def test_posterior_initialization():
     """Test posterior initialization."""
     support = [1, 2, 3, 4]
@@ -502,13 +381,6 @@ def test_gamma_parameters():
     params = GammaParameters(shape=2.0, schedule=5.0)
     assert params.shape == 2.0
     assert params.schedule == 5.0
-
-
-def test_permutation():
-    """Test Permutation data structure."""
-    permutation = Permutation(permutation=[1.0, 2.0, 3.0], shape=2.0)
-    assert permutation.permutation == [1.0, 2.0, 3.0]
-    assert permutation.shape == 2.0
 
 
 def test_possible_schedules():

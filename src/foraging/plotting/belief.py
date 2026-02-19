@@ -8,6 +8,7 @@ from typing import Any, Callable, Iterable, Optional
 import numpy as np
 import pandas as pd
 import seaborn as sns
+import torch
 from matplotlib import pyplot as plt
 from matplotlib.colors import ListedColormap
 from matplotlib.lines import Line2D
@@ -381,7 +382,7 @@ class BeliefPlotter(BasePlotter):
                 cbar_kws={"label": "probability"},
                 ax=ax[box_pos],
             )
-            
+
             # Set x-tick labels to reflect actual time values
             current_xticks = ax[box_pos].get_xticks()
             ax[box_pos].set_xticklabels(
@@ -390,7 +391,7 @@ class BeliefPlotter(BasePlotter):
                     for tick in current_xticks
                 ]
             )
-            
+
             if show_stats:
                 ax[box_pos].plot(
                     mean_across_time[:, box_pos],
@@ -515,7 +516,7 @@ class BeliefPlotter(BasePlotter):
         Returns:
             ax: The matplotlib Axes object or array of Axes with the plot.
         """
-        #TODO: change 
+        # TODO: change
         beliefs, dataset, palette, heatmap_palette = self._init_vars(
             beliefs=beliefs,
             dataset=dataset,
@@ -536,20 +537,18 @@ class BeliefPlotter(BasePlotter):
         # Find which permutation matches the assigned schedules
         true_permutation_idx = None
         for idx, perm in enumerate(permutation_candidates):
-            if hasattr(perm, 'permutation') and list(perm.permutation) == list(assigned_schedules):
+            if list(perm.schedule) == list(assigned_schedules):
                 true_permutation_idx = idx + 0.5
                 break
 
-        map_across_pushes = get_map_indices_over_time(
-            posteriors, permutation_candidates
-        )[1:] + 0.5
+        map_across_pushes = (
+            get_map_indices_over_time(posteriors, permutation_candidates)[1:] + 0.5
+        )
 
         # Create a new array to hold the interpolated data
         # The new number of columns will be the difference between the max and min time points, creating 1 second time bins
         new_num_cols = int((push_times[-1] + 1) / dt)
-        interpolated_beliefs = np.zeros(
-            (new_num_cols, posteriors.shape[1])
-        )
+        interpolated_beliefs = np.zeros((new_num_cols, posteriors.shape[1]))
         start = 0
         for push_idx, t in enumerate(push_times):
             end = int(t / dt)
@@ -577,7 +576,7 @@ class BeliefPlotter(BasePlotter):
             cbar_kws={"label": "probability"},
             ax=ax,
         )
-        
+
         # Set x-tick labels to reflect actual time values
         current_xticks = ax.get_xticks()
         ax.set_xticklabels(
@@ -586,25 +585,21 @@ class BeliefPlotter(BasePlotter):
                 for tick in current_xticks
             ]
         )
-        
+
         # Plot true permutation
         if true_permutation_idx is not None:
             ax.axhline(true_permutation_idx, color="black", linestyle="--")
-        ax.set_title(
-            f"Belief about permutation"
-        )
+        ax.set_title(f"Belief about permutation")
         ax.set_xlabel("Time (s)")
         ax.set_ylabel("Possible permutations")
         current_yticks = ax.get_yticks()
         ax.set_yticklabels(
             [
-                str(tuple(permutation_candidates[int(j)].permutation))
-                if hasattr(permutation_candidates[int(j)], 'permutation')
-                else str(permutation_candidates[int(j)])
+                str(tuple(permutation_candidates[int(j)]))
                 for j in current_yticks
                 if int(j) < len(permutation_candidates)
             ],
-            rotation=45
+            rotation=45,
         )
 
         # Plot reward outcomes
@@ -631,9 +626,7 @@ class BeliefPlotter(BasePlotter):
             )
 
         handles = [
-            Line2D(
-                [0], [0], color="black", linestyle="--", label="true permutation"
-            ),
+            Line2D([0], [0], color="black", linestyle="--", label="true permutation"),
             Line2D(
                 [0],
                 [0],
@@ -653,10 +646,14 @@ class BeliefPlotter(BasePlotter):
             ),
         ]
         ax.legend(handles=handles)
-        fig.suptitle(titler(f"Beliefs about permutation (true schedules) {assigned_schedules}", conds=conds))
+        fig.suptitle(
+            titler(
+                f"Beliefs about permutation (true schedules) {assigned_schedules}",
+                conds=conds,
+            )
+        )
         fig.tight_layout()
         return ax
-
 
     def plot_schedule_beliefs_mean_and_std_across_block(
         self,
@@ -815,19 +812,22 @@ class BeliefPlotter(BasePlotter):
         **kwargs,
     ) -> plt.Axes:
         """
-        Plots the beliefs about the schedule for a specific block in the experiment, with uncertainty bands
-        and reward outcomes.
+        Plots the accuracy of belief-based predictions across blocks over time.
+
+        This function visualizes how the accuracy of schedule beliefs evolves throughout each block,
+        showing whether the beliefs correctly identify the true ordering of schedules. Accuracy is
+        typically computed using Monte Carlo sampling from the posterior beliefs.
 
         Args:
-            df: DataFrame containing session data.
-            index: Index of the block to analyze in the DataFrame.
-            x: The value from `df` used for the x-axis, typically 'push #' or 'push times'.
-            ax: Optional, existing matplotlib Axes object. If None, a new one will be created.
-
-            kwargs:
-                - 'fig_kwargs': Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
-                - 'plt_kwargs': Dictionary to specify additional plotting properties for the line plot (passed to `bp wrapper`).
-                - 'lgd_kwargs': Dictionary of keyword arguments for customizing the legend (passed to `plt.legend`).
+            accuracies: Dictionary mapping block keys to arrays of accuracy values at each push.
+            dataset: Experiment containing session data. If None, uses the plotter's dataset.
+            conds: Optional conditions to filter the dataset (e.g., {"subject": "dylan", "shape": 1}).
+            x: The value from block data used for the x-axis, typically 'push times' or 'push #'.
+            ax: Optional matplotlib Axes object. If None, a new one will be created.
+            **kwargs: Additional keyword arguments passed to plot_average_or_traces, such as:
+                - 'show_traces': bool, whether to show individual block traces
+                - 'hue': str, column name for color grouping
+                - Other seaborn/matplotlib styling options
 
         Returns:
             ax: The matplotlib Axes object with the plot.
@@ -905,6 +905,201 @@ class BeliefPlotter(BasePlotter):
         #     return ax
 
         # across_conditions_plotter(df.index.unique("subject"), _plot, **kwargs)
+
+    def plot_when_accuracy_threshold_met(
+        self,
+        when_accuracy_threshold_met: dict[tuple, ArrayLike],
+        dataset: Experiment = None,
+        conds: dict[str, Any] = None,
+        ax: plt.Axes = None,
+        **kwargs,
+    ) -> plt.Axes:
+        """
+        Plots the beliefs about the schedule for a specific block in the experiment, with uncertainty bands
+        and reward outcomes.
+
+        Args:
+            df: DataFrame containing session data.
+            index: Index of the block to analyze in the DataFrame.
+            x: The value from `df` used for the x-axis, typically 'push #' or 'push times'.
+            ax: Optional, existing matplotlib Axes object. If None, a new one will be created.
+
+            kwargs:
+                - 'fig_kwargs': Dictionary to specify figure properties when creating a new figure (passed to `plt.subplots`).
+                - 'plt_kwargs': Dictionary to specify additional plotting properties for the line plot (passed to `bp wrapper`).
+                - 'lgd_kwargs': Dictionary of keyword arguments for customizing the legend (passed to `plt.legend`).
+
+        Returns:
+            ax: The matplotlib Axes object with the plot.
+        """
+        dataset = self._init_vars(dataset=dataset)
+        dataset = dataset.filter(conds)
+
+        # Get beliefs of each block
+        def _inner(
+            dataset: Experiment,
+            block_key: dict[str, Any],
+            block: pd.DataFrame,
+            *args,
+            **kwargs,
+        ):
+            block = block.reset_index()
+            return when_accuracy_threshold_met[block_key]
+
+        res, _ = dataset.process_blocks(_inner)
+        # res = reduce(lambda x, y: {**x, **y}, list(res.values()), {})
+        res = pd.Series(list(res.values()), name="time in block (s)")
+        ax = sns.histplot(x=res[res > -1], ax=ax, bins=20)
+        return ax
+
+    def plot_policy_fit_across_block(
+        self,
+        model: torch.nn.Module,
+        beliefs: dict[HashableDict, Any],
+        dataset: Experiment = None,
+        conds: dict[str, Any] = None,
+        x: str = "push times",
+        y: str = "interval_error",
+        device: str = None,
+        ax: plt.Axes = None,
+        **kwargs,
+    ) -> plt.Axes:
+        """
+        Plots the model prediction errors across blocks.
+
+        Args:
+            model: PyTorch model that takes belief vectors and outputs (interval_pred, box_logits).
+            beliefs: Dictionary mapping block keys to posterior objects containing beliefs at each push time.
+            dataset: Experiment containing session data.
+            conds: Optional conditions to filter the dataset.
+            x: The value from block data used for the x-axis, typically 'push #' or 'push times'.
+            error_type: Type of error for push interval ('mae' or 'mse'). Default 'mae'.
+            device: Device to run model on ('cuda' or 'cpu'). If None, auto-detects.
+            ax: Optional, existing matplotlib Axes object. If None, a new one will be created.
+            kwargs: Additional keyword arguments passed to plot_average_or_traces.
+
+        Returns:
+            ax: The matplotlib Axes object with the plot.
+        """
+        dataset = self._init_vars(dataset=dataset)
+        dataset = dataset.filter(conds)
+
+        # Set device
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = torch.device(device)
+        model = model.to(device)
+        model.eval()
+
+        # Get beliefs of each block
+        def _inner(
+            dataset: Experiment,
+            block_key: dict[str, Any],
+            block: pd.DataFrame,
+            *args,
+            **kwargs,
+        ):
+            block = block.reset_index()
+
+            # Look up the posterior corresponding to this block
+            if block_key not in beliefs:
+                return None
+            posterior = beliefs[block_key]
+
+            # Extract push times and iterate through the posterior
+            push_times = block["push times"].values
+            chosen_boxes = block["box rank"].values.astype(int)
+            push_intervals = block["push intervals"].values
+
+            # Initialize error arrays (one per push after the first)
+            n_pushes = len(push_times)
+            box_errors = []
+            interval_errors = []
+
+            # For each push (except the last), use current belief to predict next action
+            with torch.no_grad():
+                for i in range(n_pushes):
+                    pt = push_times[i]
+                    key = block_key.update("push time", pt)
+
+                    if key not in posterior:
+                        continue
+
+                    # Get belief at this timestep
+                    belief = posterior[key]
+
+                    # Extract belief representation (flatten if needed)
+                    if hasattr(belief, "representation"):
+                        belief_vec = np.asarray(belief.representation)
+                    else:
+                        belief_vec = np.asarray(belief)
+
+                    # Flatten belief vector and convert to torch tensor
+                    belief_vec = belief_vec.flatten()
+                    belief_tensor = (
+                        torch.FloatTensor(belief_vec).unsqueeze(0).to(device)
+                    )
+
+                    # Run model
+                    interval_pred, box_logits = model(belief_tensor)
+
+                    # Get true next actions
+                    true_interval = push_intervals[i]
+                    true_box = chosen_boxes[i]
+
+                    # Compute box choice error (0 if correct, 1 if incorrect)
+                    pred_box = torch.argmax(box_logits, dim=1).item()
+                    box_error = 0.0 if pred_box == true_box else 1.0
+                    box_errors.append(box_error)
+
+                    # Compute push interval error
+                    interval_errors.append((true_interval - interval_pred.item()) ** 2)
+
+            if len(box_errors) == 0:
+                return None
+
+            # Convert to arrays
+            box_errors = np.array(box_errors)
+            interval_errors = np.array(interval_errors)
+
+            x_vals = block[x].values
+            block_id = block["block_id"].values[0]
+            index = tuple(block_key.values())
+
+            # Create result dictionary with errors for each push
+            res = {}
+            for i in range(len(box_errors)):
+                res[(index + (i,))] = [
+                    box_errors[i],
+                    interval_errors[i],
+                    x_vals[i],
+                    block_id,
+                ]
+
+            return res
+
+        res, _ = dataset.process_blocks(_inner)
+        res = reduce(lambda x, y: {**x, **y}, list(res.values()), {})
+        df_errors = pd.DataFrame.from_dict(
+            res,
+            orient="index",
+            columns=["box_error", "interval_error", x, "block_id"],
+        )
+
+        df_errors.index = pd.MultiIndex.from_tuples(
+            df_errors.index,
+            names=dataset.block_identifiers + dataset.within_block_identifiers,
+        )
+
+        # Plot both error types (you can customize which one to plot via kwargs)
+        params = {
+            "x": x,
+            "y": y,
+            "ax": ax,
+            "conds": conds,
+            **kwargs,
+        }
+        return plot_average_or_traces(df_errors, **params)
 
 
 # def plot_schedule_beliefs_efficiency_across_block(

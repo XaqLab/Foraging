@@ -4,20 +4,27 @@ This module contains functions for computing beliefs.
 
 import logging
 from copy import deepcopy
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Iterable, Protocol
 
 import numpy as np
 import pandas as pd
+import torch
+import torch.nn as nn
+import torch.optim as optim
 from numpy.typing import ArrayLike
 from scipy.stats import entropy, gamma, uniform
 from sklearn.linear_model import LogisticRegression
 from sklearn.utils.class_weight import compute_sample_weight
+from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.tensorboard import SummaryWriter
 
 from foraging.models._base import HashableDict
+from foraging.models.deep import PolicyMLP
 from foraging.models.distribution import (
     FactorizedPosterior,
     IndexedObservation,
     Posterior,
+    Probabilities,
     RewardInterval,
     RewardOutcome,
     SupportsUpdatesByBox,
@@ -99,7 +106,7 @@ def _create_perfect_observation(
     return IndexedObservation(i=box, observation=RewardInterval(time=time))
 
 
-def compute_posterior(
+def compute_schedule_posterior(
     dataset: Experiment,
     block_key: dict[str, Any],
     block: pd.DataFrame,
@@ -142,7 +149,350 @@ def compute_posterior(
     return beliefs
 
 
-def compute_perfect_posterior(
+def compute_joint_schedule_reward_posterior(
+    dataset: Experiment,
+    block_key: dict[str, Any],
+    block: pd.DataFrame,
+    posterior_maker: Callable[
+        [Experiment, dict[str, Any], pd.DataFrame], SupportsUpdatesByBox
+    ],
+    *args,
+    **kwargs,
+) -> dict[HashableDict, np.ndarray]:
+    """
+    Computes the joint posterior over schedule permutation and reward availability at each box.
+
+    For permutation-based beliefs, this computes P(permutation, reward_available | observations)
+    by marginalizing over the reward CDF given each permutation hypothesis.
+
+    Args:
+        dataset: Experiment containing session data.
+        block_key: Key for the block.
+        block: DataFrame containing block data.
+        posterior_maker: Function that instantiates the posterior (should be permutation-based).
+        *args, **kwargs: Additional arguments to pass to the posterior_maker.
+
+    Returns:
+        dict[HashableDict, np.ndarray]: Dictionary mapping timestep keys to 2D arrays of shape
+            (n_permutations, n_boxes) where entry [i, j] is P(permutation_i, reward_available_at_box_j).
+    """
+
+    n_obs = len(block)
+    push_times = block["push times"].values
+    push_intervals = block["push intervals"].values
+    reward_outcomes = block["reward outcomes"].values
+    box_positions = block["box position"].values.astype(int)
+
+    # Get unique box positions and schedule info
+    n_boxes = block["box position"].nunique()
+    assigned_schedules = block.index.get_level_values("assigned schedules")[0]
+    shape = (
+        block.index.get_level_values("shape")[0]
+        if "shape" in block.index.names
+        else block["shape"].iloc[0]
+    )
+
+    # Construct permutation posterior over schedules
+    beliefs = posterior_maker(dataset, block_key, block, *args, **kwargs)
+    permutation_hypotheses = beliefs.prior.support
+    n_perms = len(permutation_hypotheses)
+    last_push_times = np.zeros(n_boxes)
+
+    # Compute joint distributions at each timestep
+    def _update_joint(
+        schedule_belief: Probabilities,
+        push_time: float,
+        last_push_times: Iterable[float],
+    ):
+        joint = np.zeros((n_perms, n_boxes))
+        for i, perm_hyp in enumerate(permutation_hypotheses):
+            for box in range(n_boxes):
+                schedule = perm_hyp.schedule[box]
+                p_available = gamma.cdf(
+                    push_time - last_push_times[box], shape, scale=schedule / shape
+                )
+                joint[i, box] = schedule_belief.query_by_index(i) * p_available
+        return joint
+
+    # Handle prior
+    key = block_key.update("push time", 0)
+    joint_posterior = {key: _update_joint(beliefs.prior, 0, last_push_times)}
+    for i in range(n_obs):
+        # Get the beliefs right before the push
+        old_key = key
+        key = block_key.update("push time", push_times[i])
+        joint_posterior[key] = _update_joint(
+            beliefs[old_key], push_times[i], last_push_times
+        )
+        last_push_times[box_positions[i]] = push_times[i]
+
+        # Update the beliefs after the push
+        beliefs.update(
+            key,
+            _create_observation(
+                box=box_positions[i],
+                is_available=reward_outcomes[i],
+                time=push_intervals[i],
+            ),
+        )
+    return joint_posterior
+
+
+def fit_policy_to_predict_future_behavior(
+    dataset: Experiment,
+    beliefs: dict[HashableDict, Any],
+    conds: dict[str, Any] = None,
+    split_frac: Iterable[float] = [0.8, 0.2],
+    hidden_dims: Iterable[int] = [64, 32],
+    learning_rate: float = 0.001,
+    batch_size: int = 32,
+    n_epochs: int = 100,
+    patience: int = 10,
+    seed: int = 42,
+    tensorboard_dir: str = None,
+    device: str = None,
+    *args,
+    **kwargs,
+):
+    """
+    Fit a policy (MLP) to predict future behavior from beliefs.
+
+    Args:
+        dataset: Experiment containing session data.
+        beliefs: Dictionary mapping block keys to posterior objects containing beliefs at each push time.
+        conds: Optional conditions to filter the dataset.
+        split_frac: Train/test split fractions (must sum to 1.0).
+        hidden_dims: List of hidden layer dimensions for the MLP.
+        learning_rate: Learning rate for optimizer.
+        batch_size: Batch size for training.
+        n_epochs: Maximum number of training epochs.
+        patience: Early stopping patience (epochs without improvement).
+        seed: Random seed for reproducibility.
+        tensorboard_dir: Optional directory for tensorboard logging.
+        device: Device to train on ('cuda' or 'cpu'). If None, auto-detects.
+
+    Returns:
+        Trained PyTorch model.
+    """
+
+    # Set device
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = torch.device(device)
+
+    # Set random seeds
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if device.type == "cuda":
+        torch.cuda.manual_seed(seed)
+
+    # 1. Filter dataset
+    dataset = dataset.filter(conds)
+
+    # 2. Format data into supervised learning format
+    X_list = []  # Belief vectors
+    y_interval_list = []  # Push intervals (regression target)
+    y_box_list = []  # Box choices (classification target)
+
+    # Get beliefs of each block using the standard block-processing pattern
+    def _inner(
+        dataset: "Experiment",
+        block_key: dict[str, Any],
+        block: pd.DataFrame,
+        *args,
+        **kwargs,
+    ):
+        # Work on a copy with a simple RangeIndex
+        block = block.reset_index()
+
+        # Look up the posterior corresponding to this block
+        if block_key not in beliefs:
+            return None
+        posterior = beliefs[block_key]
+
+        # Extract push times and iterate through the posterior
+        n_obs = len(block)
+        push_times = block["push times"].values
+        chosen_boxes = block["box position"].values.astype(int)
+        push_intervals = block["push intervals"].values
+
+        # For each push (except the last), use current belief to predict next action
+        for i in range(n_obs):
+            pt = push_times[i]
+            key = block_key.update("push time", pt)
+
+            if key not in posterior:
+                continue
+
+            # Get belief at this timestep
+            belief = posterior[key]
+
+            # Extract belief representation (flatten if needed)
+            if hasattr(belief, "representation"):
+                belief_vec = np.asarray(belief.representation)
+            else:
+                belief_vec = np.asarray(belief)
+
+            # Flatten belief vector
+            belief_vec = belief_vec.flatten()
+
+            # Get next action (push interval and box choice)
+            next_interval = push_intervals[i]
+            next_box = chosen_boxes[i]
+
+            X_list.append(belief_vec)
+            y_interval_list.append(next_interval)
+            y_box_list.append(next_box)
+
+        # All supervision is accumulated via the outer lists; nothing to return.
+        return None
+
+    # Walk all blocks once, accumulating supervised examples
+    dataset.process_blocks(_inner)
+
+    if len(X_list) == 0:
+        raise ValueError("No data available after filtering and formatting.")
+
+    # Convert to numpy arrays
+    X = np.array(X_list)
+    y_interval = np.array(y_interval_list)
+    y_box = np.array(y_box_list)
+
+    # Get dimensions
+    input_dim = X.shape[1]
+    n_boxes = len(np.unique(y_box))
+
+    logger.info(
+        f"Formatted {len(X)} samples with input_dim={input_dim}, n_boxes={n_boxes}"
+    )
+
+    # 3. Train/test split
+    assert np.isclose(sum(split_frac), 1.0), "split_frac must sum to 1.0"
+    n_samples = len(X)
+    n_train = int(n_samples * split_frac[0])
+
+    # Shuffle indices
+    indices = np.random.permutation(n_samples)
+    train_idx = indices[:n_train]
+    test_idx = indices[n_train:]
+
+    X_train, X_test = X[train_idx], X[test_idx]
+    y_interval_train, y_interval_test = y_interval[train_idx], y_interval[test_idx]
+    y_box_train, y_box_test = y_box[train_idx], y_box[test_idx]
+
+    # Convert to torch tensors
+    X_train_t = torch.FloatTensor(X_train).to(device)
+    X_test_t = torch.FloatTensor(X_test).to(device)
+    y_interval_train_t = torch.FloatTensor(y_interval_train).unsqueeze(1).to(device)
+    y_interval_test_t = torch.FloatTensor(y_interval_test).unsqueeze(1).to(device)
+    y_box_train_t = torch.LongTensor(y_box_train).to(device)
+    y_box_test_t = torch.LongTensor(y_box_test).to(device)
+
+    # Create data loaders
+    train_dataset = TensorDataset(X_train_t, y_interval_train_t, y_box_train_t)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+
+    # 4. Instantiate MLP model (class defined at module level)
+    model = PolicyMLP(input_dim, hidden_dims, n_boxes).to(device)
+
+    # Define loss functions and optimizer
+    criterion_interval = nn.MSELoss()
+    criterion_box = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+
+    # Setup tensorboard if requested
+    writer = None
+    if tensorboard_dir is not None:
+        writer = SummaryWriter(tensorboard_dir)
+
+    # Training loop
+    best_test_loss = float("inf")
+    patience_counter = 0
+    best_model_state = None
+
+    logger.info(f"Training on device: {device}")
+    for epoch in range(n_epochs):
+        model.train()
+        train_loss_interval = 0.0
+        train_loss_box = 0.0
+
+        for batch_X, batch_y_interval, batch_y_box in train_loader:
+            optimizer.zero_grad()
+
+            # Forward pass
+            interval_pred, box_logits = model(batch_X)
+
+            # Compute losses
+            loss_interval = criterion_interval(interval_pred, batch_y_interval)
+            loss_box = criterion_box(box_logits, batch_y_box)
+            loss = loss_interval + loss_box
+
+            # Backward pass
+            loss.backward()
+            optimizer.step()
+
+            train_loss_interval += loss_interval.item()
+            train_loss_box += loss_box.item()
+
+        train_loss_interval /= len(train_loader)
+        train_loss_box /= len(train_loader)
+        train_loss = train_loss_interval + train_loss_box
+
+        # Evaluate on test set
+        model.eval()
+        with torch.no_grad():
+            interval_pred_test, box_logits_test = model(X_test_t)
+            test_loss_interval = criterion_interval(
+                interval_pred_test, y_interval_test_t
+            ).item()
+            test_loss_box = criterion_box(box_logits_test, y_box_test_t).item()
+            test_loss = test_loss_interval + test_loss_box
+
+            # Classification accuracy
+            box_pred_test = torch.argmax(box_logits_test, dim=1)
+            test_acc_box = (box_pred_test == y_box_test_t).float().mean().item()
+
+        # Logging
+        if writer is not None:
+            writer.add_scalar("Loss/train_total", train_loss, epoch)
+            writer.add_scalar("Loss/train_interval", train_loss_interval, epoch)
+            writer.add_scalar("Loss/train_box", train_loss_box, epoch)
+            writer.add_scalar("Loss/test_total", test_loss, epoch)
+            writer.add_scalar("Loss/test_interval", test_loss_interval, epoch)
+            writer.add_scalar("Loss/test_box", test_loss_box, epoch)
+            writer.add_scalar("Accuracy/test_box", test_acc_box, epoch)
+
+        if epoch % 10 == 0:
+            logger.info(
+                f"Epoch {epoch}/{n_epochs}: "
+                f"Train Loss={train_loss:.4f}, Test Loss={test_loss:.4f}, "
+                f"Test Box Acc={test_acc_box:.4f}"
+            )
+
+        # Early stopping
+        if test_loss < best_test_loss:
+            best_test_loss = test_loss
+            best_model_state = model.state_dict().copy()
+            patience_counter = 0
+        else:
+            patience_counter += 1
+            if patience_counter >= patience:
+                logger.info(f"Early stopping at epoch {epoch}")
+                break
+
+    # Load best model
+    if best_model_state is not None:
+        model.load_state_dict(best_model_state)
+
+    if writer is not None:
+        writer.close()
+
+    logger.info(f"Training complete. Best test loss: {best_test_loss:.4f}")
+
+    return model
+
+
+def compute_perfect_obs_schedule_posterior(
     dataset: Experiment,
     block_key: dict[str, Any],
     block: pd.DataFrame,
@@ -188,7 +538,7 @@ def compute_accuracy(
     dataset: Experiment,
     block_key: dict[str, Any],
     block: pd.DataFrame,
-    beliefs: dict[HashableDict, FactorizedPosterior],
+    beliefs: dict[HashableDict, Posterior],
     *args,
     seed: int = 42,
     n_samples: int = 100,
@@ -202,7 +552,7 @@ def compute_accuracy(
         dataset: Experiment containing session data.
         block_key: Key for the block.
         block: DataFrame containing block data.
-        beliefs: dict[HashableDict, FactorizedPosterior] containing the schedule beliefs.
+        beliefs: dict[HashableDict, Posterior] containing the schedule beliefs.
         seed: Random seed for reproducibility.
         n_samples: Number of samples to draw for Monte Carlo estimation.
         n_correct: Number of correct pairwise order relations required for counting a sample as "correct".
@@ -220,7 +570,7 @@ def compute_accuracy(
     push_times = block["push times"].values
     samples = np.zeros((n_steps, n_boxes, n_samples))
 
-    rng = np.random.default_rng(seed)
+    rng = np.random.default_rng(seed + int(block_key["block"]))
     samples[0] = belief_block[block_key.update("push time", 0)].sample(n_samples, rng)
 
     # Estimate accuracy via Monte Carlo sampling
@@ -250,15 +600,76 @@ def compute_accuracy(
     return accuracies
 
 
+def compute_when_accuracy_threshold_met(
+    dataset: Experiment,
+    block_key: dict[str, Any],
+    block: pd.DataFrame,
+    beliefs: dict[HashableDict, Posterior],
+    *args,
+    threshold: float = 0.8,
+    seed: int = 42,
+    n_samples: int = 100,
+    n_correct: int = -1,
+    n_threshold_pts: int = 10,
+    **kwargs,
+) -> float:
+    """
+    Find the earliest time-step when accuracy meets/exceeds `threshold` and stays there for the rest of the block.
+
+    This is intended for permutation-based beliefs where samples correspond to schedule values per box.
+
+    Args:
+        dataset: Experiment containing session data.
+        block_key: Key for the block.
+        block: DataFrame containing block data.
+        beliefs: dict[HashableDict, Posterior] containing the schedule beliefs.
+        threshold: Accuracy threshold in [0, 1]. Default is 0.8.
+        seed: Random seed for reproducibility (passed to `compute_accuracy`).
+        n_samples: Number of samples to draw for Monte Carlo estimation.
+        n_correct: Number of correct pairwise order relations required for counting a sample as "correct".
+            If -1, all pairwise relations must be correct (i.e. the sampled total order matches the true order).
+        n_threshold_pts: Number of points to check for threshold met. If -1, check all points.
+        **kwargs: Unused; kept for API compatibility with other block processors.
+
+    Returns:
+        The push time (including 0 for the prior) where the threshold is first met and never falls below afterwards.
+        If no such time exists, returns -1.
+    """
+    if not (0.0 <= threshold <= 1.0):
+        raise ValueError("threshold must be between 0 and 1")
+
+    accuracies = compute_accuracy(
+        dataset=dataset,
+        block_key=block_key,
+        block=block,
+        beliefs=beliefs,
+        seed=seed,
+        n_samples=n_samples,
+        n_correct=n_correct,
+        **kwargs,
+    )
+
+    times = np.insert(block["push times"].values, 0, 0)
+    # Find earliest i such that accuracies[i:] are all >= threshold.
+    for i in range(len(accuracies)):
+        # if np.all(accuracies[i:] >= threshold):
+        #     return float(times[i])
+        if n_threshold_pts == -1 and np.all(accuracies[i:] >= threshold):
+            return float(times[i])
+        elif n_threshold_pts > 0 and i + n_threshold_pts <= len(accuracies):
+            if np.all(accuracies[i : i + n_threshold_pts] >= threshold):
+                return float(times[i])
+    return -1
+
+
 def compute_per_box_accuracy(
     dataset: Experiment,
     block_key: dict[str, Any],
     block: pd.DataFrame,
-    beliefs: dict[HashableDict, FactorizedPosterior],
+    beliefs: dict[HashableDict, Posterior],
     *args,
     seed: int = 42,
     n_samples: int = 100,
-    n_correct: int = -1,
     **kwargs,
 ) -> ArrayLike:
     """
@@ -268,7 +679,7 @@ def compute_per_box_accuracy(
         dataset: Experiment containing session data.
         block_key: Key for the block.
         block: DataFrame containing block data.
-        beliefs: dict[HashableDict, FactorizedPosterior] containing the schedule beliefs.
+        beliefs: dict[HashableDict, Posterior] containing the schedule beliefs.
         seed: Random seed for reproducibility.
         n_samples: Number of samples to draw for Monte Carlo estimation.
         n_correct: Number of correct relations to require for accuracy calculation. If -1, all relations must be correct.
@@ -279,12 +690,11 @@ def compute_per_box_accuracy(
     box_ranks = map_box_positions_to_ranks(block)
     belief_block = beliefs[block_key]
     n_boxes = len(box_ranks)
-    if n_correct == -1:
-        n_correct = (n_boxes * (n_boxes - 1)) // 2
     n_steps = len(belief_block)
     push_times = block["push times"].values
     samples = np.zeros((n_steps, n_boxes, n_samples))
-    samples[0] = belief_block[block_key.update("push time", 0)].sample(n_samples)
+    rng = np.random.default_rng(seed + int(block_key["block"]))
+    samples[0] = belief_block[block_key.update("push time", 0)].sample(n_samples, rng)
 
     # sort fast > medium > slow
     sorted_idx = np.argsort(block.index.unique("assigned schedules")[0])
@@ -292,7 +702,7 @@ def compute_per_box_accuracy(
     # Estimate accuracy via Monte Carlo sampling
     for i, pt in enumerate(push_times):
         belief = belief_block[block_key.update("push time", pt)]
-        samples[i + 1] = belief.sample(n_samples)
+        samples[i + 1] = belief.sample(n_samples, rng)
 
     # Count the fraction of samples that match the true order
     sampled_orders = np.argsort(np.argsort(samples, axis=1), axis=1)
@@ -887,6 +1297,7 @@ def get_map_over_time(
         # Return the corresponding support values
         return supp[map_indices]
     return [supp[np.argmax(x)] for x in beliefs]
+
 
 def get_map_indices_over_time(
     beliefs: ArrayLike | list, supp: ArrayLike | list

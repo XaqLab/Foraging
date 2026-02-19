@@ -176,19 +176,41 @@ class RewardIntervalLikelihood(Likelihood["GammaParameters", "RewardInterval"]):
         return gamma.pdf(o.time, x.shape, scale=x.schedule / x.shape)
 
 
-class PermutationLikelihood(Likelihood["IndexedObservation", "Permutation"]):
+class PermutationLikelihood(Likelihood["IndexedObservation", "PossibleSchedules"]):
     """
     A likelihood for a permutation of schedules.
     """
 
-    def __call__(self, o: "IndexedObservation", x: "Permutation"):
+    def __call__(self, o: "IndexedObservation", x: "PossibleSchedules"):
         # Extract the reward availability and push interval.
         i = o.i
         obs = o.observation
-        schedule = x.permutation[i]
 
         # Calculate the probability of reward being available/unavailable after t time has passed under the given latents.
-        p_t = gamma.cdf(obs.time, x.shape, scale=schedule / x.shape)
+        p_t = gamma.cdf(obs.time, x.shape, scale=x.schedule[i] / x.shape)
+
+        # The last element is the probability of being in the last state, i.e., reward being available.
+        if (
+            not obs.is_available
+        ):  # If reward is not available, return the complementary probability.
+            return 1.0 - p_t
+        return p_t
+
+
+class PermutationRewardIntervalLikelihood(
+    Likelihood["IndexedObservation", "PossibleSchedules"]
+):
+    """
+    A likelihood for a permutation of schedules.
+    """
+
+    def __call__(self, o: "IndexedObservation", x: "PossibleSchedules"):
+        # Extract the reward availability and push interval.
+        i = o.i
+        obs = o.observation
+
+        # Calculate the probability of reward being available/unavailable after t time has passed under the given latents.
+        p_t = gamma.cdf(obs.time, x.shape, scale=x.schedule[i] / x.shape)
 
         # The last element is the probability of being in the last state, i.e., reward being available.
         if (
@@ -312,14 +334,6 @@ class GammaParameters:
 
 
 @dataclass
-class Permutation:
-    """A permutation of schedules and a shape parameter that act like GammaParameters."""
-
-    permutation: list
-    shape: float
-
-
-@dataclass
 class PossibleSchedules:
     """
     A convenience class that behaves like an array of schedules but also has structured fields.
@@ -351,8 +365,8 @@ class SupportsUpdatesByBox(Protocol):
 
 
 class Permutation2SchedulesWrapper(Probabilities):
-    """A wrapper that converts a Permutation to a list of schedules."""
+    """A wrapper that converts a PossibleSchedules to a list of schedules."""
 
     def sample(self, n: int = 1, rng: RNG = None) -> Iterable[Iterable[float]]:
         samples = super().sample(n, rng)
-        return np.array([sample.permutation for sample in samples]).T
+        return samples.T

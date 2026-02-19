@@ -620,50 +620,63 @@ def make_angelaki_experiment(
                         logger.debug(e)
 
     # Make DataFrame and sort by relevant fields
+    # Include `box position` as a deterministic tie-breaker (useful after binning).
     df = pd.DataFrame(df_dict).sort_values(
-        by=["subject", "session", "block", "push times"]
+        by=["subject", "session", "block", "push times", "box position"]
     )
 
     # Bin push times if bin_pushes is specified
     if bin_pushes is not None:
-        # Group by subject, session, and block to bin within each block
-        def bin_pushes_in_group(group):
-            """Bin pushes within a group, keeping first rewarded push per bin, or first unrewarded if none."""
-            push_times = group["push times"].values
-            reward_outcomes = group["reward outcomes"].values
+        # Bin within each (subject, session, block, box position) so we don't lose box identity.
+        # For each time bin, keep a single representative row:
+        # - push time becomes the bin center
+        # - reward outcome is True iff any push in that bin was rewarded
+        def bin_pushes_in_group(group: pd.DataFrame) -> pd.DataFrame:
+            push_times = group["push times"].to_numpy()
+            reward_outcomes = group["reward outcomes"].to_numpy()
 
-            # Create bins based on push times
-            # Use floor division to assign each push time to a bin
-            # min_time = push_times.min()
-            min_time = 0
-            bin_indices = ((push_times - min_time) // bin_pushes).astype(int)
+            # Discretize time axis into `bin_pushes` second bins starting from 0
+            bin_indices = (push_times // bin_pushes).astype(int)
 
-            # For each bin, find the index to keep
-            keep_indices = []
+            rows = []
             for bin_idx in np.unique(bin_indices):
                 bin_mask = bin_indices == bin_idx
-                bin_rewards = reward_outcomes[bin_mask]
                 bin_original_indices = np.where(bin_mask)[0]
 
-                # Find first rewarded push in bin
-                rewarded_mask = bin_rewards == True
-                if np.any(rewarded_mask):
-                    # Keep first rewarded push
-                    first_rewarded_idx = bin_original_indices[rewarded_mask][0]
-                    keep_indices.append(first_rewarded_idx)
-                else:
-                    # Keep first unrewarded push
-                    keep_indices.append(bin_original_indices[0])
+                # Representative row (metadata is constant within group)
+                row = group.iloc[bin_original_indices[0]].copy()
 
-            # Return only the rows to keep
-            return group.iloc[keep_indices]
+                # Bin center time
+                row["push times"] = (bin_idx + 0.5) * bin_pushes
+
+                # Bin reward: True if any reward occurred within the bin
+                row["reward outcomes"] = bool(np.any(reward_outcomes[bin_mask]))
+
+                rows.append(row)
+
+            return pd.DataFrame(rows)
 
         # Apply binning to each group
         df = (
-            df.groupby(["subject", "session", "block"], observed=True, group_keys=False)
+            df.groupby(
+                ["subject", "session", "block", "box position"],
+                observed=True,
+                group_keys=False,
+            )
             .apply(bin_pushes_in_group)
             .reset_index(drop=True)
         )
+        df = df.sort_values(
+            by=["subject", "session", "block", "push times", "box position"]
+        )
+
+        # Recompute push intervals (time since last push) within each box after binning
+        df["push intervals"] = df.groupby(
+            ["subject", "session", "block", "box position"], observed=True
+        )["push times"].diff()
+        df.loc[df["push intervals"].isna(), "push intervals"] = df.loc[
+            df["push intervals"].isna(), "push times"
+        ]
 
     # Add some more columns
     df["box"] = df["box rank"].map(box_labels)
@@ -672,23 +685,29 @@ def make_angelaki_experiment(
         "box"
     ].shift(1)
     df["normalized pushes"] = df["push intervals"] / df["schedule"]
-    df["consecutive push intervals"] = df["push times"].diff()
+    # Time between consecutive pushes within each block.
+    df["consecutive push intervals"] = df.groupby(
+        ["subject", "session", "block"], observed=True
+    )["push times"].diff()
     df["eye tracking"] = df["eye tracking"].map({"TRUE": True, "FALSE": False})
     df["position tracking"] = df["position tracking"].map(
         {"TRUE": True, "FALSE": False}
     )
     df["rewarded?"] = df["reward outcomes"].map({True: "Yes", False: "No"})
+    # Use deterministic sequential indices; `rank()` is unstable under ties (e.g., after binning).
     df["push #"] = (
-        df.groupby(["subject", "session", "block"])["push times"].rank().astype(int)
+        df.groupby(["subject", "session", "block"], observed=True).cumcount() + 1
     )
     df["push # by box"] = (
-        df.groupby(["subject", "session", "block", "box rank"])["push times"]
-        .rank()
-        .astype(int)
+        df.groupby(
+            ["subject", "session", "block", "box rank"], observed=True
+        ).cumcount()
+        + 1
     )
-    df["stay/switch"] = (
-        df["box rank"].diff().astype(bool).map({False: "stay", True: "switch"})
-    )
+    diffs = df.groupby(["subject", "session", "block"], observed=True)[
+        "box rank"
+    ].diff()
+    df["stay/switch"] = diffs.fillna(0).ne(0).map({False: "stay", True: "switch"})
 
     # Convenience columns
     df["time"] = df["push times"]
@@ -712,8 +731,12 @@ def make_angelaki_experiment(
         "box": "box rank",
     }
 
-    # Drop all push intervals with value 0 as these are bad data
-    df = df[df["consecutive push intervals"] > 0]
+    # Drop 0-length consecutive intervals only for raw (unbinned) data.
+    # With binned pushes, identical bin centers can occur in edge cases and are not necessarily bad data.
+    if bin_pushes is None:
+        df = df[df["consecutive push intervals"] > 0]
+    else:
+        df = df[df["consecutive push intervals"] >= 0]
     return Experiment(
         df,
         config.to_dict(),
@@ -742,32 +765,46 @@ def angelaki_exclusion_criteria(experiment: Experiment, data_dir: str) -> Experi
     Returns:
         A filtered dataset that has had the exclusion criteria applied.
     """
+    # IMPORTANT:
+    # `experiment.df` is a MultiIndex with many levels (block_id, push #, conditions, metadata, ...).
+    # Pandas `MultiIndex.drop(..., level=...)` does NOT support passing a *list* of level names.
+    # So for block-level exclusions we build a (subject, session, block) view of the index and
+    # filter with `.isin(...)`.
+    df_filtered = experiment.df
+
+    def _block_index(df: pd.DataFrame) -> pd.MultiIndex:
+        other_levels = [
+            n for n in df.index.names if n not in experiment.block_identifiers
+        ]
+        return df.index.droplevel(other_levels) if other_levels else df.index
+
     # Count the number of pushes per block
     n_pushes_per_block = experiment.blocks.size().reset_index(name="n pushes per block")
-    df = experiment.df
 
     # Exclude blocks with fewer than 10 pushes
-    df_filtered = df.drop(
+    low_blocks = (
         n_pushes_per_block.loc[n_pushes_per_block["n pushes per block"] < 10]
         .set_index(experiment.block_identifiers)
         .index
     )
+    if len(low_blocks) > 0:
+        df_filtered = df_filtered.loc[~_block_index(df_filtered).isin(low_blocks)]
 
     # Exclude blocks where the schedule is 80
-    df_filtered = df_filtered.drop(
-        (df_filtered[df_filtered["schedule"] == 80])
-        .groupby(experiment.block_identifiers)
+    blocks_with_80 = (
+        df_filtered[df_filtered["schedule"] == 80]
+        .groupby(level=experiment.block_identifiers, observed=True)
         .size()
         .index
     )
+    if len(blocks_with_80) > 0:
+        df_filtered = df_filtered.loc[~_block_index(df_filtered).isin(blocks_with_80)]
 
     # Exclude pushes where the consecutive push intervals are greater than 30 s
-    df_filtered = df_filtered.drop(
-        df_filtered[df_filtered["consecutive push intervals"] > 30].index
-    )
+    df_filtered = df_filtered[df_filtered["consecutive push intervals"] <= 30]
 
     # Exclude blocks where the schedules are not 3 unique values
-    df_filtered = df_filtered.drop(df_filtered[df_filtered["n unique boxes"] < 3].index)
+    df_filtered = df_filtered[df_filtered["n unique boxes"] >= 3]
     # indices_to_drop = []
     # for _, block in df_filtered.groupby(experiment.block_identifiers):
     #     if np.unique(block.index.get_level_values(block.index.names.index("assigned schedules"))[0]).size < 3:
