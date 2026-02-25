@@ -952,7 +952,7 @@ class BeliefPlotter(BasePlotter):
         ax = sns.histplot(x=res[res > -1], ax=ax, bins=20)
         return ax
 
-    def plot_policy_fit_across_block(
+    def plot_policy_fit_across_block_traces(
         self,
         model: torch.nn.Module,
         beliefs: dict[HashableDict, Any],
@@ -1122,7 +1122,6 @@ class BeliefPlotter(BasePlotter):
         dataset: Experiment = None,
         conds: dict[str, Any] = None,
         bin_size: float = 1.0,
-        n_boxes: int = None,
         device: str = None,
         ax: plt.Axes = None,
         hist: bool = True,
@@ -1156,22 +1155,7 @@ class BeliefPlotter(BasePlotter):
         """
         dataset = self._init_vars(dataset=dataset)
         dataset = dataset.filter(conds)
-
-        if n_boxes is None:
-            box_set = set()
-            def _collect_boxes(
-                dataset: Experiment,
-                block_key: dict[str, Any],
-                block: pd.DataFrame,
-                *args,
-                **kwargs_inner,
-            ):
-                block = block.reset_index()
-                chosen_boxes = block["box position"].values.astype(int)
-                box_set.update(chosen_boxes)
-                return None
-            dataset.process_blocks(_collect_boxes)
-            n_boxes = len(box_set) if box_set else 1
+        n_boxes = len(dataset.get_unique("box rank"))
 
         device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         device = torch.device(device)
@@ -1263,6 +1247,197 @@ class BeliefPlotter(BasePlotter):
         ax.legend(loc="best")
         return ax, llr
 
+    def plot_policy_llr_scatterplot(
+        self,
+        model_real: torch.nn.Module,
+        model_perm: torch.nn.Module,
+        beliefs: dict[HashableDict, Any],
+        dataset: Experiment = None,
+        conds: dict[str, Any] = None,
+        bin_size: float = 1.0,
+        device: str = None,
+        ax: plt.Axes = None,
+        time_bin_edges: np.ndarray | None = None,
+        llr_bin_edges: np.ndarray | None = None,
+        n_time_bins: int = 50,
+        n_llr_bins: int = 60,
+        density: bool = True,
+        relative_time: bool = False,
+        cmap: str = "Blues",
+        cbar_label: str = "density",
+    ) -> tuple[plt.Axes, np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Compute per-step LLRs and plot a heatmap over (time, LLR).
+
+        Each discrete step contributes:
+          t = t_next (time of the evaluated action; optionally shifted so block starts at 0)
+          llr = log P(true action | real model) - log P(true action | permuted model)
+
+        The heatmap shows a 2D histogram of (t, llr) across all blocks.
+
+        Args:
+            model_real: Model fit on real (non-permuted) action labels.
+            model_perm: Model fit on permuted action labels.
+            beliefs: Dict mapping block keys to posteriors keyed by discrete time.
+            dataset: Experiment containing session data.
+            conds: Optional conditions to filter the dataset.
+            bin_size: Discrete time step size (must match training and belief computation).
+            device: Device to run models on. If None, auto-detects.
+            ax: Optional matplotlib Axes. If None, a new one is created.
+            time_bin_edges: Optional explicit bin edges for time axis.
+            llr_bin_edges: Optional explicit bin edges for LLR axis.
+            n_time_bins: Number of time bins if time_bin_edges not provided.
+            n_llr_bins: Number of LLR bins if llr_bin_edges not provided.
+            density: If True, normalize histogram to a density.
+            relative_time: If True, shift times so each block starts at 0.
+            cmap: Colormap for the heatmap.
+            cbar_label: Label for the colorbar.
+
+        Returns:
+            (ax, H, time_edges, llr_edges):
+              ax: matplotlib Axes
+              H: 2D histogram array with shape (n_llr_bins, n_time_bins)
+              time_edges: time bin edges
+              llr_edges: LLR bin edges
+        """
+        dataset = self._init_vars(dataset=dataset)
+        dataset = dataset.filter(conds)
+        n_boxes = len(dataset.get_unique("box rank"))
+
+        device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        device = torch.device(device)
+        model_real = model_real.to(device)
+        model_perm = model_perm.to(device)
+        model_real.eval()
+        model_perm.eval()
+
+        t_list: list[float] = []
+        llr_list: list[float] = []
+
+        def _inner(
+            dataset: Experiment,
+            block_key: dict[str, Any],
+            block: pd.DataFrame,
+            *args,
+            **kwargs_inner,
+        ):
+            block = block.reset_index()
+            if block_key not in beliefs:
+                return None
+            posterior = beliefs[block_key]
+            try:
+                time_keys = list(posterior.keys())
+            except AttributeError:
+                return None
+            discrete_times = sorted(set(k["push time"] for k in time_keys if "push time" in k))
+            if len(discrete_times) < 2:
+                return None
+
+            # Ground-truth action in each time bin.
+            push_times_arr = block["push times"].values
+            if "box rank" in block.columns:
+                chosen_boxes = block["box rank"].values.astype(int)
+            else:
+                chosen_boxes = block["box position"].values.astype(int)
+
+            action_at_bin: dict[int, int] = {}
+            for i in range(len(push_times_arr)):
+                pt = float(push_times_arr[i])
+                bin_idx = int(np.floor(pt / bin_size))
+                action_at_bin[bin_idx] = int(chosen_boxes[i])
+
+            def action_at_time(t: float) -> int:
+                bin_idx = int(np.floor(t / bin_size))
+                return action_at_bin.get(bin_idx, n_boxes)  # wait
+
+            t0 = float(discrete_times[0]) if relative_time else 0.0
+
+            with torch.no_grad():
+                for i in range(len(discrete_times) - 1):
+                    t_curr = float(discrete_times[i])
+                    t_next = float(discrete_times[i + 1])
+                    key_curr = block_key.update("push time", t_curr)
+                    if key_curr not in posterior:
+                        continue
+
+                    belief = posterior[key_curr]
+                    if hasattr(belief, "representation"):
+                        belief_vec = np.asarray(belief.representation)
+                    else:
+                        belief_vec = np.asarray(belief)
+                    belief_vec = belief_vec.flatten()
+                    belief_tensor = torch.FloatTensor(belief_vec).unsqueeze(0).to(device)
+
+                    true_action = action_at_time(t_next)
+                    logits_real = model_real(belief_tensor)
+                    logits_perm = model_perm(belief_tensor)
+                    log_p_real = torch.log_softmax(logits_real, dim=1)[0, true_action].item()
+                    log_p_perm = torch.log_softmax(logits_perm, dim=1)[0, true_action].item()
+
+                    t_list.append(t_next - t0)
+                    llr_list.append(log_p_real - log_p_perm)
+
+            return None
+
+        dataset.process_blocks(_inner)
+
+        if len(llr_list) == 0:
+            raise ValueError("No LLR values computed. Check that beliefs and dataset match.")
+
+        t_arr = np.asarray(t_list, dtype=float)
+        llr_arr = np.asarray(llr_list, dtype=float)
+
+        if time_bin_edges is None:
+            t_max = float(np.nanmax(t_arr))
+            # Avoid degenerate edges (np.histogram requires strictly increasing bin edges)
+            if not np.isfinite(t_max) or t_max <= 0:
+                t_max = float(bin_size)
+            time_bin_edges = np.linspace(0.0, t_max, n_time_bins + 1)
+        if llr_bin_edges is None:
+            lo, hi = np.nanpercentile(llr_arr, [0.5, 99.5])
+            if not np.isfinite(lo) or not np.isfinite(hi) or lo == hi:
+                lo, hi = float(np.nanmin(llr_arr)), float(np.nanmax(llr_arr))
+            pad = (hi - lo) * 0.05 if hi > lo else 1.0
+            llr_bin_edges = np.linspace(lo - pad, hi + pad, n_llr_bins + 1)
+
+        # H, x_edges, y_edges = np.histogram2d(
+        #     t_arr,
+        #     llr_arr,
+        #     bins=[time_bin_edges, llr_bin_edges],
+        #     density=density,
+        # )
+        # # histogram2d returns shape (n_time_bins, n_llr_bins); transpose for heatmap (y rows, x cols)
+        # H_plot = H.T
+
+        if ax is None:
+            _, ax = plt.subplots()
+
+        # sns.heatmap(
+        #     H_plot,
+        #     ax=ax,
+        #     cmap=cmap,
+        #     cbar_kws={"label": cbar_label},
+        # )
+        # sns.scatterplot(x=t_arr, y=llr_arr, ax=ax)
+        ax.scatter(t_arr, llr_arr, s=0.005)
+
+        # Set readable tick labels (sparse)
+        # time_centers = 0.5 * (x_edges[:-1] + x_edges[1:])
+        # llr_centers = 0.5 * (y_edges[:-1] + y_edges[1:])
+
+        # Use a small number of ticks for readability
+        # xtick_idx = np.linspace(0, len(time_centers) - 1, min(6, len(time_centers))).astype(int)
+        # ytick_idx = np.linspace(0, len(llr_centers) - 1, min(8, len(llr_centers))).astype(int)
+        # ax.set_xticks(xtick_idx + 0.5)
+        # ax.set_xticklabels([f"{time_centers[i]:.1f}" for i in xtick_idx], rotation=0)
+        # ax.set_yticks(ytick_idx + 0.5)
+        # ax.set_yticklabels([f"{llr_centers[i]:.2f}" for i in ytick_idx], rotation=0)
+
+        ax.set_xlabel("Time in block" + (" (relative)" if relative_time else ""))
+        ax.set_ylabel("Log-likelihood ratio (real − permuted)")
+
+        # return ax, H_plot, x_edges, y_edges
+        return ax
 
 # def plot_schedule_beliefs_efficiency_across_block(
 #     df: pd.DataFrame,
