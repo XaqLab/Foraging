@@ -19,7 +19,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from torch.utils.tensorboard import SummaryWriter
 
 from foraging.models._base import HashableDict
-from foraging.models.deep import PolicyMLP
+from foraging.models.deep import PolicyMLP, ActionMLP
 from foraging.models.distribution import (
     FactorizedPosterior,
     IndexedObservation,
@@ -236,6 +236,124 @@ def compute_joint_schedule_reward_posterior(
             ),
         )
     return joint_posterior
+
+
+def compute_joint_schedule_reward_posterior_discrete_time(
+    dataset: Experiment,
+    block_key: dict[str, Any],
+    block: pd.DataFrame,
+    posterior_maker: Callable[
+        [Experiment, dict[str, Any], pd.DataFrame], SupportsUpdatesByBox
+    ],
+    dt: float = 1.0 ,
+    *args,
+    **kwargs,
+) -> dict[HashableDict, np.ndarray]:
+    """
+    Computes the joint posterior over schedule permutation and reward availability at each box
+    at discrete time steps of size dt between pushes.
+
+    For permutation-based beliefs, this computes P(permutation, reward_available | observations)
+    by marginalizing over the reward CDF given each permutation hypothesis. Beliefs are
+    evaluated at times 0, dt, 2*dt, ... up to the last push time in the block.
+
+    Args:
+        dataset: Experiment containing session data.
+        block_key: Key for the block.
+        block: DataFrame containing block data.
+        posterior_maker: Function that instantiates the posterior (should be permutation-based).
+        dt: Size of discrete time steps. Joint posterior is computed at t = 0, dt, 2*dt, ...
+        *args, **kwargs: Additional arguments to pass to the posterior_maker.
+
+    Returns:
+        dict[HashableDict, np.ndarray]: Dictionary mapping time keys to 2D arrays of shape
+            (n_permutations, n_boxes) where entry [i, j] is P(permutation_i, reward_available_at_box_j).
+            Keys use block_key.update("push time", t) for each discrete t.
+    """
+
+    n_obs = len(block)
+    push_times = block["push times"].values
+    push_intervals = block["push intervals"].values
+    reward_outcomes = block["reward outcomes"].values
+    box_positions = block["box position"].values.astype(int)
+
+    # Get unique box positions and schedule info
+    n_boxes = block["box position"].nunique()
+    shape = (
+        block.index.get_level_values("shape")[0]
+        if "shape" in block.index.names
+        else block["shape"].iloc[0]
+    )
+
+    # Construct permutation posterior over schedules
+    beliefs = posterior_maker(dataset, block_key, block, *args, **kwargs)
+    permutation_hypotheses = beliefs.prior.support
+    n_perms = len(permutation_hypotheses)
+
+    # Compute joint at a given time
+    def _update_joint(
+        schedule_belief: Probabilities,
+        t: float,
+        last_push_times: np.ndarray,
+    ):
+        joint = np.zeros((n_perms, n_boxes))
+        for i, perm_hyp in enumerate(permutation_hypotheses):
+            for box in range(n_boxes):
+                schedule = perm_hyp.schedule[box]
+                p_available = gamma.cdf(
+                    t - last_push_times[box], shape, scale=schedule / shape
+                )
+                joint[i, box] = schedule_belief.query_by_index(i) * p_available
+        return joint
+
+    # Pass 1: update beliefs at each push and record last_push_times after each push
+    last_push_times = np.zeros(n_boxes)
+    # last_push_times_after_push[k] = last_push_times after push k (so before push k+1)
+    last_push_times_after_push = [last_push_times.copy()]
+
+    key = block_key.update("push time", 0)
+    for i in range(n_obs):
+        old_key = key
+        key = block_key.update("push time", push_times[i])
+        if i == 0:
+            belief_state = beliefs.prior
+        else:
+            belief_state = beliefs[old_key]
+        beliefs.update(
+            key,
+            _create_observation(
+                box=box_positions[i],
+                is_available=reward_outcomes[i],
+                time=push_intervals[i],
+            ),
+        )
+        last_push_times[box_positions[i]] = push_times[i]
+        last_push_times_after_push.append(last_push_times.copy())
+
+    # Pass 2: discrete time points 0, dt, 2*dt, ... up to last push time (include push times)
+    t_max = float(push_times[-1]) if n_obs > 0 else 0.0
+    # Grid: 0, dt, 2*dt, ... up to t_max; merge with push_times so exact push times included
+    grid_times = np.arange(0, t_max + dt * 0.5, dt)
+    discrete_times = np.unique(np.concatenate([grid_times, push_times]))
+    discrete_times = discrete_times[discrete_times <= t_max]
+
+    joint_posterior = {}
+    for t in discrete_times:
+        # Use beliefs and last_push_times from after the last push at or before t
+        if n_obs == 0 or t < push_times[0]:
+            belief_state = beliefs.prior
+            lpt = np.zeros(n_boxes)
+        else:
+            k = np.searchsorted(push_times, t, side="right") - 1  # last push index with push_times[k] <= t
+            key_at_t = block_key.update("push time", push_times[k])
+            belief_state = beliefs[key_at_t]
+            lpt = last_push_times_after_push[k + 1]
+
+        time_key = block_key.update("push time", t)
+        joint_posterior[time_key] = _update_joint(belief_state, t, lpt)
+
+    return joint_posterior
+
 
 
 def fit_policy_to_predict_future_behavior(
@@ -467,6 +585,299 @@ def fit_policy_to_predict_future_behavior(
                 f"Epoch {epoch}/{n_epochs}: "
                 f"Train Loss={train_loss:.4f}, Test Loss={test_loss:.4f}, "
                 f"Test Box Acc={test_acc_box:.4f}"
+            )
+
+        # Early stopping
+        if test_loss < best_test_loss:
+            best_test_loss = test_loss
+            best_model_state = model.state_dict().copy()
+            patience_counter = 0
+        else:
+            patience_counter += 1
+            if patience_counter >= patience:
+                logger.info(f"Early stopping at epoch {epoch}")
+                break
+
+    # Load best model
+    if best_model_state is not None:
+        model.load_state_dict(best_model_state)
+
+    if writer is not None:
+        writer.close()
+
+    logger.info(f"Training complete. Best test loss: {best_test_loss:.4f}")
+
+    return model
+
+
+def fit_policy_to_predict_future_behavior_v2(
+    dataset: Experiment,
+    beliefs: dict[HashableDict, Any],
+    conds: dict[str, Any] = None,
+    split_frac: Iterable[float] = [0.8, 0.2],
+    hidden_dims: Iterable[int] = [64, 32],
+    learning_rate: float = 0.001,
+    batch_size: int = 32,
+    n_epochs: int = 100,
+    patience: int = 10,
+    seed: int = 42,
+    tensorboard_dir: str = None,
+    device: str = None,
+    bin_size: float = 1.0,
+    max_bins: int = None,
+    permute_labels: bool = False,
+    permute_seed: int = None,
+    *args,
+    **kwargs,
+):
+    """
+    Fit a policy (MLP) to predict the next time-step's action from the current time-step's beliefs.
+
+    Beliefs are assumed to be defined over discrete time steps (e.g. from
+    compute_joint_schedule_reward_posterior_discrete_time with the same bin_size).
+    For each consecutive pair of discrete times (t_i, t_{i+1}), we use the belief at t_i
+    to predict the action at t_{i+1}. The action at a time step is: push fast/medium/slow
+    box (0/1/2) if a push occurs in that bin, else wait (3).
+
+    Action encoding:
+    - Action 0: push fast box (box 0)
+    - Action 1: push medium box (box 1)
+    - Action 2: push slow box (box 2)
+    - Action 3: wait
+    n_actions = n_boxes + 1.
+
+    Args:
+        dataset: Experiment containing session data.
+        beliefs: Dict mapping block keys to posteriors keyed by discrete time (e.g. keys
+            like block_key.update("push time", t) for t = 0, bin_size, 2*bin_size, ...).
+        conds: Optional conditions to filter the dataset.
+        split_frac: Train/test split fractions (must sum to 1.0).
+        hidden_dims: List of hidden layer dimensions for the MLP.
+        learning_rate: Learning rate for optimizer.
+        batch_size: Batch size for training.
+        n_epochs: Maximum number of training epochs.
+        patience: Early stopping patience (epochs without improvement).
+        seed: Random seed for reproducibility.
+        tensorboard_dir: Optional directory for tensorboard logging.
+        device: Device to train on ('cuda' or 'cpu'). If None, auto-detects.
+        bin_size: Size of each time bin for discretizing push intervals.
+        max_bins: Not currently used (kept for API compatibility). Action space is fixed at n_boxes + 1.
+        permute_labels: If True, randomly permute action labels before training (useful for baselines).
+        permute_seed: Random seed for label permutation. If None, uses the main seed.
+
+    Returns:
+        Trained PyTorch model.
+    """
+
+    # Set device
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = torch.device(device)
+
+    # Set random seeds
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if device.type == "cuda":
+        torch.cuda.manual_seed(seed)
+
+    # 1. Filter dataset
+    dataset = dataset.filter(conds)
+
+    # 2. First pass: collect unique boxes to determine n_boxes
+    n_boxes = len(dataset.get_unique("box rank"))
+
+    # 3. Format data into supervised learning format
+    # Predict NEXT time-step's action from CURRENT time-step's beliefs.
+    # Beliefs are defined over discrete time steps (0, bin_size, 2*bin_size, ...).
+    X_list = []  # Belief vectors at current time step
+    y_action_list = []  # Action labels at NEXT time step (classification target)
+
+    # Action encoding:
+    # - Action 0: push fast box (box 0)
+    # - Action 1: push medium box (box 1)
+    # - Action 2: push slow box (box 2)
+    # - Action 3: wait
+    n_actions = n_boxes + 1
+
+    # Get beliefs of each block; use current-step belief to predict next-step action
+    def _inner(
+        dataset: "Experiment",
+        block_key: dict[str, Any],
+        block: pd.DataFrame,
+        *args,
+        **kwargs,
+    ):
+        block = block.reset_index()
+        if block_key not in beliefs:
+            return None
+        posterior = beliefs[block_key]
+
+        # Discrete times: keys in posterior are (block_key + "push time", t); get sorted t
+        try:
+            time_keys = list(posterior.keys())
+        except AttributeError:
+            return None
+        discrete_times = sorted(set(k["push time"] for k in time_keys if "push time" in k))
+        if len(discrete_times) < 2:
+            return None
+
+        # Build action-at-time from block pushes: bin k has a push -> action = box; else wait
+        push_times_arr = block["push times"].values
+        chosen_boxes = block["box position"].values.astype(int)
+        action_at_bin = {}
+        for i in range(len(push_times_arr)):
+            pt = push_times_arr[i]
+            bin_idx = int(np.floor(pt / bin_size))
+            action_at_bin[bin_idx] = chosen_boxes[i]
+
+        def action_at_time(t: float):
+            bin_idx = int(np.floor(t / bin_size))
+            return action_at_bin.get(bin_idx, n_boxes)
+
+        # For each consecutive pair (t_i, t_{i+1}): X = belief at t_i, y = action at t_{i+1}
+        for i in range(len(discrete_times) - 1):
+            t_curr = discrete_times[i]
+            t_next = discrete_times[i + 1]
+            key_curr = block_key.update("push time", t_curr)
+            if key_curr not in posterior:
+                continue
+            belief = posterior[key_curr]
+            if hasattr(belief, "representation"):
+                belief_vec = np.asarray(belief.representation)
+            else:
+                belief_vec = np.asarray(belief)
+            belief_vec = belief_vec.flatten()
+
+            action_next = action_at_time(t_next)
+            X_list.append(belief_vec)
+            y_action_list.append(action_next)
+
+        return None
+
+    dataset.process_blocks(_inner)
+
+    if len(X_list) == 0:
+        raise ValueError("No data available after filtering and formatting.")
+
+    # Convert to numpy arrays
+    X = np.array(X_list)
+    y_action = np.array(y_action_list)
+
+    # Get dimensions
+    input_dim = X.shape[1]
+    
+    # Action space is fixed: n_actions = n_boxes + 1
+    # - Actions 0 to (n_boxes-1): push box 0 to (n_boxes-1)
+    # - Action n_boxes: wait
+    # n_actions is already set above in the _inner function scope, but we need it here too
+    n_actions = n_boxes + 1
+    n_samples = len(X)
+    
+    # Verify that all action labels are valid
+    max_action = max(y_action) if n_samples > 0 else 0
+    if max_action >= n_actions:
+        raise ValueError(
+            f"Invalid action {max_action} found. Expected actions in range [0, {n_actions-1}]. "
+            f"n_boxes={n_boxes}, so n_actions={n_actions}."
+        )
+
+    # Apply label permutation if requested (remap action IDs, keep X-y pairing)
+    if permute_labels:
+        perm_seed = permute_seed if permute_seed is not None else seed
+        rng_perm = np.random.RandomState(perm_seed)
+        y_action = y_action[rng_perm.permutation(n_samples)]
+        logger.info(
+            f"Permuted action labels using seed {perm_seed}. "
+        )
+    else:
+        logger.info(
+            f"Formatted {len(X)} samples with input_dim={input_dim}, n_boxes={n_boxes}, "
+            f"n_actions={n_actions}, bin_size={bin_size}"
+        )
+
+    # 3. Train/test split
+    assert np.isclose(sum(split_frac), 1.0), "split_frac must sum to 1.0"
+    n_samples = len(X)
+    n_train = int(n_samples * split_frac[0])
+
+    # Shuffle indices
+    indices = np.random.permutation(n_samples)
+    train_idx = indices[:n_train]
+    test_idx = indices[n_train:]
+
+    X_train, X_test = X[train_idx], X[test_idx]
+    y_action_train, y_action_test = y_action[train_idx], y_action[test_idx]
+
+    # Convert to torch tensors
+    X_train_t = torch.FloatTensor(X_train).to(device)
+    X_test_t = torch.FloatTensor(X_test).to(device)
+    y_action_train_t = torch.LongTensor(y_action_train).to(device)
+    y_action_test_t = torch.LongTensor(y_action_test).to(device)
+
+    # Create data loaders
+    train_dataset = TensorDataset(X_train_t, y_action_train_t)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+
+    # 4. Create a simple classification MLP (single head for action prediction)   
+    model = ActionMLP(input_dim, hidden_dims, n_actions).to(device)
+
+    # Define loss function and optimizer
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+
+    # Setup tensorboard if requested
+    writer = None
+    if tensorboard_dir is not None:
+        writer = SummaryWriter(tensorboard_dir)
+
+    # Training loop
+    best_test_loss = float("inf")
+    patience_counter = 0
+    best_model_state = None
+
+    logger.info(f"Training on device: {device}")
+    for epoch in range(n_epochs):
+        model.train()
+        train_loss = 0.0
+
+        for batch_X, batch_y_action in train_loader:
+            optimizer.zero_grad()
+
+            # Forward pass
+            action_logits = model(batch_X)
+
+            # Compute loss
+            loss = criterion(action_logits, batch_y_action)
+
+            # Backward pass
+            loss.backward()
+            optimizer.step()
+
+            train_loss += loss.item()
+
+        train_loss /= len(train_loader)
+
+        # Evaluate on test set
+        model.eval()
+        with torch.no_grad():
+            action_logits_test = model(X_test_t)
+            test_loss = criterion(action_logits_test, y_action_test_t).item()
+
+            # Classification accuracy
+            action_pred_test = torch.argmax(action_logits_test, dim=1)
+            test_acc = (action_pred_test == y_action_test_t).float().mean().item()
+
+        # Logging
+        if writer is not None:
+            writer.add_scalar("Loss/train", train_loss, epoch)
+            writer.add_scalar("Loss/test", test_loss, epoch)
+            writer.add_scalar("Accuracy/test", test_acc, epoch)
+
+        if epoch % 10 == 0:
+            logger.info(
+                f"Epoch {epoch}/{n_epochs}: "
+                f"Train Loss={train_loss:.4f}, Test Loss={test_loss:.4f}, "
+                f"Test Acc={test_acc:.4f}"
             )
 
         # Early stopping

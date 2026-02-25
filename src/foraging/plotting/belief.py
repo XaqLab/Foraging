@@ -958,40 +958,68 @@ class BeliefPlotter(BasePlotter):
         beliefs: dict[HashableDict, Any],
         dataset: Experiment = None,
         conds: dict[str, Any] = None,
-        x: str = "push times",
-        y: str = "interval_error",
+        x: str = "time",
+        y: str = "p_true_action",
         device: str = None,
         ax: plt.Axes = None,
+        bin_size: float = 1.0,
+        n_boxes: int = None,
         **kwargs,
     ) -> plt.Axes:
         """
-        Plots the model prediction errors across blocks.
+        Plots the probability the model assigns to the ground-truth action at each time step.
+
+        Uses current time-step beliefs to get next time-step action logits (same setup as
+        fit_policy_to_predict_future_behavior_v2). For each consecutive pair (t_i, t_{i+1}),
+        we compute softmax(logits) and plot the probability of the true action at t_{i+1}.
+
+        Action encoding: 0 = push fast, 1 = push medium, 2 = push slow, 3 = wait.
 
         Args:
-            model: PyTorch model that takes belief vectors and outputs (interval_pred, box_logits).
-            beliefs: Dictionary mapping block keys to posterior objects containing beliefs at each push time.
+            model: PyTorch model that takes belief vectors and outputs action logits (n_actions = n_boxes + 1).
+            beliefs: Dict mapping block keys to posteriors keyed by discrete time.
             dataset: Experiment containing session data.
             conds: Optional conditions to filter the dataset.
-            x: The value from block data used for the x-axis, typically 'push #' or 'push times'.
-            error_type: Type of error for push interval ('mae' or 'mse'). Default 'mae'.
+            x: Column name for x-axis (values will be the next time step t_{i+1}). Default 'time'.
+            y: Column to plot on y-axis. Default 'p_true_action' (probability of ground-truth action).
             device: Device to run model on ('cuda' or 'cpu'). If None, auto-detects.
-            ax: Optional, existing matplotlib Axes object. If None, a new one will be created.
-            kwargs: Additional keyword arguments passed to plot_average_or_traces.
+            ax: Optional matplotlib Axes. If None, a new one is created.
+            bin_size: Discrete time step size (must match training and belief computation).
+            n_boxes: Number of boxes. If None, inferred from dataset.
+            kwargs: Passed to plot_average_or_traces.
 
         Returns:
-            ax: The matplotlib Axes object with the plot.
+            ax: The matplotlib Axes with the plot.
         """
         dataset = self._init_vars(dataset=dataset)
         dataset = dataset.filter(conds)
 
-        # Set device
-        if device is None:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
+        if n_boxes is None:
+            box_set = set()
+            def _collect_boxes(
+                dataset: Experiment,
+                block_key: dict[str, Any],
+                block: pd.DataFrame,
+                *args,
+                **kwargs,
+            ):
+                block = block.reset_index()
+                if "box position" in block.columns:
+                    chosen_boxes = block["box position"].values.astype(int)
+                elif "box rank" in block.columns:
+                    chosen_boxes = block["box rank"].values.astype(int)
+                else:
+                    return None
+                box_set.update(chosen_boxes)
+                return None
+            dataset.process_blocks(_collect_boxes)
+            n_boxes = len(box_set) if box_set else 1
+
+        device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         device = torch.device(device)
         model = model.to(device)
         model.eval()
 
-        # Get beliefs of each block
         def _inner(
             dataset: Experiment,
             block_key: dict[str, Any],
@@ -1000,98 +1028,83 @@ class BeliefPlotter(BasePlotter):
             **kwargs,
         ):
             block = block.reset_index()
-
-            # Look up the posterior corresponding to this block
             if block_key not in beliefs:
                 return None
             posterior = beliefs[block_key]
 
-            # Extract push times and iterate through the posterior
-            push_times = block["push times"].values
-            chosen_boxes = block["box rank"].values.astype(int)
-            push_intervals = block["push intervals"].values
+            try:
+                time_keys = list(posterior.keys())
+            except AttributeError:
+                return None
+            discrete_times = sorted(set(k["push time"] for k in time_keys if "push time" in k))
+            if len(discrete_times) < 2:
+                return None
 
-            # Initialize error arrays (one per push after the first)
-            n_pushes = len(push_times)
-            box_errors = []
-            interval_errors = []
+            push_times_arr = block["push times"].values
+            if "box rank" in block.columns:
+                chosen_boxes = block["box rank"].values.astype(int)
+            elif "box position" in block.columns:
+                chosen_boxes = block["box position"].values.astype(int)
+            else:
+                return None
 
-            # For each push (except the last), use current belief to predict next action
+            action_at_bin = {}
+            for i in range(len(push_times_arr)):
+                pt = push_times_arr[i]
+                bin_idx = int(np.floor(pt / bin_size))
+                action_at_bin[bin_idx] = chosen_boxes[i]
+
+            def action_at_time(t: float):
+                bin_idx = int(np.floor(t / bin_size))
+                return action_at_bin.get(bin_idx, n_boxes)
+
+            p_true_list = []
+            time_vals = []
+
             with torch.no_grad():
-                for i in range(n_pushes):
-                    pt = push_times[i]
-                    key = block_key.update("push time", pt)
-
-                    if key not in posterior:
+                for i in range(len(discrete_times) - 1):
+                    t_curr = discrete_times[i]
+                    t_next = discrete_times[i + 1]
+                    key_curr = block_key.update("push time", t_curr)
+                    if key_curr not in posterior:
                         continue
-
-                    # Get belief at this timestep
-                    belief = posterior[key]
-
-                    # Extract belief representation (flatten if needed)
+                    belief = posterior[key_curr]
                     if hasattr(belief, "representation"):
                         belief_vec = np.asarray(belief.representation)
                     else:
                         belief_vec = np.asarray(belief)
-
-                    # Flatten belief vector and convert to torch tensor
                     belief_vec = belief_vec.flatten()
-                    belief_tensor = (
-                        torch.FloatTensor(belief_vec).unsqueeze(0).to(device)
-                    )
+                    belief_tensor = torch.FloatTensor(belief_vec).unsqueeze(0).to(device)
 
-                    # Run model
-                    interval_pred, box_logits = model(belief_tensor)
+                    action_logits = model(belief_tensor)
+                    probs = torch.softmax(action_logits, dim=1)
+                    true_action = action_at_time(t_next)
+                    p_true = probs[0, true_action].item()
+                    p_true_list.append(p_true)
+                    time_vals.append(t_next)
 
-                    # Get true next actions
-                    true_interval = push_intervals[i]
-                    true_box = chosen_boxes[i]
-
-                    # Compute box choice error (0 if correct, 1 if incorrect)
-                    pred_box = torch.argmax(box_logits, dim=1).item()
-                    box_error = 0.0 if pred_box == true_box else 1.0
-                    box_errors.append(box_error)
-
-                    # Compute push interval error
-                    interval_errors.append((true_interval - interval_pred.item()) ** 2)
-
-            if len(box_errors) == 0:
+            if len(p_true_list) == 0:
                 return None
 
-            # Convert to arrays
-            box_errors = np.array(box_errors)
-            interval_errors = np.array(interval_errors)
-
-            x_vals = block[x].values
             block_id = block["block_id"].values[0]
             index = tuple(block_key.values())
-
-            # Create result dictionary with errors for each push
             res = {}
-            for i in range(len(box_errors)):
-                res[(index + (i,))] = [
-                    box_errors[i],
-                    interval_errors[i],
-                    x_vals[i],
-                    block_id,
-                ]
-
+            for j in range(len(p_true_list)):
+                res[(index + (j,))] = [p_true_list[j], time_vals[j], block_id]
             return res
 
         res, _ = dataset.process_blocks(_inner)
-        res = reduce(lambda x, y: {**x, **y}, list(res.values()), {})
-        df_errors = pd.DataFrame.from_dict(
+        res = reduce(lambda a, b: {**a, **b}, list(res.values()), {})
+        df = pd.DataFrame.from_dict(
             res,
             orient="index",
-            columns=["box_error", "interval_error", x, "block_id"],
+            columns=["p_true_action", x, "block_id"],
         )
-
-        df_errors.index = pd.MultiIndex.from_tuples(
-            df_errors.index,
+        df.index = pd.MultiIndex.from_tuples(
+            df.index,
             names=dataset.block_identifiers + dataset.within_block_identifiers,
         )
 
-        # Plot both error types (you can customize which one to plot via kwargs)
         params = {
             "x": x,
             "y": y,
@@ -1099,7 +1112,156 @@ class BeliefPlotter(BasePlotter):
             "conds": conds,
             **kwargs,
         }
-        return plot_average_or_traces(df_errors, **params)
+        return plot_average_or_traces(df, **params)
+
+    def plot_policy_llr_distribution(
+        self,
+        model_real: torch.nn.Module,
+        model_perm: torch.nn.Module,
+        beliefs: dict[HashableDict, Any],
+        dataset: Experiment = None,
+        conds: dict[str, Any] = None,
+        bin_size: float = 1.0,
+        n_boxes: int = None,
+        device: str = None,
+        ax: plt.Axes = None,
+        hist: bool = True,
+        kde: bool = True,
+        **kwargs,
+    ) -> plt.Axes:
+        """
+        Computes the log likelihood ratio (LLR) between the real and permuted policy
+        models at each time step, then plots the distribution of those LLRs.
+
+        LLR = log P(true action | real model) - log P(true action | permuted model).
+        Positive LLR means the real model assigns higher likelihood to the ground-truth
+        action than the permuted model.
+
+        Args:
+            model_real: Model fit on real (non-permuted) action labels.
+            model_perm: Model fit on permuted action labels.
+            beliefs: Dict mapping block keys to posteriors keyed by discrete time.
+            dataset: Experiment containing session data.
+            conds: Optional conditions to filter the dataset.
+            bin_size: Discrete time step size (must match training and belief computation).
+            n_boxes: Number of boxes. If None, inferred from dataset.
+            device: Device to run models on. If None, auto-detects.
+            ax: Optional matplotlib Axes. If None, a new one is created.
+            hist: If True, plot a histogram of LLRs.
+            kde: If True, plot a KDE over the LLRs (can combine with hist).
+            kwargs: Passed to the histogram or KDE plot (e.g. bins=30, color=...).
+
+        Returns:
+            ax: The matplotlib Axes with the plot.
+        """
+        dataset = self._init_vars(dataset=dataset)
+        dataset = dataset.filter(conds)
+
+        if n_boxes is None:
+            box_set = set()
+            def _collect_boxes(
+                dataset: Experiment,
+                block_key: dict[str, Any],
+                block: pd.DataFrame,
+                *args,
+                **kwargs_inner,
+            ):
+                block = block.reset_index()
+                chosen_boxes = block["box position"].values.astype(int)
+                box_set.update(chosen_boxes)
+                return None
+            dataset.process_blocks(_collect_boxes)
+            n_boxes = len(box_set) if box_set else 1
+
+        device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        device = torch.device(device)
+        model_real = model_real.to(device)
+        model_perm = model_perm.to(device)
+        model_real.eval()
+        model_perm.eval()
+
+        llr_list = []
+
+        def _inner(
+            dataset: Experiment,
+            block_key: dict[str, Any],
+            block: pd.DataFrame,
+            *args,
+            **kwargs_inner,
+        ):
+            block = block.reset_index()
+            if block_key not in beliefs:
+                return None
+            posterior = beliefs[block_key]
+            try:
+                time_keys = list(posterior.keys())
+            except AttributeError:
+                return None
+            discrete_times = sorted(set(k["push time"] for k in time_keys if "push time" in k))
+            if len(discrete_times) < 2:
+                return None
+
+            push_times_arr = block["push times"].values
+            chosen_boxes = block["box position"].values.astype(int)
+
+            action_at_bin = {}
+            for i in range(len(push_times_arr)):
+                pt = push_times_arr[i]
+                bin_idx = int(np.floor(pt / bin_size))
+                action_at_bin[bin_idx] = chosen_boxes[i]
+
+            def action_at_time(t: float):
+                bin_idx = int(np.floor(t / bin_size))
+                return action_at_bin.get(bin_idx, n_boxes)
+
+            with torch.no_grad():
+                for i in range(len(discrete_times) - 1):
+                    t_curr = discrete_times[i]
+                    t_next = discrete_times[i + 1]
+                    key_curr = block_key.update("push time", t_curr)
+                    if key_curr not in posterior:
+                        continue
+                    belief = posterior[key_curr]
+                    if hasattr(belief, "representation"):
+                        belief_vec = np.asarray(belief.representation)
+                    else:
+                        belief_vec = np.asarray(belief)
+                    belief_vec = belief_vec.flatten()
+                    belief_tensor = torch.FloatTensor(belief_vec).unsqueeze(0).to(device)
+                    true_action = action_at_time(t_next)
+
+                    logits_real = model_real(belief_tensor)
+                    logits_perm = model_perm(belief_tensor)
+                    log_p_real = torch.log_softmax(logits_real, dim=1)[0, true_action].item()
+                    log_p_perm = torch.log_softmax(logits_perm, dim=1)[0, true_action].item()
+                    llr_list.append(log_p_real - log_p_perm)
+            return None
+
+        dataset.process_blocks(_inner)
+
+        if len(llr_list) == 0:
+            raise ValueError("No LLR values computed. Check that beliefs and dataset match.")
+
+        llr = np.array(llr_list)
+        if ax is None:
+            _, ax = plt.subplots()
+        if hist:
+            ax.hist(llr, density=True, alpha=0.6, label="LLR", **kwargs)
+        if kde:
+            try:
+                from scipy.stats import gaussian_kde
+                kde_est = gaussian_kde(llr)
+                x_min, x_max = llr.min(), llr.max()
+                pad = (x_max - x_min) * 0.1 or 0.5
+                xx = np.linspace(x_min - pad, x_max + pad, 200)
+                ax.plot(xx, kde_est(xx), label="KDE")
+            except Exception:
+                pass
+        ax.axvline(0, color="gray", linestyle="--", alpha=0.8)
+        ax.set_xlabel("Log likelihood ratio (real − permuted)")
+        ax.set_ylabel("Density")
+        ax.legend(loc="best")
+        return ax, llr
 
 
 # def plot_schedule_beliefs_efficiency_across_block(
