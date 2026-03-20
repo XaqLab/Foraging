@@ -55,9 +55,10 @@ class PolicyMLP(nn.Module):
         box_logits = self.box_head(shared_out)
         return interval_pred, box_logits
 
+
 class ActionMLP(nn.Module):
     """MLP for predicting discretized actions from belief vectors."""
-    
+
     def __init__(self, input_dim: int, hidden_dims: Iterable[int], n_actions: int):
         super(ActionMLP, self).__init__()
         layers = []
@@ -69,7 +70,7 @@ class ActionMLP(nn.Module):
             prev_dim = h_dim
         self.shared = nn.Sequential(*layers)
         self.action_head = nn.Linear(prev_dim, n_actions)
-    
+
     def forward(self, x):
         shared_out = self.shared(x)
         action_logits = self.action_head(shared_out)

@@ -996,6 +996,7 @@ class BeliefPlotter(BasePlotter):
 
         if n_boxes is None:
             box_set = set()
+
             def _collect_boxes(
                 dataset: Experiment,
                 block_key: dict[str, Any],
@@ -1012,6 +1013,7 @@ class BeliefPlotter(BasePlotter):
                     return None
                 box_set.update(chosen_boxes)
                 return None
+
             dataset.process_blocks(_collect_boxes)
             n_boxes = len(box_set) if box_set else 1
 
@@ -1036,17 +1038,14 @@ class BeliefPlotter(BasePlotter):
                 time_keys = list(posterior.keys())
             except AttributeError:
                 return None
-            discrete_times = sorted(set(k["push time"] for k in time_keys if "push time" in k))
+            discrete_times = sorted(
+                set(k["push time"] for k in time_keys if "push time" in k)
+            )
             if len(discrete_times) < 2:
                 return None
 
             push_times_arr = block["push times"].values
-            if "box rank" in block.columns:
-                chosen_boxes = block["box rank"].values.astype(int)
-            elif "box position" in block.columns:
-                chosen_boxes = block["box position"].values.astype(int)
-            else:
-                return None
+            chosen_boxes = block["box position"].values.astype(int)
 
             action_at_bin = {}
             for i in range(len(push_times_arr)):
@@ -1074,7 +1073,9 @@ class BeliefPlotter(BasePlotter):
                     else:
                         belief_vec = np.asarray(belief)
                     belief_vec = belief_vec.flatten()
-                    belief_tensor = torch.FloatTensor(belief_vec).unsqueeze(0).to(device)
+                    belief_tensor = (
+                        torch.FloatTensor(belief_vec).unsqueeze(0).to(device)
+                    )
 
                     action_logits = model(belief_tensor)
                     probs = torch.softmax(action_logits, dim=1)
@@ -1114,7 +1115,330 @@ class BeliefPlotter(BasePlotter):
         }
         return plot_average_or_traces(df, **params)
 
-    def plot_policy_llr_distribution(
+    def plot_belief_policy_accuracy_by_class(
+        self,
+        model: torch.nn.Module,
+        beliefs: dict[HashableDict, Any],
+        dataset: Experiment = None,
+        conds: dict[str, Any] = None,
+        bin_size: float = 1.0,
+        n_boxes: int | None = None,
+        device: str | None = None,
+        ax: plt.Axes | None = None,
+        **kwargs,
+    ) -> tuple[plt.Axes, pd.DataFrame]:
+        """
+        Plot prediction accuracy conditioned on the true class label (belief-based policy).
+
+        Uses the same setup as `fit_policy_to_predict_future_behavior_v2`: belief at time t_i predicts
+        the action at t_{i+1}. Labels are:
+          0..n_boxes-1 = push box, n_boxes = wait
+
+        Returns:
+            (ax, df_acc) where df_acc has columns: class, class_label, n, correct, accuracy.
+        """
+        dataset = self._init_vars(dataset=dataset)
+        dataset = dataset.filter(conds)
+
+        if n_boxes is None:
+            uniq_boxes = dataset.get_unique("box rank")
+            if uniq_boxes is None:
+                uniq_boxes = dataset.get_unique("box position")
+            n_boxes = len(uniq_boxes) if uniq_boxes is not None else 1
+
+        device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        device = torch.device(device)
+        model = model.to(device)
+        model.eval()
+
+        y_true: list[int] = []
+        y_pred: list[int] = []
+
+        def _inner(
+            dataset: Experiment,
+            block_key: dict[str, Any],
+            block: pd.DataFrame,
+            *args,
+            **kwargs_inner,
+        ):
+            block = block.reset_index()
+            if block_key not in beliefs:
+                return None
+            posterior = beliefs[block_key]
+
+            try:
+                time_keys = list(posterior.keys())
+            except AttributeError:
+                return None
+            discrete_times = sorted(
+                set(k["push time"] for k in time_keys if "push time" in k)
+            )
+            if len(discrete_times) < 2:
+                return None
+
+            push_times_arr = block["push times"].values
+            box_col = "box position"
+            chosen_boxes = block[box_col].values.astype(int)
+
+            action_at_bin: dict[int, int] = {}
+            for i in range(len(push_times_arr)):
+                pt = float(push_times_arr[i])
+                if not np.isfinite(pt):
+                    continue
+                bin_idx = int(np.floor(pt / bin_size))
+                action_at_bin[bin_idx] = int(chosen_boxes[i])
+
+            def action_at_time(t: float) -> int:
+                bin_idx = int(np.floor(float(t) / bin_size))
+                return action_at_bin.get(bin_idx, n_boxes)  # wait
+
+            with torch.no_grad():
+                for i in range(len(discrete_times) - 1):
+                    t_curr = float(discrete_times[i])
+                    t_next = float(discrete_times[i + 1])
+                    key_curr = block_key.update("push time", t_curr)
+                    if key_curr not in posterior:
+                        continue
+                    belief = posterior[key_curr]
+                    if hasattr(belief, "representation"):
+                        belief_vec = np.asarray(belief.representation)
+                    else:
+                        belief_vec = np.asarray(belief)
+                    belief_vec = belief_vec.flatten()
+                    x_t = torch.FloatTensor(belief_vec).unsqueeze(0).to(device)
+
+                    logits = model(x_t)
+                    pred = int(torch.argmax(logits, dim=1).item())
+                    true = int(action_at_time(t_next))
+                    y_true.append(true)
+                    y_pred.append(pred)
+            return None
+
+        dataset.process_blocks(_inner)
+
+        if len(y_true) == 0:
+            raise ValueError(
+                "No predictions computed. Check that beliefs and dataset match."
+            )
+
+        y_true_arr = np.asarray(y_true, dtype=int)
+        y_pred_arr = np.asarray(y_pred, dtype=int)
+
+        classes = list(range(n_boxes + 1))
+        labels = [f"push_{i}" for i in range(n_boxes)] + ["wait"]
+        rows = []
+        for c, lab in zip(classes, labels):
+            mask = y_true_arr == c
+            n = int(mask.sum())
+            if n == 0:
+                acc = np.nan
+                correct = 0
+            else:
+                correct = int((y_pred_arr[mask] == y_true_arr[mask]).sum())
+                acc = correct / n
+            rows.append(
+                {
+                    "class": c,
+                    "class_label": lab,
+                    "n": n,
+                    "correct": correct,
+                    "accuracy": acc,
+                }
+            )
+        df_acc = pd.DataFrame(rows)
+
+        if ax is None:
+            _, ax = plt.subplots(figsize=(6, 3))
+        sns.barplot(data=df_acc, x="class_label", y="accuracy", ax=ax, **kwargs)
+        ax.set_ylim(0, 1)
+        ax.set_xlabel("True class")
+        ax.set_ylabel("Accuracy")
+        return ax, df_acc
+
+    def plot_recent_history_policy_accuracy_by_class(
+        self,
+        model: torch.nn.Module,
+        dataset: Experiment = None,
+        conds: dict[str, Any] = None,
+        bin_size: float = 1.0,
+        k_history: int = 5,
+        include_time_since_last_push: bool = True,
+        n_boxes: int | None = None,
+        device: str | None = None,
+        ax: plt.Axes | None = None,
+        **kwargs,
+    ) -> tuple[plt.Axes, pd.DataFrame]:
+        """
+        Plot prediction accuracy conditioned on the true class label (recent-history policy).
+
+        Uses the same feature construction as `fit_recent_history_to_predict_future_behavior`:
+        X(t_i) is built from the last k_history push events before t_i, and optionally appends
+        per-box time-since-last-push features. Predicts the action at t_{i+1}.
+
+        Returns:
+            (ax, df_acc) where df_acc has columns: class, class_label, n, correct, accuracy.
+        """
+        dataset = self._init_vars(dataset=dataset)
+        dataset = dataset.filter(conds)
+
+        if n_boxes is None:
+            uniq_boxes = dataset.get_unique("box rank")
+            if uniq_boxes is None:
+                uniq_boxes = dataset.get_unique("box position")
+            n_boxes = len(uniq_boxes) if uniq_boxes is not None else 1
+
+        if k_history < 1:
+            raise ValueError("k_history must be >= 1")
+
+        device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        device = torch.device(device)
+        model = model.to(device)
+        model.eval()
+
+        y_true: list[int] = []
+        y_pred: list[int] = []
+
+        def _inner(
+            dataset: Experiment,
+            block_key: dict[str, Any],
+            block: pd.DataFrame,
+            *args,
+            **kwargs_inner,
+        ):
+            block = block.reset_index()
+            push_times_arr = np.asarray(block["push times"].values, dtype=float)
+            push_intervals_arr = np.asarray(block["push intervals"].values, dtype=float)
+            reward_outcomes_arr = np.asarray(
+                block["reward outcomes"].values, dtype=float
+            )
+            box_col = "box position"
+            chosen_boxes = np.asarray(block[box_col].values, dtype=int)
+
+            if len(push_times_arr) == 0:
+                return None
+            t_max = float(np.nanmax(push_times_arr))
+            if not np.isfinite(t_max) or t_max <= 0:
+                return None
+            discrete_times = np.arange(0.0, t_max + bin_size * 0.5, bin_size)
+            if len(discrete_times) < 2:
+                return None
+
+            action_at_bin: dict[int, int] = {}
+            for j in range(len(push_times_arr)):
+                pt = float(push_times_arr[j])
+                if not np.isfinite(pt):
+                    continue
+                b = int(np.floor(pt / bin_size))
+                action_at_bin[b] = int(chosen_boxes[j])
+
+            def action_at_time(t: float) -> int:
+                b = int(np.floor(float(t) / bin_size))
+                return action_at_bin.get(b, n_boxes)  # wait
+
+            event_dim = 2 + n_boxes
+
+            def history_features(t_curr: float) -> np.ndarray | None:
+                idx_all = np.flatnonzero(push_times_arr < float(t_curr))
+                if k_history > len(idx_all):
+                    return None
+                idx = idx_all[-k_history:]
+
+                feats = np.zeros((k_history, event_dim), dtype=float)
+                for r, jj in enumerate(idx):
+                    interval = (
+                        float(push_intervals_arr[jj])
+                        if np.isfinite(push_intervals_arr[jj])
+                        else 0.0
+                    )
+                    reward = (
+                        float(reward_outcomes_arr[jj])
+                        if np.isfinite(reward_outcomes_arr[jj])
+                        else 0.0
+                    )
+                    box = int(chosen_boxes[jj])
+                    onehot = np.zeros(n_boxes, dtype=float)
+                    if 0 <= box < n_boxes:
+                        onehot[box] = 1.0
+                    feats[r, 0] = interval
+                    feats[r, 1] = reward
+                    feats[r, 2:] = onehot
+
+                x = feats.reshape(-1)
+
+                if include_time_since_last_push:
+                    dt_last_by_box = np.full(n_boxes, float(t_curr), dtype=float)
+                    if len(idx_all) > 0:
+                        boxes_before = chosen_boxes[idx_all]
+                        for b in range(n_boxes):
+                            mask = boxes_before == b
+                            if not np.any(mask):
+                                continue
+                            last_event_idx = idx_all[np.where(mask)[0][-1]]
+                            dt = float(t_curr) - float(push_times_arr[last_event_idx])
+                            if not np.isfinite(dt) or dt < 0:
+                                dt = 0.0
+                            dt_last_by_box[b] = dt
+                    x = np.concatenate([x, dt_last_by_box])
+
+                return x
+
+            with torch.no_grad():
+                for j in range(len(discrete_times) - 1):
+                    t_curr = float(discrete_times[j])
+                    t_next = float(discrete_times[j + 1])
+                    x = history_features(t_curr)
+                    if x is None:
+                        continue
+                    x_t = torch.FloatTensor(x).unsqueeze(0).to(device)
+                    logits = model(x_t)
+                    pred = int(torch.argmax(logits, dim=1).item())
+                    true = int(action_at_time(t_next))
+                    y_true.append(true)
+                    y_pred.append(pred)
+            return None
+
+        dataset.process_blocks(_inner)
+
+        if len(y_true) == 0:
+            raise ValueError(
+                "No predictions computed. Check dataset/conds and k_history."
+            )
+
+        y_true_arr = np.asarray(y_true, dtype=int)
+        y_pred_arr = np.asarray(y_pred, dtype=int)
+
+        classes = list(range(n_boxes + 1))
+        labels = [f"push_{i}" for i in range(n_boxes)] + ["wait"]
+        rows = []
+        for c, lab in zip(classes, labels):
+            mask = y_true_arr == c
+            n = int(mask.sum())
+            if n == 0:
+                acc = np.nan
+                correct = 0
+            else:
+                correct = int((y_pred_arr[mask] == y_true_arr[mask]).sum())
+                acc = correct / n
+            rows.append(
+                {
+                    "class": c,
+                    "class_label": lab,
+                    "n": n,
+                    "correct": correct,
+                    "accuracy": acc,
+                }
+            )
+        df_acc = pd.DataFrame(rows)
+
+        if ax is None:
+            _, ax = plt.subplots(figsize=(6, 3))
+        sns.barplot(data=df_acc, x="class_label", y="accuracy", ax=ax, **kwargs)
+        ax.set_ylim(0, 1)
+        ax.set_xlabel("True class")
+        ax.set_ylabel("Accuracy")
+        return ax, df_acc
+
+    def plot_belief_based_policy_llr_distribution(
         self,
         model_real: torch.nn.Module,
         model_perm: torch.nn.Module,
@@ -1181,7 +1505,9 @@ class BeliefPlotter(BasePlotter):
                 time_keys = list(posterior.keys())
             except AttributeError:
                 return None
-            discrete_times = sorted(set(k["push time"] for k in time_keys if "push time" in k))
+            discrete_times = sorted(
+                set(k["push time"] for k in time_keys if "push time" in k)
+            )
             if len(discrete_times) < 2:
                 return None
 
@@ -1211,20 +1537,28 @@ class BeliefPlotter(BasePlotter):
                     else:
                         belief_vec = np.asarray(belief)
                     belief_vec = belief_vec.flatten()
-                    belief_tensor = torch.FloatTensor(belief_vec).unsqueeze(0).to(device)
+                    belief_tensor = (
+                        torch.FloatTensor(belief_vec).unsqueeze(0).to(device)
+                    )
                     true_action = action_at_time(t_next)
 
                     logits_real = model_real(belief_tensor)
                     logits_perm = model_perm(belief_tensor)
-                    log_p_real = torch.log_softmax(logits_real, dim=1)[0, true_action].item()
-                    log_p_perm = torch.log_softmax(logits_perm, dim=1)[0, true_action].item()
+                    log_p_real = torch.log_softmax(logits_real, dim=1)[
+                        0, true_action
+                    ].item()
+                    log_p_perm = torch.log_softmax(logits_perm, dim=1)[
+                        0, true_action
+                    ].item()
                     llr_list.append(log_p_real - log_p_perm)
             return None
 
         dataset.process_blocks(_inner)
 
         if len(llr_list) == 0:
-            raise ValueError("No LLR values computed. Check that beliefs and dataset match.")
+            raise ValueError(
+                "No LLR values computed. Check that beliefs and dataset match."
+            )
 
         llr = np.array(llr_list)
         if ax is None:
@@ -1234,6 +1568,7 @@ class BeliefPlotter(BasePlotter):
         if kde:
             try:
                 from scipy.stats import gaussian_kde
+
                 kde_est = gaussian_kde(llr)
                 x_min, x_max = llr.min(), llr.max()
                 pad = (x_max - x_min) * 0.1 or 0.5
@@ -1247,7 +1582,203 @@ class BeliefPlotter(BasePlotter):
         ax.legend(loc="best")
         return ax, llr
 
-    def plot_policy_llr_scatterplot(
+    def plot_recent_history_llr_distribution(
+        self,
+        model_real: torch.nn.Module,
+        model_perm: torch.nn.Module,
+        dataset: Experiment = None,
+        conds: dict[str, Any] = None,
+        bin_size: float = 1.0,
+        k_history: int = 5,
+        include_time_since_last_push: bool = True,
+        device: str = None,
+        ax: plt.Axes = None,
+        hist: bool = True,
+        kde: bool = True,
+        **kwargs,
+    ) -> plt.Axes:
+        """
+        Computes the log likelihood ratio (LLR) between the real and permuted policy
+        models at each time step, then plots the distribution of those LLRs.
+
+        LLR = log P(true action | real model) - log P(true action | permuted model).
+        Positive LLR means the real model assigns higher likelihood to the ground-truth
+        action than the permuted model.
+
+        Args:
+            model_real: Model fit on real (non-permuted) action labels.
+            model_perm: Model fit on permuted action labels.
+            dataset: Experiment containing session data.
+            conds: Optional conditions to filter the dataset.
+            bin_size: Discrete time step size (must match training and belief computation).
+            k_history: Number of most recent push events used to construct X(t_i).
+            include_time_since_last_push: If True, append per-box time-since-last-push features.
+            device: Device to run models on. If None, auto-detects.
+            ax: Optional matplotlib Axes. If None, a new one is created.
+            hist: If True, plot a histogram of LLRs.
+            kde: If True, plot a KDE over the LLRs (can combine with hist).
+            kwargs: Passed to the histogram or KDE plot (e.g. bins=30, color=...).
+
+        Returns:
+            ax: The matplotlib Axes with the plot.
+        """
+        dataset = self._init_vars(dataset=dataset)
+        dataset = dataset.filter(conds)
+        uniq_boxes = dataset.get_unique("box rank")
+        if uniq_boxes is None:
+            uniq_boxes = dataset.get_unique("box position")
+        n_boxes = len(uniq_boxes) if uniq_boxes is not None else 1
+
+        device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        device = torch.device(device)
+        model_real = model_real.to(device)
+        model_perm = model_perm.to(device)
+        model_real.eval()
+        model_perm.eval()
+
+        llr_list = []
+
+        def _inner(
+            dataset: Experiment,
+            block_key: dict[str, Any],
+            block: pd.DataFrame,
+            *args,
+            **kwargs_inner,
+        ):
+            block = block.reset_index()
+            push_times_arr = np.asarray(block["push times"].values, dtype=float)
+            push_intervals_arr = np.asarray(block["push intervals"].values, dtype=float)
+            reward_outcomes_arr = np.asarray(
+                block["reward outcomes"].values, dtype=float
+            )
+
+            box_col = "box rank" if "box rank" in block.columns else "box position"
+            chosen_boxes = np.asarray(block[box_col].values, dtype=int)
+
+            if len(push_times_arr) == 0:
+                return None
+
+            t_max = float(np.nanmax(push_times_arr))
+            if not np.isfinite(t_max) or t_max <= 0:
+                return None
+            discrete_times = np.arange(0.0, t_max + bin_size * 0.5, bin_size)
+            if len(discrete_times) < 2:
+                return None
+
+            # Ground-truth action by bin (push -> box id; else wait)
+            action_at_bin: dict[int, int] = {}
+            for j in range(len(push_times_arr)):
+                pt = float(push_times_arr[j])
+                if not np.isfinite(pt):
+                    continue
+                b = int(np.floor(pt / bin_size))
+                action_at_bin[b] = int(chosen_boxes[j])
+
+            def action_at_time(t: float) -> int:
+                b = int(np.floor(float(t) / bin_size))
+                return action_at_bin.get(b, n_boxes)  # wait
+
+            if k_history < 1:
+                return None
+
+            event_dim = 2 + n_boxes
+
+            def history_features(t_curr: float) -> np.ndarray | None:
+                idx_all = np.flatnonzero(push_times_arr < float(t_curr))
+                if k_history > len(idx_all):
+                    return None
+                idx = idx_all[-k_history:]
+
+                feats = np.zeros((k_history, event_dim), dtype=float)
+                for r, jj in enumerate(idx):
+                    interval = (
+                        float(push_intervals_arr[jj])
+                        if np.isfinite(push_intervals_arr[jj])
+                        else 0.0
+                    )
+                    reward = (
+                        float(reward_outcomes_arr[jj])
+                        if np.isfinite(reward_outcomes_arr[jj])
+                        else 0.0
+                    )
+                    box = int(chosen_boxes[jj])
+                    onehot = np.zeros(n_boxes, dtype=float)
+                    if 0 <= box < n_boxes:
+                        onehot[box] = 1.0
+                    feats[r, 0] = interval
+                    feats[r, 1] = reward
+                    feats[r, 2:] = onehot
+
+                x = feats.reshape(-1)
+
+                if include_time_since_last_push:
+                    dt_last_by_box = np.full(n_boxes, float(t_curr), dtype=float)
+                    if len(idx_all) > 0:
+                        boxes_before = chosen_boxes[idx_all]
+                        for b in range(n_boxes):
+                            mask = boxes_before == b
+                            if not np.any(mask):
+                                continue
+                            last_event_idx = idx_all[np.where(mask)[0][-1]]
+                            dt = float(t_curr) - float(push_times_arr[last_event_idx])
+                            if not np.isfinite(dt) or dt < 0:
+                                dt = 0.0
+                            dt_last_by_box[b] = dt
+                    x = np.concatenate([x, dt_last_by_box])
+
+                return x
+
+            with torch.no_grad():
+                for j in range(len(discrete_times) - 1):
+                    t_curr = float(discrete_times[j])
+                    t_next = float(discrete_times[j + 1])
+                    x = history_features(t_curr)
+                    if x is None:
+                        continue
+                    x_t = torch.FloatTensor(x).unsqueeze(0).to(device)
+                    true_action = action_at_time(t_next)
+
+                    logits_real = model_real(x_t)
+                    logits_perm = model_perm(x_t)
+                    log_p_real = torch.log_softmax(logits_real, dim=1)[
+                        0, true_action
+                    ].item()
+                    log_p_perm = torch.log_softmax(logits_perm, dim=1)[
+                        0, true_action
+                    ].item()
+                    llr_list.append(log_p_real - log_p_perm)
+            return None
+
+        dataset.process_blocks(_inner)
+
+        if len(llr_list) == 0:
+            raise ValueError(
+                "No LLR values computed. Check that dataset/conds and models match."
+            )
+
+        llr = np.array(llr_list)
+        if ax is None:
+            _, ax = plt.subplots()
+        if hist:
+            ax.hist(llr, density=True, alpha=0.6, label="LLR", **kwargs)
+        if kde:
+            try:
+                from scipy.stats import gaussian_kde
+
+                kde_est = gaussian_kde(llr)
+                x_min, x_max = llr.min(), llr.max()
+                pad = (x_max - x_min) * 0.1 or 0.5
+                xx = np.linspace(x_min - pad, x_max + pad, 200)
+                ax.plot(xx, kde_est(xx), label="KDE")
+            except Exception:
+                pass
+        ax.axvline(0, color="gray", linestyle="--", alpha=0.8)
+        ax.set_xlabel("Log likelihood ratio (real − permuted)")
+        ax.set_ylabel("Density")
+        ax.legend(loc="best")
+        return ax, llr
+
+    def plot_belief_based_policy_llr_scatterplot(
         self,
         model_real: torch.nn.Module,
         model_perm: torch.nn.Module,
@@ -1267,7 +1798,7 @@ class BeliefPlotter(BasePlotter):
         cbar_label: str = "density",
     ) -> tuple[plt.Axes, np.ndarray, np.ndarray, np.ndarray]:
         """
-        Compute per-step LLRs and plot a heatmap over (time, LLR).
+        Compute per-step LLRs based on beliefs and plot a heatmap over (time, LLR).
 
         Each discrete step contributes:
           t = t_next (time of the evaluated action; optionally shifted so block starts at 0)
@@ -1329,7 +1860,9 @@ class BeliefPlotter(BasePlotter):
                 time_keys = list(posterior.keys())
             except AttributeError:
                 return None
-            discrete_times = sorted(set(k["push time"] for k in time_keys if "push time" in k))
+            discrete_times = sorted(
+                set(k["push time"] for k in time_keys if "push time" in k)
+            )
             if len(discrete_times) < 2:
                 return None
 
@@ -1366,13 +1899,19 @@ class BeliefPlotter(BasePlotter):
                     else:
                         belief_vec = np.asarray(belief)
                     belief_vec = belief_vec.flatten()
-                    belief_tensor = torch.FloatTensor(belief_vec).unsqueeze(0).to(device)
+                    belief_tensor = (
+                        torch.FloatTensor(belief_vec).unsqueeze(0).to(device)
+                    )
 
                     true_action = action_at_time(t_next)
                     logits_real = model_real(belief_tensor)
                     logits_perm = model_perm(belief_tensor)
-                    log_p_real = torch.log_softmax(logits_real, dim=1)[0, true_action].item()
-                    log_p_perm = torch.log_softmax(logits_perm, dim=1)[0, true_action].item()
+                    log_p_real = torch.log_softmax(logits_real, dim=1)[
+                        0, true_action
+                    ].item()
+                    log_p_perm = torch.log_softmax(logits_perm, dim=1)[
+                        0, true_action
+                    ].item()
 
                     t_list.append(t_next - t0)
                     llr_list.append(log_p_real - log_p_perm)
@@ -1382,7 +1921,9 @@ class BeliefPlotter(BasePlotter):
         dataset.process_blocks(_inner)
 
         if len(llr_list) == 0:
-            raise ValueError("No LLR values computed. Check that beliefs and dataset match.")
+            raise ValueError(
+                "No LLR values computed. Check that beliefs and dataset match."
+            )
 
         t_arr = np.asarray(t_list, dtype=float)
         llr_arr = np.asarray(llr_list, dtype=float)
@@ -1438,6 +1979,180 @@ class BeliefPlotter(BasePlotter):
 
         # return ax, H_plot, x_edges, y_edges
         return ax
+
+    def plot_recent_history_llr_scatterplot(
+        self,
+        model_real: torch.nn.Module,
+        model_perm: torch.nn.Module,
+        dataset: Experiment = None,
+        conds: dict[str, Any] = None,
+        bin_size: float = 1.0,
+        k_history: int = 5,
+        device: str = None,
+        ax: plt.Axes = None,
+        relative_time: bool = False,
+        s: float = 1.0,
+        alpha: float = 0.25,
+    ) -> tuple[plt.Axes, np.ndarray, np.ndarray]:
+        """
+        Compute per-step LLRs for the recent-history policy and plot an (x=time, y=LLR) scatter.
+
+        This matches the feature construction in `fit_recent_history_to_predict_future_behavior`:
+        X(t_i) is built from the last k_history push events before t_i, and optionally appends an
+        n_boxes-length vector of time-since-last-push for each box.
+
+        LLR(t_{i+1}) = log P(true action at t_{i+1} | real model, X(t_i))
+                     - log P(true action at t_{i+1} | perm model, X(t_i))
+
+        Returns:
+            (ax, t_arr, llr_arr)
+        """
+        dataset = self._init_vars(dataset=dataset)
+        dataset = dataset.filter(conds)
+
+        uniq_boxes = dataset.get_unique("box rank")
+        if uniq_boxes is None:
+            uniq_boxes = dataset.get_unique("box position")
+        n_boxes = len(uniq_boxes) if uniq_boxes is not None else 1
+
+        device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        device = torch.device(device)
+        model_real = model_real.to(device)
+        model_perm = model_perm.to(device)
+        model_real.eval()
+        model_perm.eval()
+
+        t_list: list[float] = []
+        llr_list: list[float] = []
+
+        def _inner(
+            dataset: Experiment,
+            block_key: dict[str, Any],
+            block: pd.DataFrame,
+            *args,
+            **kwargs_inner,
+        ):
+            block = block.reset_index()
+
+            push_times_arr = np.asarray(block["push times"].values, dtype=float)
+            push_intervals_arr = np.asarray(block["push intervals"].values, dtype=float)
+            reward_outcomes_arr = np.asarray(
+                block["reward outcomes"].values, dtype=float
+            )
+
+            box_col = "box rank" if "box rank" in block.columns else "box position"
+            chosen_boxes = np.asarray(block[box_col].values, dtype=int)
+
+            if len(push_times_arr) == 0:
+                return None
+
+            t_max = float(np.nanmax(push_times_arr))
+            if not np.isfinite(t_max) or t_max <= 0:
+                return None
+            discrete_times = np.arange(0.0, t_max + bin_size * 0.5, bin_size)
+            if len(discrete_times) < 2:
+                return None
+
+            action_at_bin: dict[int, int] = {}
+            for j in range(len(push_times_arr)):
+                pt = float(push_times_arr[j])
+                if not np.isfinite(pt):
+                    continue
+                b = int(np.floor(pt / bin_size))
+                action_at_bin[b] = int(chosen_boxes[j])
+
+            def action_at_time(t: float) -> int:
+                b = int(np.floor(float(t) / bin_size))
+                return action_at_bin.get(b, n_boxes)  # wait
+
+            event_dim = 2 + n_boxes
+
+            def history_features(t_curr: float) -> np.ndarray | None:
+                idx_all = np.flatnonzero(push_times_arr < float(t_curr))
+                if k_history > len(idx_all):
+                    return None
+                idx = idx_all[-k_history:]
+
+                feats = np.zeros((k_history, event_dim), dtype=float)
+                for r, jj in enumerate(idx):
+                    interval = (
+                        float(push_intervals_arr[jj])
+                        if np.isfinite(push_intervals_arr[jj])
+                        else 0.0
+                    )
+                    reward = (
+                        float(reward_outcomes_arr[jj])
+                        if np.isfinite(reward_outcomes_arr[jj])
+                        else 0.0
+                    )
+                    box = int(chosen_boxes[jj])
+                    onehot = np.zeros(n_boxes, dtype=float)
+                    if 0 <= box < n_boxes:
+                        onehot[box] = 1.0
+                    feats[r, 0] = interval
+                    feats[r, 1] = reward
+                    feats[r, 2:] = onehot
+
+                x = feats.reshape(-1)
+                dt_last_by_box = np.full(n_boxes, float(t_curr), dtype=float)
+                if len(idx_all) > 0:
+                    boxes_before = chosen_boxes[idx_all]
+                    for b in range(n_boxes):
+                        mask = boxes_before == b
+                        if not np.any(mask):
+                            continue
+                        last_event_idx = idx_all[np.where(mask)[0][-1]]
+                        dt = float(t_curr) - float(push_times_arr[last_event_idx])
+                        if not np.isfinite(dt) or dt < 0:
+                            dt = 0.0
+                        dt_last_by_box[b] = dt
+                x = np.concatenate([x, dt_last_by_box])
+
+                return x
+
+            t0 = float(discrete_times[0]) if relative_time else 0.0
+
+            with torch.no_grad():
+                for j in range(len(discrete_times) - 1):
+                    t_curr = float(discrete_times[j])
+                    t_next = float(discrete_times[j + 1])
+                    x = history_features(t_curr)
+                    if x is None:
+                        continue
+                    x_t = torch.FloatTensor(x).unsqueeze(0).to(device)
+                    true_action = action_at_time(t_next)
+
+                    logits_real = model_real(x_t)
+                    logits_perm = model_perm(x_t)
+                    log_p_real = torch.log_softmax(logits_real, dim=1)[
+                        0, true_action
+                    ].item()
+                    log_p_perm = torch.log_softmax(logits_perm, dim=1)[
+                        0, true_action
+                    ].item()
+                    t_list.append(t_next - t0)
+                    llr_list.append(log_p_real - log_p_perm)
+
+            return None
+
+        dataset.process_blocks(_inner)
+
+        if len(llr_list) == 0:
+            raise ValueError(
+                "No LLR values computed. Check that dataset/conds and models match."
+            )
+
+        t_arr = np.asarray(t_list, dtype=float)
+        llr_arr = np.asarray(llr_list, dtype=float)
+
+        if ax is None:
+            _, ax = plt.subplots()
+        ax.scatter(t_arr, llr_arr, s=s, alpha=alpha)
+        ax.axhline(0, color="gray", linestyle="--", alpha=0.7)
+        ax.set_xlabel("Time in block" + (" (relative)" if relative_time else ""))
+        ax.set_ylabel("Log-likelihood ratio (real − permuted)")
+        return ax, t_arr, llr_arr
+
 
 # def plot_schedule_beliefs_efficiency_across_block(
 #     df: pd.DataFrame,

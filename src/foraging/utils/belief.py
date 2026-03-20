@@ -19,7 +19,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from torch.utils.tensorboard import SummaryWriter
 
 from foraging.models._base import HashableDict
-from foraging.models.deep import PolicyMLP, ActionMLP
+from foraging.models.deep import ActionMLP, PolicyMLP
 from foraging.models.distribution import (
     FactorizedPosterior,
     IndexedObservation,
@@ -245,7 +245,7 @@ def compute_joint_schedule_reward_posterior_discrete_time(
     posterior_maker: Callable[
         [Experiment, dict[str, Any], pd.DataFrame], SupportsUpdatesByBox
     ],
-    dt: float = 1.0 ,
+    dt: float = 1.0,
     *args,
     **kwargs,
 ) -> dict[HashableDict, np.ndarray]:
@@ -344,7 +344,9 @@ def compute_joint_schedule_reward_posterior_discrete_time(
             belief_state = beliefs.prior
             lpt = np.zeros(n_boxes)
         else:
-            k = np.searchsorted(push_times, t, side="right") - 1  # last push index with push_times[k] <= t
+            k = (
+                np.searchsorted(push_times, t, side="right") - 1
+            )  # last push index with push_times[k] <= t
             key_at_t = block_key.update("push time", push_times[k])
             belief_state = beliefs[key_at_t]
             lpt = last_push_times_after_push[k + 1]
@@ -353,7 +355,6 @@ def compute_joint_schedule_reward_posterior_discrete_time(
         joint_posterior[time_key] = _update_joint(belief_state, t, lpt)
 
     return joint_posterior
-
 
 
 def fit_policy_to_predict_future_behavior(
@@ -717,7 +718,9 @@ def fit_policy_to_predict_future_behavior_v2(
             time_keys = list(posterior.keys())
         except AttributeError:
             return None
-        discrete_times = sorted(set(k["push time"] for k in time_keys if "push time" in k))
+        discrete_times = sorted(
+            set(k["push time"] for k in time_keys if "push time" in k)
+        )
         if len(discrete_times) < 2:
             return None
 
@@ -765,14 +768,14 @@ def fit_policy_to_predict_future_behavior_v2(
 
     # Get dimensions
     input_dim = X.shape[1]
-    
+
     # Action space is fixed: n_actions = n_boxes + 1
     # - Actions 0 to (n_boxes-1): push box 0 to (n_boxes-1)
     # - Action n_boxes: wait
     # n_actions is already set above in the _inner function scope, but we need it here too
     n_actions = n_boxes + 1
     n_samples = len(X)
-    
+
     # Verify that all action labels are valid
     max_action = max(y_action) if n_samples > 0 else 0
     if max_action >= n_actions:
@@ -781,14 +784,24 @@ def fit_policy_to_predict_future_behavior_v2(
             f"n_boxes={n_boxes}, so n_actions={n_actions}."
         )
 
-    # Apply label permutation if requested (remap action IDs, keep X-y pairing)
+    # Report label balance for push actions only (ignore the wait class = n_boxes)
+    box_mask = y_action < n_boxes
+    if np.any(box_mask):
+        box_counts = np.bincount(y_action[box_mask], minlength=n_boxes)
+        box_fracs = box_counts / box_counts.sum()
+        logger.info(
+            "Box label balance (push actions only): "
+            f"counts={box_counts.tolist()}, fracs={np.round(box_fracs, 4).tolist()}"
+        )
+    else:
+        logger.info("Box label balance (push actions only): no push actions present.")
+
+    # Apply label permutation if requested (shuffle labels across samples baseline)
     if permute_labels:
         perm_seed = permute_seed if permute_seed is not None else seed
         rng_perm = np.random.RandomState(perm_seed)
         y_action = y_action[rng_perm.permutation(n_samples)]
-        logger.info(
-            f"Permuted action labels using seed {perm_seed}. "
-        )
+        logger.info(f"Permuted action labels using seed {perm_seed}. ")
     else:
         logger.info(
             f"Formatted {len(X)} samples with input_dim={input_dim}, n_boxes={n_boxes}, "
@@ -818,7 +831,7 @@ def fit_policy_to_predict_future_behavior_v2(
     train_dataset = TensorDataset(X_train_t, y_action_train_t)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
-    # 4. Create a simple classification MLP (single head for action prediction)   
+    # 4. Create a simple classification MLP (single head for action prediction)
     model = ActionMLP(input_dim, hidden_dims, n_actions).to(device)
 
     # Define loss function and optimizer
@@ -900,6 +913,358 @@ def fit_policy_to_predict_future_behavior_v2(
 
     logger.info(f"Training complete. Best test loss: {best_test_loss:.4f}")
 
+    return model
+
+
+def fit_recent_history_to_predict_future_behavior(
+    dataset: Experiment,
+    conds: dict[str, Any] = None,
+    split_frac: Iterable[float] = [0.8, 0.2],
+    hidden_dims: Iterable[int] = [64, 32],
+    learning_rate: float = 0.001,
+    batch_size: int = 32,
+    n_epochs: int = 100,
+    patience: int = 10,
+    seed: int = 42,
+    tensorboard_dir: str = None,
+    device: str = None,
+    bin_size: float = 1.0,
+    k_history: int = 5,
+    max_bins: int = None,
+    permute_labels: bool = False,
+    permute_seed: int = None,
+    *args,
+    **kwargs,
+):
+    """
+    Fit a policy (MLP) to predict the next time-step's action from the past k push events.
+
+    This is a discrete-time classification problem over action labels:
+      0 = push fast, 1 = push medium, 2 = push slow, 3 = wait.
+
+    We build discrete time steps t = 0, bin_size, 2*bin_size, ... up to the last push in a block.
+    For each consecutive pair (t_i, t_{i+1}):
+      - X(t_i): feature vector derived from the most recent k push events strictly before t_i
+        Each event includes: (push interval, reward outcome, box identity)
+      - y(t_{i+1}): action at the next time step (push box rank if a push occurred in that bin, else wait)
+
+    Action encoding:
+    - Action 0: push fast box (box 0)
+    - Action 1: push medium box (box 1)
+    - Action 2: push slow box (box 2)
+    - Action 3: wait
+    n_actions = n_boxes + 1.
+
+    Args:
+        dataset: Experiment containing session data.
+        conds: Optional conditions to filter the dataset.
+        split_frac: Train/test split fractions (must sum to 1.0).
+        hidden_dims: List of hidden layer dimensions for the MLP.
+        learning_rate: Learning rate for optimizer.
+        batch_size: Batch size for training.
+        n_epochs: Maximum number of training epochs.
+        patience: Early stopping patience (epochs without improvement).
+        seed: Random seed for reproducibility.
+        tensorboard_dir: Optional directory for tensorboard logging.
+        device: Device to train on ('cuda' or 'cpu'). If None, auto-detects.
+        bin_size: Size of each time bin for discretizing push intervals.
+        k_history: Number of most recent push events to featurize as input.
+        include_time_since_last_push: If True, append an n_boxes-length vector at each time step where
+            entry[b] = (t_curr - most recent push time of box b strictly before t_curr). If box b has
+            never been pushed before t_curr, we use entry[b] = t_curr. This makes X change during long waits.
+        max_bins: Not currently used (kept for API compatibility). Action space is fixed at n_boxes + 1.
+        permute_labels: If True, randomly permute action labels before training (useful for baselines).
+        permute_seed: Random seed for label permutation. If None, uses the main seed.
+
+    Returns:
+        Trained PyTorch model.
+    """
+
+    # Set device
+    if device is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = torch.device(device)
+
+    # Set random seeds
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if device.type == "cuda":
+        torch.cuda.manual_seed(seed)
+
+    # 1. Filter dataset
+    dataset = dataset.filter(conds)
+
+    # 2. First pass: collect unique boxes to determine n_boxes
+    uniq_boxes = dataset.get_unique("box rank")
+    if uniq_boxes is None:
+        uniq_boxes = dataset.get_unique("box position")
+    n_boxes = len(uniq_boxes) if uniq_boxes is not None else 1
+
+    # 3. Format data into supervised learning format
+    # Predict NEXT time-step's action from CURRENT time-step's recent history.
+    # Discrete time steps are defined by bin_size.
+    X_list = []  # History feature vectors at current time step
+    y_action_list = []  # Action labels at NEXT time step (classification target)
+
+    # Action encoding:
+    # - Action 0: push fast box (box 0)
+    # - Action 1: push medium box (box 1)
+    # - Action 2: push slow box (box 2)
+    # - Action 3: wait
+    n_actions = n_boxes + 1
+
+    if k_history < 1:
+        raise ValueError("k_history must be >= 1")
+
+    # Use recent k push events to predict next-step action
+    def _inner(
+        dataset: "Experiment",
+        block_key: dict[str, Any],
+        block: pd.DataFrame,
+        *args,
+        **kwargs,
+    ):
+        block = block.reset_index()
+
+        # Extract push-event series
+        push_times_arr = np.asarray(block["push times"].values, dtype=float)
+        push_intervals_arr = np.asarray(block["push intervals"].values, dtype=float)
+        reward_outcomes_arr = np.asarray(block["reward outcomes"].values, dtype=float)
+        chosen_boxes = block["box position"].values.astype(int)
+
+        if len(push_times_arr) == 0:
+            return None
+
+        # Discrete times for this block: 0, bin_size, 2*bin_size, ... up to last push time
+        t_max = float(np.nanmax(push_times_arr))
+        if not np.isfinite(t_max) or t_max <= 0:
+            return None
+        discrete_times = np.arange(0.0, t_max + bin_size * 0.5, bin_size)
+        if len(discrete_times) < 2:
+            return None
+
+        # Ground-truth action at a discrete time: push box rank if a push occurred in that bin else wait.
+        # If multiple pushes fall in a bin, the last one in time order wins (overwrite).
+        action_at_bin: dict[int, int] = {}
+        for j in range(len(push_times_arr)):
+            pt = float(push_times_arr[j])
+            if not np.isfinite(pt):
+                continue
+            b = int(np.floor(pt / bin_size))
+            action_at_bin[b] = int(chosen_boxes[j])
+
+        def action_at_time(t: float) -> int:
+            b = int(np.floor(float(t) / bin_size))
+            return action_at_bin.get(b, n_boxes)  # wait
+
+        # Event feature size: [interval, reward] + onehot(box)
+        event_dim = 2 + n_boxes
+
+        def history_features(t_curr: float) -> np.ndarray:
+            # Use pushes strictly before t_curr as "past"
+            idx_all = np.flatnonzero(push_times_arr < float(t_curr))
+            if k_history > len(
+                idx_all
+            ):  # if not enough pushes before t_curr, return None
+                return None
+
+            idx = idx_all[-k_history:]  # last k (for the history event stack)
+
+            feats = np.zeros((k_history, event_dim), dtype=float)
+            # Right-align history (most recent at the end)
+            start = k_history - len(idx)
+            for r, j in enumerate(idx, start=start):
+                interval = (
+                    float(push_intervals_arr[j])
+                    if np.isfinite(push_intervals_arr[j])
+                    else 0.0
+                )
+                reward = (
+                    float(reward_outcomes_arr[j])
+                    if np.isfinite(reward_outcomes_arr[j])
+                    else 0.0
+                )
+                box = int(chosen_boxes[j])
+                onehot = np.zeros(n_boxes, dtype=float)
+                if 0 <= box < n_boxes:
+                    onehot[box] = 1.0
+                feats[r, 0] = interval
+                feats[r, 1] = reward
+                feats[r, 2:] = onehot
+            x = feats.reshape(-1)
+
+            # time since last push, per box, strictly before t_curr
+            # (do NOT limit to the last k events)
+            dt_last_by_box = np.full(n_boxes, float(t_curr), dtype=float)
+            if len(idx_all) > 0:
+                boxes_before = chosen_boxes[idx_all]
+                for b in range(n_boxes):
+                    mask = boxes_before == b
+                    if not np.any(mask):
+                        continue
+                    last_event_idx = idx_all[np.where(mask)[0][-1]]
+                    dt = float(t_curr) - float(push_times_arr[last_event_idx])
+                    if not np.isfinite(dt) or dt < 0:
+                        dt = 0.0
+                    dt_last_by_box[b] = dt
+            x = np.concatenate([x, dt_last_by_box])
+            return x
+
+        # For each consecutive pair (t_i, t_{i+1}): X = history at t_i, y = action at t_{i+1}
+        for j in range(len(discrete_times) - 1):
+            t_curr = float(discrete_times[j])
+            t_next = float(discrete_times[j + 1])
+            feats = history_features(t_curr)
+            if feats is None:
+                continue
+            X_list.append(feats)
+            y_action_list.append(action_at_time(t_next))
+
+        return None
+
+    dataset.process_blocks(_inner)
+
+    if len(X_list) == 0:
+        raise ValueError("No data available after filtering and formatting.")
+
+    # Convert to numpy arrays
+    X = np.array(X_list)
+    y_action = np.array(y_action_list)
+
+    # Get dimensions
+    input_dim = X.shape[1]
+
+    # Action space is fixed: n_actions = n_boxes + 1
+    # - Actions 0 to (n_boxes-1): push box 0 to (n_boxes-1)
+    # - Action n_boxes: wait
+    # n_actions is already set above in the _inner function scope, but we need it here too
+    n_actions = n_boxes + 1
+    n_samples = len(X)
+
+    # Verify that all action labels are valid
+    max_action = max(y_action) if n_samples > 0 else 0
+    if max_action >= n_actions:
+        raise ValueError(
+            f"Invalid action {max_action} found. Expected actions in range [0, {n_actions-1}]. "
+            f"n_boxes={n_boxes}, so n_actions={n_actions}."
+        )
+
+    # Apply label permutation if requested (remap action IDs, keep X-y pairing)
+    if permute_labels:
+        perm_seed = permute_seed if permute_seed is not None else seed
+        rng_perm = np.random.RandomState(perm_seed)
+        y_action = y_action[rng_perm.permutation(n_samples)]
+        logger.info(f"Permuted action labels using seed {perm_seed}. ")
+    else:
+        logger.info(
+            f"Formatted {len(X)} samples with input_dim={input_dim}, n_boxes={n_boxes}, "
+            f"n_actions={n_actions}, bin_size={bin_size}"
+        )
+
+    # 3. Train/test split
+    assert np.isclose(sum(split_frac), 1.0), "split_frac must sum to 1.0"
+    n_samples = len(X)
+    n_train = int(n_samples * split_frac[0])
+
+    # Shuffle indices
+    indices = np.random.permutation(n_samples)
+    train_idx = indices[:n_train]
+    test_idx = indices[n_train:]
+
+    X_train, X_test = X[train_idx], X[test_idx]
+    y_action_train, y_action_test = y_action[train_idx], y_action[test_idx]
+
+    # Convert to torch tensors
+    X_train_t = torch.FloatTensor(X_train).to(device)
+    X_test_t = torch.FloatTensor(X_test).to(device)
+    y_action_train_t = torch.LongTensor(y_action_train).to(device)
+    y_action_test_t = torch.LongTensor(y_action_test).to(device)
+
+    # Create data loaders
+    train_dataset = TensorDataset(X_train_t, y_action_train_t)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+
+    # 4. Create a simple classification MLP (single head for action prediction)
+    model = ActionMLP(input_dim, hidden_dims, n_actions).to(device)
+
+    # Define loss function and optimizer
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+
+    # Setup tensorboard if requested
+    writer = None
+    if tensorboard_dir is not None:
+        writer = SummaryWriter(tensorboard_dir)
+
+    # Training loop
+    best_test_loss = float("inf")
+    patience_counter = 0
+    best_model_state = None
+
+    logger.info(f"Training on device: {device}")
+    for epoch in range(n_epochs):
+        model.train()
+        train_loss = 0.0
+
+        for batch_X, batch_y_action in train_loader:
+            optimizer.zero_grad()
+
+            # Forward pass
+            action_logits = model(batch_X)
+
+            # Compute loss
+            loss = criterion(action_logits, batch_y_action)
+
+            # Backward pass
+            loss.backward()
+            optimizer.step()
+
+            train_loss += loss.item()
+
+        train_loss /= len(train_loader)
+
+        # Evaluate on test set
+        model.eval()
+        with torch.no_grad():
+            action_logits_test = model(X_test_t)
+            test_loss = criterion(action_logits_test, y_action_test_t).item()
+
+            # Classification accuracy
+            action_pred_test = torch.argmax(action_logits_test, dim=1)
+            test_acc = (action_pred_test == y_action_test_t).float().mean().item()
+
+        # Logging
+        if writer is not None:
+            writer.add_scalar("Loss/train", train_loss, epoch)
+            writer.add_scalar("Loss/test", test_loss, epoch)
+            writer.add_scalar("Accuracy/test", test_acc, epoch)
+
+        if epoch % 10 == 0:
+            logger.info(
+                f"Epoch {epoch}/{n_epochs}: "
+                f"Train Loss={train_loss:.4f}, Test Loss={test_loss:.4f}, "
+                f"Test Acc={test_acc:.4f}"
+            )
+
+        # Early stopping
+        if test_loss < best_test_loss:
+            best_test_loss = test_loss
+            best_model_state = model.state_dict().copy()
+            patience_counter = 0
+        else:
+            patience_counter += 1
+            if patience_counter >= patience:
+                logger.info(f"Early stopping at epoch {epoch}")
+                break
+
+    # Load best model
+    if best_model_state is not None:
+        model.load_state_dict(best_model_state)
+
+    if writer is not None:
+        writer.close()
+
+    logger.info(f"Training complete. Best test loss: {best_test_loss:.4f}")
     return model
 
 
